@@ -18,6 +18,14 @@ from tests.release.test_backend import add_backend_fixture
 
 
 class SmokeFixtureTests(unittest.TestCase):
+    def test_canonical_local_identity_requires_original_absolute_package_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            original = Path(temporary).resolve() / "original-source"
+            smoke.require_local_identity(f"local:{original}", original)
+            for identity in ("./original-source", "local:original-source", f"local:{original}-decoy"):
+                with self.assertRaises(AssertionError):
+                    smoke.require_local_identity(identity, original)
+
     def test_windows_actor_build_is_onedir_with_runtime_and_no_build_debris(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary).resolve() / "actor"
@@ -338,7 +346,7 @@ class SmokeFixtureTests(unittest.TestCase):
                 with self.assertRaisesRegex(AssertionError, "activation/write"):
                     smoke.check_profiles(root, {}, True)
 
-    def test_mixed_context_fixture_selects_instruction_not_whole_package(self):
+    def test_mixed_context_fixture_selects_packages_not_primitive_symbols(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "case"
             tools = root.parent / "tools"
@@ -353,8 +361,10 @@ class SmokeFixtureTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "stop before binary"):
                     smoke.run_case(Path("unrun-apmx"), root, None, "package", "pass", mixed_imports=True)
             contract = (root / "package/handoff.contract.md").read_text()
-            self.assertIn("  - release-guidance\n", contract)
-            self.assertNotIn("  - release-context-package\n", contract)
+            self.assertIn("  - release-context-package\n", contract)
+            self.assertNotIn("  - release-guidance\n", contract)
+            self.assertNotIn("  - contained-style\n", contract)
+            self.assertNotIn("  - unselected-package\n", contract)
             env = run.call_args.args[3]
             resources = json.loads(env["APMX_CONTEXT_RESOURCE_DIGESTS"])
             self.assertEqual(set(resources), {"references/detail.txt", "assets/example.json", "scripts/data_only.py"})
@@ -378,7 +388,7 @@ class SmokeFixtureTests(unittest.TestCase):
                     shutil.copyfile(source, target)
                 (root / "checks").mkdir()
                 (root / "notes.md").write_text('{"source":"caller","value":7}')
-                prompt = "RELEASE_SKILL_SENTINEL RELEASE_INSTRUCTION_SENTINEL"
+                prompt = "RELEASE_SKILL_SENTINEL RELEASE_INSTRUCTION_SENTINEL RELEASE_CONTAINED_SKILL_SENTINEL"
                 if failure == "unselected":
                     prompt += " UNSELECTED_SKILL_SENTINEL"
                 if failure == "resource":

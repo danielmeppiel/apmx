@@ -57,8 +57,12 @@ def main():
     if os.environ.get("APMX_EXPECT_SKILL") == "1" and "RELEASE_SKILL_SENTINEL" not in prompt:
         raise RuntimeError("Selected packaged skill did not reach the native producer")
     if os.environ.get("APMX_EXPECT_INSTRUCTION") == "1":
-        if "RELEASE_INSTRUCTION_SENTINEL" not in prompt or "UNSELECTED_" in prompt:
-            raise RuntimeError("Individual instruction selection did not constrain native context")
+        if (
+            "RELEASE_INSTRUCTION_SENTINEL" not in prompt
+            or "RELEASE_CONTAINED_SKILL_SENTINEL" not in prompt
+            or "UNSELECTED_" in prompt
+        ):
+            raise RuntimeError("Package linkage did not constrain native context")
         for relative, expected in json.loads(os.environ["APMX_CONTEXT_RESOURCE_DIGESTS"]).items():
             matches = list(Path("_apmx_context").glob(f"import-*/{relative}"))
             if len(matches) != 1 or hashlib.sha256(matches[0].read_bytes()).hexdigest() != expected:

@@ -98,12 +98,13 @@ copying, patched backend, or claim of zero APM host writes is introduced. All
 ten cases run both on native CI archives and fresh downloaded release assets.
 Only Copilot is simulated; APM's version and installs are genuine native execution.
 
-A **tenth** mixed-ASF case imports the existing selected skill and an individually
-named instruction from another dependency, not that entire package. The native
-actor must receive both selected documents and the skill's byte-identical
+A **tenth** mixed-ASF case imports two logical packages, one containing the existing
+skill and another containing an instruction and a differently named contained
+skill. It never imports primitive symbols as independent package identities. The native
+actor must receive all three selected documents and the first skill's byte-identical
 reference, JSON asset and script-as-data resources. Their recorded path/hash/size
-must match the original sources. An unselected sibling skill and hook fixture
-must be absent from the prompt and staged contexts; the supporting script must
+must match the original sources. An unselected dependency's skill and an unsupported hook fixture
+must be absent from the prompt and the entire producer workspace; the supporting script must
 never execute. The original single-skill gates remain separate.
 
 Short deadline/timeout behavior is covered separately by native-platform source

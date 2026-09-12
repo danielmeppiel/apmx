@@ -44,6 +44,15 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def require_local_identity(identity: str, source: Path) -> None:
+    require(identity.startswith("local:"), "Local import lacks canonical APM identity")
+    path = Path(identity.removeprefix("local:"))
+    require(
+        path.is_absolute() and path.resolve() == source.resolve(),
+        "Wrong original local import source identity",
+    )
+
+
 def build_actor(output: Path) -> None:
     require(os.name == "nt", "Only Windows needs a frozen protocol actor")
     require(not output.exists(), "Actor build requires a fresh output directory")
@@ -236,7 +245,16 @@ def add_mixed_context(package: Path, env: dict[str, str]) -> dict[str, Path]:
     instruction.write_text(
         "---\napplyTo: '**'\n---\nRELEASE_INSTRUCTION_SENTINEL\n", encoding="utf-8",
     )
-    unselected = context / ".apm/skills/unselected-style/SKILL.md"
+    contained = context / ".apm/skills/contained-style/SKILL.md"
+    contained.parent.mkdir(parents=True)
+    contained.write_text(
+        (skill / "SKILL.md").read_text(encoding="utf-8").replace(
+            "release-style", "contained-style",
+        ).replace("RELEASE_SKILL_SENTINEL", "RELEASE_CONTAINED_SKILL_SENTINEL"),
+        encoding="utf-8",
+    )
+    unselected_package = package / "contexts/unselected-package"
+    unselected = unselected_package / "SKILL.md"
     unselected.parent.mkdir(parents=True)
     unselected.write_text(
         (skill / "SKILL.md").read_text(encoding="utf-8").replace(
@@ -248,12 +266,17 @@ def add_mixed_context(package: Path, env: dict[str, str]) -> dict[str, Path]:
         "name: release-context-package\nversion: 0.1.0\ndependencies:\n  apm: []\n",
         encoding="utf-8",
     )
+    (unselected_package / "apm.yml").write_text(
+        "name: unselected-package\nversion: 0.1.0\ndependencies:\n  apm: []\n",
+        encoding="utf-8",
+    )
     hooks = context / ".github/hooks/unselected.json"
     hooks.parent.mkdir(parents=True)
     hooks.write_text('{"fixture":"UNSELECTED_HOOK_SENTINEL"}\n', encoding="utf-8")
     (package / "apm.yml").write_text(
         (package / "apm.yml").read_text(encoding="utf-8")
-        + "    - path: ./contexts/release-context-package\n",
+        + "    - path: ./contexts/release-context-package\n"
+        + "    - path: ./contexts/unselected-package\n",
         encoding="utf-8",
     )
     env["APMX_EXPECT_INSTRUCTION"] = "1"
@@ -423,7 +446,7 @@ def run_case(
         env["APMX_EXPECT_SKILL"] = "1"
         if mixed_imports:
             resources = add_mixed_context(package, env)
-            imports += "  - release-guidance\n"
+            imports += "  - release-context-package\n"
     source = caller if selection == "local" else package
     (source / "checks").mkdir()
     shutil.copyfile(FIXTURES / "check.py", source / "checks/check.py")
@@ -555,14 +578,18 @@ def run_case(
         prepared_root = Path(record["source"]["package"]["root"])
         if prepared_root.resolve() != package.resolve():
             require(not prepared_root.exists(), "Private package not cleaned")
-        require(len(record["imports"]) == (2 if mixed_imports else 1), "Unexpected selected import count")
+        require(len(record["imports"]) == (3 if mixed_imports else 1), "Unexpected selected import count")
         imported = record["imports"][0]
         require(imported["name"] == "release-style", "Wrong packaged skill")
-        require(imported["lock_identity"] == "./skills/release-style", "Wrong skill source identity")
+        require_local_identity(imported["lock_identity"], package / "skills/release-style")
         require(imported["sha256"] == digest(package / "skills/release-style/SKILL.md"), "Skill digest")
         if mixed_imports:
             instruction = package / "contexts/release-context-package/.apm/instructions/release-guidance.instructions.md"
             selected_instruction = record["imports"][1]
+            require(selected_instruction["name"] == "release-context-package", "Instruction lost package linkage")
+            require_local_identity(
+                selected_instruction["lock_identity"], package / "contexts/release-context-package",
+            )
             require(selected_instruction["kind"] == "instruction", "Instruction context kind was lost")
             require(selected_instruction["context_name"] == "release-guidance", "Wrong instruction selected")
             require(selected_instruction["sha256"] == digest(instruction), "Instruction context digest")
@@ -572,11 +599,20 @@ def run_case(
             require(
                 not any(
                     marker in path.read_bytes()
-                    for path in context_files
+                    for path in (run / "producer").rglob("*") if path.is_file()
                     for marker in (b"UNSELECTED_SKILL_SENTINEL", b"UNSELECTED_HOOK_SENTINEL")
                 ),
                 "Unselected package content was activated in the producer",
             )
+            contained = package / "contexts/release-context-package/.apm/skills/contained-style/SKILL.md"
+            selected_skill = record["imports"][2]
+            require(selected_skill["name"] == "release-context-package", "Contained skill lost package linkage")
+            require_local_identity(
+                selected_skill["lock_identity"], package / "contexts/release-context-package",
+            )
+            require(selected_skill["kind"] == "skill", "Contained skill context kind was lost")
+            require(selected_skill["context_name"] == "contained-style", "Contained skill name mismatch")
+            require(selected_skill["sha256"] == digest(contained), "Contained skill digest mismatch")
             for relative, source_resource in resources.items():
                 matches = list(context_root.glob(f"import-*/{relative}"))
                 require(len(matches) == 1, f"Expected one staged selected resource: {relative}")
