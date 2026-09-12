@@ -315,6 +315,16 @@ def consumer_setup_env(env: dict[str, str]) -> dict[str, str]:
         count = child.get("GIT_CONFIG_COUNT", "0")
         require(re.fullmatch(r"[0-9]+", count) is not None, "Invalid fixture Git configuration count")
         index = int(count)
+        require(index <= len(child) // 2, "Incomplete fixture Git configuration pairs")
+        for existing in range(index):
+            require(
+                f"GIT_CONFIG_KEY_{existing}" in child and f"GIT_CONFIG_VALUE_{existing}" in child,
+                "Incomplete fixture Git configuration pairs",
+            )
+        require(
+            f"GIT_CONFIG_KEY_{index}" not in child and f"GIT_CONFIG_VALUE_{index}" not in child,
+            "Fixture Git configuration append would overwrite an existing entry",
+        )
         child.update({
             "GIT_CONFIG_COUNT": str(index + 1),
             f"GIT_CONFIG_KEY_{index}": "core.longpaths",

@@ -445,6 +445,16 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertEqual(fresh["GIT_CONFIG_KEY_0"], "core.longpaths")
             with self.assertRaisesRegex(AssertionError, "configuration count"):
                 smoke.consumer_setup_env({"GIT_CONFIG_COUNT": "invalid"})
+            for invalid in (
+                {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper"},
+                {"GIT_CONFIG_COUNT": "999999999"},
+                {"GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "fixture-helper"},
+                {"GIT_CONFIG_VALUE_0": "orphaned-fixture-value"},
+            ):
+                before_invalid = dict(invalid)
+                with self.assertRaisesRegex(AssertionError, "configuration"):
+                    smoke.consumer_setup_env(invalid)
+                self.assertEqual(invalid, before_invalid)
 
     def test_frozen_gate_rejects_leaked_setup_long_paths_before_app_launch(self):
         with tempfile.TemporaryDirectory() as temporary:
