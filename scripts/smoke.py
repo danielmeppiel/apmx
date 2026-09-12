@@ -36,19 +36,31 @@ def digest(path: Path) -> str:
 
 def build_actor(output: Path) -> None:
     require(os.name == "nt", "Only Windows needs a frozen protocol actor")
-    output.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-            "--onefile", "--noupx", "--name", "copilot",
-            "--distpath", str(output),
-            "--workpath", str(output / "work"),
-            "--specpath", str(output),
-            str(FIXTURES / "copilot_actor.py"),
-        ],
-        check=True,
-    )
+    require(not output.exists(), "Actor build requires a fresh output directory")
+    with tempfile.TemporaryDirectory(prefix="apmx-actor-build-") as temporary:
+        build_root = Path(temporary)
+        subprocess.run(
+            [
+                sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+                "--onedir", "--noupx", "--name", "copilot",
+                "--distpath", str(build_root / "dist"),
+                "--workpath", str(build_root / "work"),
+                "--specpath", str(build_root),
+                str(FIXTURES / "copilot_actor.py"),
+            ],
+            check=True,
+        )
+        shutil.copytree(build_root / "dist/copilot", output)
     require((output / "copilot.exe").is_file(), "Native Windows actor was not built")
+    require((output / "_internal").is_dir(), "Native Windows actor runtime was not built")
+
+
+def copy_actor_bundle(actor: Path, tools: Path) -> None:
+    require(actor.read_bytes()[:2] == b"MZ", "Windows fixture must be a native PE executable")
+    runtime = actor.parent / "_internal"
+    require(runtime.is_dir(), "Windows fixture requires its onedir runtime beside copilot.exe")
+    shutil.copyfile(actor, tools / "copilot.exe")
+    shutil.copytree(runtime, tools / "_internal")
 
 
 def isolated_env(root: Path, tools: Path) -> dict[str, str]:
@@ -91,8 +103,7 @@ def prepare_tools(root: Path, actor: Path | None) -> Path:
     tools.mkdir()
     if os.name == "nt":
         require(actor is not None, "Windows smoke requires an explicit native copilot.exe actor")
-        require(actor.read_bytes()[:2] == b"MZ", "Windows fixture must be a native PE executable")
-        shutil.copyfile(actor, tools / "copilot.exe")
+        copy_actor_bundle(actor, tools)
     else:
         require(actor is None, "External actor override is only supported on Windows")
         script = tools / "copilot_actor.py"
@@ -361,7 +372,16 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
         require(digest(assessments[0] / "handoff.json") == digest(artifact), "Assessment output")
     require(snapshot(package) == package_before, "Source package was changed")
     require(snapshot(root / "home") == home_before, "Ambient profile was changed")
-    require(snapshot(root / "temp") == temp_before, "Temporary producer/package files were not cleaned")
+    temp_after = snapshot(root / "temp")
+    changed_temp = sorted(
+        path for path in temp_before.keys() | temp_after.keys()
+        if temp_before.get(path) != temp_after.get(path)
+    )
+    require(
+        not changed_temp,
+        f"{selection}/{mode}: Temporary producer/package files were not cleaned; "
+        f"changed paths ({len(changed_temp)}): {changed_temp[:12]}",
+    )
     for path, expected_digest in caller_before.items():
         require(digest(caller / path) == expected_digest, f"Caller file changed: {path}")
     for path in set(snapshot(caller)) - set(caller_before):

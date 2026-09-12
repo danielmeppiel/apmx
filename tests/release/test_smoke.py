@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -16,6 +17,44 @@ from scripts import smoke
 
 
 class SmokeFixtureTests(unittest.TestCase):
+    def test_windows_actor_build_is_onedir_with_runtime_and_no_build_debris(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary).resolve() / "actor"
+
+            def freeze(command, **kwargs):
+                self.assertIn("--onedir", command)
+                self.assertNotIn("--onefile", command)
+                self.assertTrue(kwargs["check"])
+                bundle = Path(command[command.index("--distpath") + 1]) / "copilot"
+                (bundle / "_internal").mkdir(parents=True)
+                (bundle / "copilot.exe").write_bytes(b"MZ fixture")
+                (bundle / "_internal/python312.dll").write_bytes(b"runtime fixture")
+
+            with (
+                patch.object(smoke, "os", SimpleNamespace(name="nt")),
+                patch.object(smoke.subprocess, "run", side_effect=freeze),
+            ):
+                smoke.build_actor(output)
+            self.assertEqual({path.name for path in output.iterdir()}, {"copilot.exe", "_internal"})
+            self.assertEqual((output / "_internal/python312.dll").read_bytes(), b"runtime fixture")
+
+    def test_windows_actor_copy_requires_and_preserves_full_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            actor = root / "actor"
+            actor.mkdir()
+            executable = actor / "copilot.exe"
+            executable.write_bytes(b"MZ fixture")
+            tools = root / "tools"
+            tools.mkdir()
+            with self.assertRaisesRegex(AssertionError, "onedir runtime"):
+                smoke.copy_actor_bundle(executable, tools)
+            (actor / "_internal").mkdir()
+            (actor / "_internal/python312.dll").write_bytes(b"runtime fixture")
+            smoke.copy_actor_bundle(executable, tools)
+            self.assertEqual((tools / "copilot.exe").read_bytes(), executable.read_bytes())
+            self.assertEqual((tools / "_internal/python312.dll").read_bytes(), b"runtime fixture")
+
     @unittest.skipIf(os.name == "nt", "Covers the macOS /var temporary-directory symlink")
     def test_main_normalizes_temporary_caller_before_package_selection(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -67,6 +67,11 @@ On Windows, build a native actor with
 and pass `--actor /absolute/copilot.exe` to smoke. This does not test or authorize
 shell interpolation of arbitrary prompts through a `.cmd` launcher. CI retains
 the Windows fixture as separate, run-scoped test support, never as a release asset.
+The actor is a PyInstaller **onedir** bundle: keep its `_internal` directory beside
+`copilot.exe`, including when transferring it to a fresh verification runner.
+One-file extraction is deliberately avoided because terminating a lingering
+descendant also terminates its extraction-cleanup process, leaving fixture-only
+temporary files. The strict app temporary-file cleanup check is not relaxed.
 `--report PATH` retains a JSON report containing the validated fixture records.
 
 ## Private promotion
