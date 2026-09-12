@@ -394,12 +394,36 @@ def test_local_git_applies_only_process_scoped_native_path_option(
     assert os.environ["GIT_CONFIG_VALUE_0"] == "sensitive-fixture"
 
 
-def test_native_local_git_preserves_long_workspace_bytes(tmp_path: Path) -> None:
-    root = tmp_path / "long-workspace"
-    while len(str(root)) < 240:
-        root /= "captured-input"
+def test_native_local_git_preserves_long_workspace_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    padding = 210 - len(str(tmp_path)) - 1
+    assert 0 < padding <= 255
+    root = tmp_path / ("w" * padding)
+    assert len(str(root / ".git")) <= 220
+    assert len(str(root / ".git/objects/ab" / ("c" * 38))) > 260
     root.mkdir(parents=True)
     (root / "input.txt").write_bytes(b"exact baseline\r\n")
+    if os.name == "nt":
+        native_supervise = process.supervise_process
+        errors = bytearray()
+
+        def observe(request, *, on_bytes, **kwargs):
+            def capture(stream, chunk):
+                if stream == "stderr":
+                    errors.extend(chunk)
+                on_bytes(stream, chunk)
+
+            return native_supervise(request, on_bytes=capture, **kwargs)
+
+        with monkeypatch.context() as flagless:
+            flagless.setattr(process, "git_long_paths_args", lambda: [])
+            flagless.setattr(process, "supervise_process", observe)
+            with pytest.raises(ContractError, match="Local Git baseline operation failed"):
+                process.local_git(root, "init", "--quiet", "--template=")
+                process.local_git(root, "add", "--", "input.txt")
+            assert b"filename too long" in bytes(errors).lower()
+
     process.local_git(root, "init", "--quiet", "--template=")
     process.local_git(root, "add", "--", "input.txt")
     process.local_git(root, "commit", "--quiet", "-m", "Long path baseline")
