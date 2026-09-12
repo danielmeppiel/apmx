@@ -415,6 +415,61 @@ class SmokeFixtureTests(unittest.TestCase):
                     result = smoke.run_case(Path("unrun-app"), root, None, "package", "pass", mixed_imports=mixed)
                 self.assertFalse(result["temporary_root"].exists())
 
+    def test_windows_long_paths_apply_only_to_native_consumer_setup_child(self):
+        env = {
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
+            "GIT_CONFIG_KEY_1": "http.extraHeader", "GIT_CONFIG_VALUE_1": "fixture-header",
+            "GIT_SSH_COMMAND": "fixture-ssh",
+            "GIT_CONFIG_GLOBAL": "fixture-config",
+        }
+        before = dict(env)
+        with patch.object(smoke, "os", SimpleNamespace(name="nt")):
+            child = smoke.consumer_setup_env(env)
+        self.assertEqual(env, before)
+        self.assertEqual(child["GIT_CONFIG_COUNT"], "3")
+        self.assertEqual(child["GIT_CONFIG_KEY_2"], "core.longpaths")
+        self.assertEqual(child["GIT_CONFIG_VALUE_2"], "true")
+        for key, value in before.items():
+            if key != "GIT_CONFIG_COUNT":
+                self.assertEqual(child[key], value)
+        self.assertEqual(child["APM_NO_SCRIPTS"], "1")
+        self.assertEqual(child["PYINSTALLER_RESET_ENVIRONMENT"], "1")
+        with patch.object(smoke, "os", SimpleNamespace(name="posix")):
+            posix = smoke.consumer_setup_env(env)
+        self.assertEqual(posix["GIT_CONFIG_COUNT"], "2")
+        self.assertNotIn("GIT_CONFIG_KEY_2", posix)
+        with patch.object(smoke, "os", SimpleNamespace(name="nt")):
+            fresh = smoke.consumer_setup_env({})
+            self.assertEqual(fresh["GIT_CONFIG_COUNT"], "1")
+            self.assertEqual(fresh["GIT_CONFIG_KEY_0"], "core.longpaths")
+            with self.assertRaisesRegex(AssertionError, "configuration count"):
+                smoke.consumer_setup_env({"GIT_CONFIG_COUNT": "invalid"})
+
+    def test_frozen_gate_rejects_leaked_setup_long_paths_before_app_launch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "case"
+            tools = root.parent / "tools"
+            tools.mkdir()
+
+            def leak_setting(tools, env):
+                env.update({
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "core.longpaths",
+                    "GIT_CONFIG_VALUE_0": "true",
+                })
+
+            with (
+                patch.object(smoke, "prepare_tools", return_value=tools),
+                patch.object(smoke, "poison_host_apm", side_effect=leak_setting),
+                patch.object(smoke.release, "check_backend_metadata", return_value=smoke.release.read_backend_pin()),
+                patch.object(smoke, "install_backend_fixture", return_value={}),
+                patch.object(smoke, "run_binary") as run,
+            ):
+                with self.assertRaisesRegex(AssertionError, "inherited the fixture-only"):
+                    smoke.run_case(Path("unrun-app"), root, None, "local", "pass")
+            run.assert_not_called()
+
     def test_consumer_fixture_relocates_native_outputs_but_not_activation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

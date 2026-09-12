@@ -309,6 +309,20 @@ def require_consumer_lock(lock: Path, revision: str) -> str:
     return content_hash.group(1)
 
 
+def consumer_setup_env(env: dict[str, str]) -> dict[str, str]:
+    child = {**env, "APM_NO_SCRIPTS": "1", "PYINSTALLER_RESET_ENVIRONMENT": "1"}
+    if os.name == "nt":
+        count = child.get("GIT_CONFIG_COUNT", "0")
+        require(re.fullmatch(r"[0-9]+", count) is not None, "Invalid fixture Git configuration count")
+        index = int(count)
+        child.update({
+            "GIT_CONFIG_COUNT": str(index + 1),
+            f"GIT_CONFIG_KEY_{index}": "core.longpaths",
+            f"GIT_CONFIG_VALUE_{index}": "true",
+        })
+    return child
+
+
 def prepare_consumer_lock(
     backend: Path, root: Path, caller: Path, package: Path, env: dict[str, str],
 ) -> dict:
@@ -355,7 +369,7 @@ def prepare_consumer_lock(
         result = run_binary(
             backend,
             ["install", "--root", str(stage), "--only", "apm", "--target", "agent-skills", "--no-trust-bin"],
-            stage, {**env, "APM_NO_SCRIPTS": "1", "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+            stage, consumer_setup_env(env),
         )
         require(result.returncode == 0, f"Genuine consumer lock generation failed:\n{result.stdout}\n{result.stderr}")
         for name in ("apm.yml", "apm.lock.yaml"):
@@ -394,6 +408,7 @@ def prepare_consumer_lock(
         "manifest_sha256": digest(caller / "apm.yml"),
         "native_lock_relocated_unchanged": True,
         "caller_path_length": len(str(caller)),
+        "setup_longpaths_windows_child_only": os.name == "nt",
         "transport": "hermetic SSH transport serving genuine Git objects; native APM resolution and lock writer",
     }
 
@@ -600,6 +615,13 @@ def _run_case(
     args = ["handoff.contract.md"]
     if selection == "package":
         args = ["--from", str(package), *args]
+    require(
+        not any(
+            key.startswith("GIT_CONFIG_KEY_") and value.casefold() == "core.longpaths"
+            for key, value in env.items()
+        ),
+        "Tested apmx process inherited the fixture-only Git long-paths setting",
+    )
     result = run_binary(
         binary,
         [*args, "--on", "copilot", "--model", "fixture-model", "--allow-host-access"],

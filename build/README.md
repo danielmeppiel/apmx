@@ -130,8 +130,12 @@ the initial manifest, native lock and modules in a compact owned stage, then
 copies those exact bytes to the long caller without copying activation
 directories or rewriting the lock. Absolute local anchors must remain portable.
 The app itself must resolve in its own compact temporary stage outside that
-caller and clean it afterward. No Git long-path configuration, HOME rewriting,
-backend patch, or test skip is used.
+caller and clean it afterward. On Windows, only the initial native consumer
+setup subprocess gets an appended process-local `core.longpaths=true` Git
+configuration entry, preserving all existing entries. That fixture setting must
+not reach the tested apmx process: the application's own Windows backend-child
+bridge must handle native Git paths. No global Git configuration, HOME
+rewriting, backend patch, CI-only temp-root override, or test skip is used.
 
 Short deadline/timeout behavior is covered separately by native-platform source
 tests using the existing `ProcessRequest` API. The frozen gate does **not** claim
