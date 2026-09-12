@@ -103,7 +103,7 @@ Runs deliberately remain under the **caller's** `.apm/runs/<fresh-run-id>/`.
 This is local evidence compatibility, distinct from APM's normal user configuration.
 The existing `apm-contract-run/0.1` record schema and `native-advisory` profile
 remain readable by existing consumers. Temporary package preparation uses
-exclusive `.apmx-source-*` directories and is removed after use. Run IDs prevent
+exclusive `apmx-*` system-temporary directories and is removed after use. Run IDs prevent
 overwriting prior evidence. Producer and checker workspaces are separate.
 Additive record fields include actual backend identity, consumer and effective
 lock digests, package identities/versions, resolved references and commits,
@@ -123,9 +123,11 @@ Windows requires Git for Windows' native `sh.exe`. Use POSIX-style quoting
 and forward-slash paths for Windows checker executables. Frozen
 children restore external loader paths rather than inheriting bundled libraries.
 Restoration happens once at the spawning boundary, preserving the user's original
-library paths through repeated credential/environment preparation. Windows Git's
-empty configuration file is invocation-private temporary state, not a shared APM
-configuration path. Terminal rendering preserves copyable Windows backslashes
+library paths through repeated credential/environment preparation. The workspace
+Git adapter's empty configuration file is invocation-private. Separately, the
+bundled APM backend may bootstrap an empty `.apm_empty_gitconfig` in its Windows
+temporary directory; that is native APM configuration state, not producer output.
+Terminal rendering preserves copyable Windows backslashes
 while continuing to visibly escape control characters and Unicode.
 
 Temporary package cleanup preserves the existing owned-path fence and bounded
