@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 if __package__:
@@ -54,6 +55,88 @@ def require_local_identity(identity: str, source: Path, *, consumer_lock: bool =
         path.is_absolute() and path.resolve() == source.resolve(),
         "Wrong original local import source identity",
     )
+
+
+def redact_trace_message(message: str) -> str:
+    message = re.sub(r"(?i)\b(?:https?|ssh|git|file)://[^\s'\"<>]+", "<redacted-url>", message)
+    message = re.sub(r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie):[^\r\n]*", "<redacted-header>", message)
+    message = re.sub(
+        r"(?i)\b([A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|CREDENTIAL|PAT)[A-Z0-9_]*|GIT_CONFIG_VALUE_[0-9]+)"
+        r"\s*=\s*(?:'[^']*'|\"[^\"]*\"|[^\s]+)",
+        r"\1=***", message,
+    )
+    message = re.sub(
+        r"(?<![A-Za-z0-9_])(?:github_pat_[A-Za-z0-9_]{20,}|gh[oprsu]_[A-Za-z0-9_]{6,}|"
+        r"gl(?:agent|cbt|ft|pat|ptt|rt|soat)[-_][A-Za-z0-9_-]{6,}|"
+        r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}|"
+        r"[A-Za-z0-9]{75}AZDO[A-Za-z0-9]{5}|[A-Za-z0-9]{52})(?![A-Za-z0-9_])",
+        "***", message,
+    )
+    message = re.sub(r"(?i)\b(token|password|secret|credential)(\s*[:=]\s*|\s+)\S+", r"\1\2***", message)
+    message = re.sub(r"(?im)((?:identity file|enter passphrase for key)\s+)[^\r\n]+", r"\1[REDACTED]", message)
+    return message
+
+
+def git_trace_details(path: Path) -> str:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return "\nGit Trace2: no trace file was emitted by the tested invocation."
+    if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+        return "\nGit Trace2: refusing a non-regular or reparse trace path."
+    limit = 2 * 1024**2
+    with path.open("rb") as stream:
+        if info.st_size > limit:
+            stream.seek(-limit, os.SEEK_END)
+        raw = stream.read(limit)
+    if info.st_size > limit:
+        raw = raw.partition(b"\n")[2]
+    errors: deque[str] = deque(maxlen=8)
+    progress: deque[str] = deque(maxlen=8)
+    long_paths: deque[str] = deque(maxlen=8)
+    malformed = 0
+    commands = {"init", "clone", "fetch", "remote", "config", "rev-parse", "ls-remote", "upload-pack", "index-pack", "checkout"}
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            malformed += 1
+            continue
+        if not isinstance(event, dict):
+            malformed += 1
+            continue
+        if event.get("event") == "error":
+            message = event.get("msg")
+            errors.append(
+                redact_trace_message(message)[:1200]
+                if isinstance(message, str) else "<error event without a text message>",
+            )
+        elif event.get("event") == "start":
+            argv = event.get("argv")
+            command = next(
+                (arg for arg in argv if isinstance(arg, str) and arg in commands),
+                "git",
+            ) if isinstance(argv, list) else "git"
+            progress.append(f"start: {command}")
+        elif event.get("event") == "exit":
+            code = event.get("code")
+            progress.append(f"exit: {code if type(code) is int else 'unreported'}")
+        elif event.get("event") == "def_param" and event.get("param") == "core.longpaths":
+            value = event.get("value")
+            normalized = value.casefold() if isinstance(value, str) else ""
+            if normalized in {"true", "yes", "on", "1"} or value is True:
+                long_paths.append("core.longpaths: true")
+            elif normalized in {"false", "no", "off", "0"} or value is False:
+                long_paths.append("core.longpaths: false")
+            else:
+                long_paths.append("core.longpaths: non-boolean value omitted")
+    lines = list(long_paths) or ["core.longpaths: not reported"]
+    lines += list(errors or progress) or ["No error/start/exit events were emitted."]
+    if malformed:
+        lines.append(f"Malformed Trace2 lines: {malformed}")
+    if info.st_size > limit:
+        lines.append("Diagnostics limited to the final 2 MiB of Trace2 data.")
+    return "\nGit Trace2 (tested invocation; redacted):\n" + "\n".join(lines)
 
 
 def build_actor(output: Path) -> None:
@@ -679,6 +762,12 @@ def _run_case(
         ),
         "Tested apmx process inherited the fixture-only Git long-paths setting",
     )
+    trace = None
+    if mixed_imports:
+        trace = root / "frozen-git-trace.jsonl"
+        require(not trace.exists() and not trace.is_symlink(), "Frozen Git trace path already exists")
+        env["GIT_TRACE2_EVENT"] = str(trace)
+        env["GIT_TRACE2_CONFIG_PARAMS"] = "core.longpaths"
     result = run_binary(
         binary,
         [*args, "--on", "copilot", "--model", "fixture-model", "--allow-host-access"],
@@ -695,7 +784,8 @@ def _run_case(
     }[mode]
     require(
         result.returncode == code,
-        f"{selection}/{mode}: expected {code}, got {result.returncode}\n{result.stdout}\n{result.stderr}",
+        f"{selection}/{mode}: expected {code}, got {result.returncode}\n{result.stdout}\n{result.stderr}"
+        + (git_trace_details(trace) if result.returncode != code and trace is not None else ""),
     )
     records = list(caller.rglob("record.json"))
     require(len(records) == 1, f"Expected exactly one completed record: {records}")

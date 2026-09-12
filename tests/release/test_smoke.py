@@ -274,7 +274,107 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertIn("RELEASE_SKILL_SENTINEL", (package / "skills/release-style/SKILL.md").read_text())
             self.assertIn("apm: []", (package / "skills/release-style/apm.yml").read_text())
             self.assertEqual(run.call_args.args[3]["APMX_EXPECT_SKILL"], "1")
+            self.assertNotIn("GIT_TRACE2_EVENT", run.call_args.args[3])
             self.assertFalse((root / "caller/apm.yml").exists())
+
+    def test_git_trace_errors_are_bounded_and_redact_credentials(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = Path(temporary) / "trace.jsonl"
+            message = (
+                "Filename too long: native Git staging/path\n"
+                "https://fixture-user:fixture-password@example.invalid/repo?token=url-secret#fragment\n"
+                "Authorization: Bearer header-secret\n"
+                "GITHUB_TOKEN=environment-secret\n"
+                "token labelled-secret\n"
+                "ghp_fixtureToken123\n"
+                "identity file '/private/fixture-key'\n"
+            )
+            trace.write_text(
+                json.dumps({"event": "def_param", "param": "http.extraHeader", "value": "secret-auth-setting"})
+                + "\n" + json.dumps({"event": "def_param", "param": "core.longpaths", "value": "true"})
+                + "\n" + "\n".join(
+                json.dumps({"event": "error", "msg": f"problem-{index}: {message}"})
+                for index in range(20)
+                )
+            )
+            detail = smoke.git_trace_details(trace)
+            self.assertIn("core.longpaths: true", detail)
+            self.assertNotIn("secret-auth-setting", detail)
+            self.assertIn("Filename too long", detail)
+            self.assertIn("problem-19:", detail)
+            self.assertNotIn("problem-0:", detail)
+            self.assertLess(len(detail), 11000)
+            for secret in (
+                "fixture-user", "fixture-password", "url-secret", "header-secret",
+                "environment-secret", "labelled-secret", "ghp_fixtureToken123", "/private/fixture-key",
+            ):
+                self.assertNotIn(secret, detail)
+
+    def test_git_trace_fallback_omits_arguments_and_reports_missing_or_truncated_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = Path(temporary) / "trace.jsonl"
+            self.assertIn("no trace file", smoke.git_trace_details(trace))
+            trace.write_text(
+                json.dumps({"event": "start", "argv": ["git", "-c", "secret-value", "clone", "secret-url"]})
+                + "\n" + json.dumps({"event": "exit", "code": 128}) + "\nmalformed"
+            )
+            detail = smoke.git_trace_details(trace)
+            self.assertIn("start: clone", detail)
+            self.assertIn("exit: 128", detail)
+            self.assertIn("Malformed Trace2 lines: 1", detail)
+            self.assertNotIn("secret-value", detail)
+            self.assertNotIn("secret-url", detail)
+            trace.write_bytes(
+                b"x" * (2 * 1024**2 + 100) + b"\n"
+                + json.dumps({"event": "error", "msg": "final native error"}).encode() + b"\n"
+            )
+            detail = smoke.git_trace_details(trace)
+            self.assertIn("final native error", detail)
+            self.assertIn("final 2 MiB", detail)
+
+    def test_mixed_trace_is_only_set_for_actual_app_and_surfaces_its_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "case"
+            tools = root.parent / "tools"
+            tools.mkdir()
+            seed_environments = []
+
+            def seed(backend, case, caller, package, env):
+                seed_environments.append(dict(env))
+                return {"origin": str(package / "skills/release-style")}
+
+            def fail_app(binary, args, caller, env):
+                trace = Path(env["GIT_TRACE2_EVENT"])
+                self.assertEqual(env["GIT_TRACE2_CONFIG_PARAMS"], "core.longpaths")
+                self.assertEqual(trace.parent, root)
+                self.assertFalse(trace.is_relative_to(caller))
+                self.assertFalse(trace.is_relative_to(Path(env["TMPDIR"])))
+                for directory in smoke.PROFILE_DIRECTORIES:
+                    self.assertFalse(trace.is_relative_to(root / directory))
+                self.assertFalse(any(
+                    key.startswith("GIT_CONFIG_KEY_") and value == "core.longpaths"
+                    for key, value in env.items()
+                ))
+                trace.write_text(json.dumps({
+                    "event": "error",
+                    "msg": "actual frozen native failure; token fixture-secret",
+                }) + "\n")
+                return subprocess.CompletedProcess([], 22, "HALTED", "")
+
+            with (
+                patch.object(smoke, "prepare_tools", return_value=tools),
+                patch.object(smoke, "poison_host_apm"),
+                patch.object(smoke.release, "check_backend_metadata", return_value=smoke.release.read_backend_pin()),
+                patch.object(smoke, "install_backend_fixture", return_value={}),
+                patch.object(smoke, "prepare_consumer_lock", side_effect=seed),
+                patch.object(smoke, "run_binary", side_effect=fail_app),
+            ):
+                with self.assertRaisesRegex(AssertionError, "actual frozen native failure") as caught:
+                    smoke.run_case(Path("unrun-app"), root, None, "package", "pass", mixed_imports=True)
+            self.assertNotIn("fixture-secret", str(caught.exception))
+            self.assertEqual(len(seed_environments), 1)
+            self.assertNotIn("GIT_TRACE2_EVENT", seed_environments[0])
+            self.assertNotIn("GIT_TRACE2_CONFIG_PARAMS", seed_environments[0])
 
     @unittest.skipIf(os.name == "nt", "Windows sentinel reuses the native fixture actor")
     def test_host_apm_decoy_is_executable_refusal_not_fake_installation(self):

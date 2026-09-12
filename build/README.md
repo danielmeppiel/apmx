@@ -127,6 +127,14 @@ consumer's exact commit, version, and context bytes, retain its original lock
 byte-for-byte, preserve that entry in the effective native lock, and leave both
 caller and package snapshots unchanged. This is package identity precedence,
 not a same-basename local-directory approximation.
+Only that actual frozen mixed-case invocation enables Git Trace2 in an owned
+control file outside caller, package, profiles and temporary storage. An
+unexpected exit includes bounded, redacted native Git error events, or
+command-name/exit-code summaries when no error event is available. The initial
+consumer seed does not receive this trace setting; Git configuration, SSH and
+temporary-directory settings are unchanged by diagnostics.
+The read-only Trace2 config filter is restricted to `core.longpaths`; only its
+boolean value is reported, never authentication configuration values.
 
 Every frozen case gets a separate compact, owned system-temporary directory for
 `TMPDIR`/`TMP`/`TEMP`; its contents must be unchanged after execution, and the
