@@ -1,6 +1,7 @@
 """Prove fixture behavior independently of the not-yet-built application."""
 
 import json
+import contextlib
 import os
 import shutil
 import subprocess
@@ -14,6 +15,29 @@ from scripts import smoke
 
 
 class SmokeFixtureTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Covers the macOS /var temporary-directory symlink")
+    def test_main_normalizes_temporary_caller_before_package_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            actual = root / "actual"
+            actual.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(actual, target_is_directory=True)
+            binary = root / "apmx"
+            binary.write_bytes(b"MZ fixture header")
+            result = subprocess.CompletedProcess([], 0, "apmx 0.1.0", "")
+            with (
+                patch.object(smoke.tempfile, "TemporaryDirectory", return_value=contextlib.nullcontext(str(alias))),
+                patch.object(smoke, "run_binary", return_value=result),
+                patch.object(smoke, "run_case", return_value={}) as run,
+                patch.object(sys, "argv", ["smoke.py", "--binary", str(binary), "--version", "0.1.0"]),
+                patch("builtins.print"),
+            ):
+                smoke.main()
+            self.assertEqual(run.call_count, 6)
+            for call in run.call_args_list:
+                self.assertEqual(call.args[1], call.args[1].resolve())
+
     def test_environment_does_not_copy_credentials_or_python_fallback(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

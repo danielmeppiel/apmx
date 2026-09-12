@@ -237,7 +237,9 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
     for path in set(snapshot(caller)) - set(caller_before):
         require((caller / path).resolve().is_relative_to(run), f"Unexpected caller write: {path}")
     if selection == "package":
-        require(not Path(record["source"]["package"]["root"]).exists(), "Private package not cleaned")
+        prepared_root = Path(record["source"]["package"]["root"])
+        if prepared_root.resolve() != package.resolve():
+            require(not prepared_root.exists(), "Private package not cleaned")
     transcript = (run / "transcript.log").read_text(encoding="utf-8")
     require(not any(marker in transcript for marker in PRIVATE_MARKERS), "Private payload retained")
     calls = [json.loads(line) for line in Path(env["APMX_ACTOR_LOG"]).read_text().splitlines()]
@@ -272,7 +274,7 @@ def main() -> None:
     )
     actor = args.actor.resolve() if args.actor else None
     with tempfile.TemporaryDirectory(prefix="apmx-frozen-smoke-") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         tools = root / "version-tools"
         tools.mkdir()
         probe = root / "probe"
