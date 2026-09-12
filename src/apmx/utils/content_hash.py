@@ -1,6 +1,7 @@
 """Deterministic SHA-256 content hashing for package integrity verification."""
 
 import hashlib
+from collections.abc import Iterable
 from pathlib import Path
 
 from apmx.utils.atomic_io import normalize_crlf_to_lf
@@ -21,6 +22,15 @@ _EXCLUDED_ROOT_FILES = {_APM_PIN_MARKER}
 
 # Well-known hash for empty/missing packages
 _EMPTY_HASH = "sha256:" + hashlib.sha256(b"").hexdigest()
+
+
+def _hash_package_entries(entries: Iterable[tuple[str, bytes]]) -> str:
+    """Hash the canonical, POSIX-path-sorted package preimage."""
+    hasher = hashlib.sha256()
+    for relative_path, raw in entries:
+        hasher.update(relative_path.encode("utf-8"))
+        hasher.update(raw)
+    return f"sha256:{hasher.hexdigest()}"
 
 
 def compute_package_hash(package_path: Path) -> str:
@@ -54,9 +64,6 @@ def compute_package_hash(package_path: Path) -> str:
     if not package_path.is_dir():
         return _EMPTY_HASH
 
-    hasher = hashlib.sha256()
-    file_count = 0
-
     # Collect all regular files, skipping excluded dirs and symlinks
     regular_files: list[Path] = []
     for item in package_path.rglob("*"):
@@ -75,16 +82,10 @@ def compute_package_hash(package_path: Path) -> str:
     # Sort lexicographically by POSIX path for determinism
     regular_files.sort(key=lambda p: p.as_posix())
 
-    for rel_path in regular_files:
-        # Hash the relative path then the file contents
-        hasher.update(rel_path.as_posix().encode("utf-8"))
-        hasher.update((package_path / rel_path).read_bytes())
-        file_count += 1
-
-    if file_count == 0:
-        return _EMPTY_HASH
-
-    return f"sha256:{hasher.hexdigest()}"
+    return _hash_package_entries(
+        (rel_path.as_posix(), (package_path / rel_path).read_bytes())
+        for rel_path in regular_files
+    )
 
 
 def _canonical_hash_bytes(raw: bytes) -> bytes:

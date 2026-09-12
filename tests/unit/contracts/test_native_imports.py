@@ -18,7 +18,7 @@ from apmx.contracts.models import ContractError, ContractLimits
 from apmx.contracts.records import AttemptStore
 from apmx.contracts.workspace import capture_workspace
 from apmx.contracts.workspace import local_git
-from apmx.install.apm_backend import install, locate_backend
+from apmx.install.apm_backend import backend_child_env, install, locate_backend
 from apmx.install.contract_source import prepare_contract_source, prepare_imports
 from apmx.install.contract_source_validation import source_hash
 from apmx.utils.git_env import redact_git_diagnostic
@@ -285,10 +285,7 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
                 "--only", "apm", "--target", "agent-skills", "--no-trust-bin",
             ],
             cwd=generation_root,
-            env={
-                **os.environ, "APM_NO_SCRIPTS": "1", "APM_PROGRESS": "never",
-                "GIT_TRACE2_EVENT": str(trace),
-            },
+            env={**backend_child_env(dict(os.environ)), "GIT_TRACE2_EVENT": str(trace)},
             capture_output=True, text=True, timeout=120, check=False,
         )
         errors = []

@@ -113,6 +113,7 @@ class ImportedSkill:
     resources: tuple[ImportedResource, ...] = ()
     resolved_ref: str | None = None
     package_name: str | None = None
+    managed_metadata: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,7 @@ class ContractSource:
     original_lock: bytes | None = None
     imports_root: Path | None = None
     apm_backend: Mapping[str, str] | None = None
+    managed_metadata: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,61 @@ def test_source_backend_requires_absolute_explicit_path(tmp_path, monkeypatch):
         locate_backend()
 
 
+def test_windows_backend_longpaths_is_child_scoped_and_preserves_config(monkeypatch):
+    from apmx.install.apm_backend import backend_child_env
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    original = {
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "http.https://example.test/.extraheader",
+        "GIT_CONFIG_VALUE_0": "Authorization: sensitive-fixture",
+        "GIT_CONFIG_KEY_1": "core.longpaths",
+        "GIT_CONFIG_VALUE_1": "false",
+        "GIT_SSH_COMMAND": "original-ssh-command",
+        "HOME": "original-home",
+        "APM_NO_SCRIPTS": "original-refusal",
+    }
+    before = original.copy()
+    child = backend_child_env(original)
+    assert original == before
+    assert child["GIT_CONFIG_COUNT"] == "3"
+    assert child["GIT_CONFIG_KEY_2"] == "core.longpaths"
+    assert child["GIT_CONFIG_VALUE_2"] == "true"
+    for key, value in original.items():
+        if key not in {"GIT_CONFIG_COUNT", "APM_NO_SCRIPTS"}:
+            assert child[key] == value
+
+
+@pytest.mark.parametrize("configuration", [
+    {"GIT_CONFIG_COUNT": "sensitive-invalid"},
+    {"GIT_CONFIG_COUNT": "-1"},
+    {"GIT_CONFIG_COUNT": "9999999999999999999999"},
+    {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraheader"},
+    {"GIT_CONFIG_KEY_0": "http.extraheader", "GIT_CONFIG_VALUE_0": "sensitive-orphan"},
+])
+def test_windows_backend_rejects_invalid_process_config_without_disclosure(
+    monkeypatch, configuration,
+):
+    from apmx.install.apm_backend import backend_child_env
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    before = configuration.copy()
+    with pytest.raises(ContractError) as rejected:
+        backend_child_env(configuration)
+    assert rejected.value.code == "apm_backend_environment"
+    assert "sensitive" not in str(rejected.value)
+    assert configuration == before
+
+
+def test_posix_backend_does_not_change_git_configuration(monkeypatch):
+    from apmx.install.apm_backend import backend_child_env
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    original = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.longpaths", "GIT_CONFIG_VALUE_0": "false"}
+    child = backend_child_env(original)
+    assert {key: value for key, value in child.items() if key.startswith("GIT_CONFIG_")} == original
+
+
 def test_frozen_backend_ignores_override_and_path(tmp_path, monkeypatch):
     from apmx.install.apm_backend import locate_backend
 

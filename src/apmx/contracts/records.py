@@ -125,6 +125,7 @@ class AttemptStore:
                             "prepared_hash": plan.source.prepared_hash,
                             "original_root": plan.source.original_root,
                             "assurance": plan.source.assurance,
+                            "managed_metadata": plan.source.managed_metadata,
                         }
                         if plan.source
                         else None
@@ -163,6 +164,7 @@ class AttemptStore:
                         "package_name": skill.package_name,
                         "resolved_ref": skill.resolved_ref,
                         "verified_package_hash": skill.verified_package_hash,
+                        "managed_metadata": skill.managed_metadata,
                     }
                     for skill in plan.imported_skills
                 ],

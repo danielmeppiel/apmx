@@ -164,7 +164,7 @@ def resolve_installed_skills(
     The public APM lock model is an inventory/path codec, not a second
     dependency resolver. APM itself owns graph traversal and frozen replay.
     """
-    from ..utils.content_hash import verify_package_hash
+    from .native_integrity import verify_inventory_package
 
     limits = limits or ContractLimits()
     lock, lock_digest = read_lock(project_root, limits)
@@ -259,13 +259,12 @@ def resolve_installed_skills(
             origin = Path(locked.anchored_local_path or locked.local_path or "")
             if origin.is_absolute() and origin.exists():
                 bounded_tree(origin, limits)
+        managed_metadata = ()
         if locked.source != "local":
             if not locked.resolved_commit or not locked.content_hash:
                 raise ContractError("Git import needs a locked commit and package hash.",
                                     code="import_drift")
-            if not verify_package_hash(root, locked.content_hash):
-                raise ContractError("Installed package hash differs from its lock.",
-                                    code="import_drift")
+            managed_metadata = verify_inventory_package(project_root, locked, lock, limits)
         for path, kind, context_name in contexts:
             if path in seen_paths:
                 continue
@@ -311,5 +310,6 @@ def resolve_installed_skills(
                 resources=tuple(resources),
                 resolved_ref=locked.resolved_ref or locked.resolved_tag,
                 package_name=locked.name or package_name,
+                managed_metadata=managed_metadata,
             ))
     return tuple(result), lock_digest

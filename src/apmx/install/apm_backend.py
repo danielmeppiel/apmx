@@ -100,6 +100,31 @@ def expected_version_output(target: str | None = None) -> str:
         ) from exc
 
 
+def backend_child_env(environ: dict[str, str]) -> dict[str, str]:
+    env = build_child_tls_env(environ)
+    env["APM_NO_SCRIPTS"] = "1"
+    env["APM_PROGRESS"] = "never"
+    if sys.platform == "win32":
+        raw_count = env.get("GIT_CONFIG_COUNT", "0")
+        if not raw_count.isascii() or not raw_count.isdecimal():
+            raise ContractError("Invalid process Git configuration.", code="apm_backend_environment")
+        digits = raw_count.lstrip("0") or "0"
+        if len(digits) > len(str(len(env))):
+            raise ContractError("Invalid process Git configuration.", code="apm_backend_environment")
+        count = int(digits)
+        if count > len(env) // 2 or any(
+            f"GIT_CONFIG_KEY_{index}" not in env or f"GIT_CONFIG_VALUE_{index}" not in env
+            for index in range(count)
+        ):
+            raise ContractError("Incomplete process Git configuration.", code="apm_backend_environment")
+        if f"GIT_CONFIG_KEY_{count}" in env or f"GIT_CONFIG_VALUE_{count}" in env:
+            raise ContractError("Inconsistent process Git configuration.", code="apm_backend_environment")
+        env[f"GIT_CONFIG_KEY_{count}"] = "core.longpaths"
+        env[f"GIT_CONFIG_VALUE_{count}"] = "true"
+        env["GIT_CONFIG_COUNT"] = str(count + 1)
+    return env
+
+
 def install(
     stage: Path,
     *,
@@ -125,9 +150,7 @@ def install(
     ))
     if frozen:
         argv.append("--frozen")
-    env = build_child_tls_env(os.environ)
-    env["APM_NO_SCRIPTS"] = "1"
-    env["APM_PROGRESS"] = "never"
+    env = backend_child_env(dict(os.environ))
     version_output = bytearray()
     oversized = False
 

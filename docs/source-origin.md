@@ -48,6 +48,10 @@ Staging uses a compact, private system-temporary directory rather than extending
 the caller's path: native APM's transactional Git paths can exceed Windows Git
 limits under a deep checkout. The temporary parent must be outside the caller and
 source; all staged files are removed through the existing guarded cleanup path.
+On Windows, only the APM child receives a process-scoped `core.longpaths=true`
+Git setting, matching the pinned backend's own Git-cache convention. Existing
+indexed Git configuration and authentication entries are preserved; malformed
+configuration is refused, not reset. No global Git configuration is changed.
 When adding a not-yet-declared contract, its declaration is appended to that
 owned consumer manifest before full native resolution. Existing pins are retained
 and compared after installation; the publisher's graph is never first resolved
@@ -68,6 +72,17 @@ The consumer's manifest and lock govern even a packaged contract. Without a
 consumer environment, execution can resolve an ephemeral one; a package-owned
 lock is provenance, not a competing consumer lock. Read-only planning never
 installs, fetches, repairs or migrates missing dependencies.
+
+APM 0.30 adds cache-pin metadata after recording remote package hashes. For
+overlapping virtual packages, a child's `.apm-pin` can consequently change its
+parent's installed tree. Verification first requires the ordinary canonical
+package hash. Only on a mismatch may it omit exact, schema-and-commit-validated
+markers at nested remote package roots present in the native lock inventory;
+each descendant package is independently hash-verified. The resulting preimage
+must match the **original native expected hash**. No installed bytes or locks
+are rewritten, and unlisted markers or changed package content remain failures.
+Records expose any omitted metadata paths as `managed_metadata`; observed source
+hashes still describe the actual installed tree.
 
 Only selected package instructions and skills enter `_apmx_context/import-N/`.
 Supported sources are global `.apm/instructions/**/*.instructions.md`, root

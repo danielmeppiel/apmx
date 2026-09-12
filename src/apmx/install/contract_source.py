@@ -10,6 +10,7 @@ from apmx.contracts.imports import (
     _read_bytes, read_lock, read_project_manifest, resolve_installed_skills,
 )
 from apmx.contracts.models import ContractError, ContractLimits, ContractSource, Outcome
+from apmx.contracts.native_integrity import verify_inventory_package
 from apmx.install import apm_backend
 from apmx.install.contract_source_validation import source_hash, validate_reference
 from apmx.models.dependency.reference import DependencyReference
@@ -76,12 +77,12 @@ def _selected_source(stage: Path, requested: DependencyReference, limits: Contra
     root = locked.to_dependency_ref().get_install_path(stage / "apm_modules")
     if not root.is_dir() or has_symlink_component(stage, root):
         raise ContractError("Selected package is not safely installed.", code="source_changed")
+    managed_metadata = ()
     if locked.content_hash:
-        from apmx.utils.content_hash import verify_package_hash
-
-        if not verify_package_hash(root, locked.content_hash):
-            raise ContractError("Installed source differs from its lock.", code="source_changed")
-    return root.resolve(), locked
+        managed_metadata = verify_inventory_package(
+            stage, locked, lock, limits, error_code="source_changed",
+        )
+    return root.resolve(), locked, managed_metadata
 
 
 def _validate_source_pin(requested, locked):
@@ -177,11 +178,12 @@ def prepare_contract_source(
                     "Remote source is unresolved offline; install it explicitly first.",
                     code="unresolved_source", outcome=Outcome.UNPROVEN,
                 )
-            root, locked = _selected_source(caller_root, requested, limits)
+            root, locked, managed_metadata = _selected_source(caller_root, requested, limits)
             yield ContractSource(
                 root, contract_relative_path, package_ref, locked.resolved_commit,
                 source_hash(root, limits), "locked-package-hash",
                 imports_root=caller_root,
+                managed_metadata=managed_metadata,
             )
             return
         with _private_root(caller_root, original) as private:
@@ -218,7 +220,7 @@ def prepare_contract_source(
             if (current_manifest, current_lock) != (caller_manifest_digest, caller_lock_digest):
                 raise ContractError("Consumer declarations changed during preparation.",
                                     code="plan_changed")
-            root, locked = _selected_source(stage, requested, limits)
+            root, locked, managed_metadata = _selected_source(stage, requested, limits)
             parse_contract(package_contract_path(root, contract_relative_path), limits=limits)
             if original and source_hash(original, limits) != original_hash:
                 raise ContractError("Original package changed during preparation.",
@@ -233,6 +235,7 @@ def prepare_contract_source(
                 original_lock=lock_bytes,
                 imports_root=stage,
                 apm_backend=identity,
+                managed_metadata=managed_metadata,
             )
     except (ValueError, TypeError, KeyError) as exc:
         if isinstance(exc, ContractError):
