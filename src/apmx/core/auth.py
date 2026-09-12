@@ -1467,11 +1467,13 @@ class AuthResolver:
         self,
         host_info: HostInfo,
         remote_url: str,
+        *,
+        base_env: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Build a header-free Git environment that retains native helpers."""
         policy = git_transport_policy(host_info.kind, remote_url)
         env = self.build_noninteractive_git_env(
-            base_env=self.hardened_git_base_env(),
+            base_env=self.hardened_git_base_env() if base_env is None else base_env,
             host_kind=host_info.kind,
             preserve_config_isolation=policy.preserve_config_isolation,
             suppress_credential_helpers=policy.suppress_credential_helpers,

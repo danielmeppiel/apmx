@@ -9,6 +9,11 @@ from apmx.utils.git_env import git_subprocess_env
 from apmx.utils import subprocess_env
 
 
+def test_process_request_repr_does_not_disclose_environment(tmp_path):
+    request = ProcessRequest(("git", "fetch"), tmp_path, 5, {"SECRET": "private-value"})
+    assert "private-value" not in repr(request)
+
+
 def test_frozen_child_restores_original_loader_paths(monkeypatch):
     monkeypatch.setattr(subprocess_env.sys, "frozen", True, raising=False)
     env = {

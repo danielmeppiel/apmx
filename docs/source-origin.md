@@ -44,6 +44,18 @@ HTTP and semantic-version ranges are refused explicitly. There is no automatic
 model retry. Native Copilot login/profile ownership remains with Copilot; `apmx`
 does not copy profiles or inspect native credential values.
 
+Public GitHub HTTPS acquisition starts anonymously and consults credentials only
+after an owner-classified authentication failure. TLS, connectivity, throttling,
+output-limit and process failures do not trigger credential retries. Actual
+network operations retain the canonical Git URL-rewrite and credential-origin
+fences. SSH preserves native user/port/key selection without HTTP token lookup.
+Detached checkout and hashing use a separate credential-free local Git boundary.
+Network acquisition has a 120-second cooperative deadline, at most 60 seconds per
+supervised fetch, and a 512 KiB combined output limit; credential probes retain
+their own bounded owner timeouts. None of these is the later engine watchdog or a
+hard overall wall-clock guarantee. Unsupported registry/proxy/range sources and
+cross-protocol retries are not reintroduced by this extraction.
+
 ## State and format compatibility
 
 `apm.yml`, `apm.lock.yaml`, legacy `apm.lock`, `apm_modules` and package `.apm`

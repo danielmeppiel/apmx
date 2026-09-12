@@ -228,6 +228,7 @@ def local_git(
     *arguments: str,
     maximum_bytes: int = 8 * 1024 * 1024,
     accepted_codes: tuple[int, ...] = (0,),
+    timeout_seconds: float = 30,
 ) -> bytes:
     """Run a bounded local Git operation without inherited hooks or Git overrides."""
     try:
@@ -273,7 +274,7 @@ def local_git(
                 *arguments,
             ),
             root,
-            30,
+            timeout_seconds,
             env,
         ),
         on_bytes=receive,

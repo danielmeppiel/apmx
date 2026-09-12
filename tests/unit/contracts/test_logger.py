@@ -933,9 +933,9 @@ def test_full_source_artifact_and_log_paths_stay_copyable(
         assert "\x1b" not in output
     lines = click.unstyle(output).splitlines()
     assert f"Job: {source.name} -> saved output" in lines
-    assert str(source) not in output
-    assert f"  Output: {artifact_path}" in lines
-    assert lines.count(f"  Record: {directory / 'record.json'}") == 1
+    assert source.as_posix() not in output
+    assert f"  Output: {artifact_path.as_posix()}" in lines
+    assert lines.count(f"  Record: {(directory / 'record.json').as_posix()}") == 1
     assert not any(line.startswith("[i]") for line in lines)
 
 
@@ -1413,7 +1413,7 @@ def test_packaged_preview_uses_stable_identity_and_gates_source_metadata(
     assert "Preview: contracts/handoff.contract.md -> handoff.json" in output
     assert "Nothing will execute or download." in output
     assert "without --plan" in output
-    assert ("Source: " + str(package / relative) in output) is verbose
+    assert ("Source: " + (package / relative).as_posix() in output) is verbose
     assert (f"Package: {package}" in output) is verbose
     assert "private-source-copy" not in output
     assert "PRIVATE_PROMPT" not in output

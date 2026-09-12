@@ -184,7 +184,7 @@ class ProcessRequest:
     argv: tuple[str, ...]
     cwd: Path
     timeout_seconds: float
-    env: Mapping[str, str] | None = None
+    env: Mapping[str, str] | None = field(default=None, repr=False)
     control_observations: Mapping[str, object] = field(default_factory=dict)
 
 
