@@ -36,6 +36,9 @@ def start_child():
 
 
 def main():
+    if getattr(sys, "frozen", False) and Path(sys.executable).name.lower() == "apm.exe":
+        Path(os.environ["APMX_DECOY_APM_LOG"]).write_text("host apm selected\n", encoding="ascii")
+        return 97
     with Path(os.environ["APMX_ACTOR_LOG"]).open("a", encoding="utf-8") as stream:
         stream.write(json.dumps({"argv": sys.argv[1:], "cwd": str(Path.cwd())}) + "\n")
     if sys.argv[1:] == ["--fixture-child"]:

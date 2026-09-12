@@ -1,6 +1,7 @@
 """Archive/provenance unit fixtures; executable acceptance uses real released APM."""
 
 import copy
+import hashlib
 import io
 import json
 import shutil
@@ -165,8 +166,6 @@ class BackendTests(unittest.TestCase):
                 response.geturl = lambda: (
                     "http://host/asset" if insecure else "https://host/asset"
                 )
-                import hashlib
-
                 pin = copy.deepcopy(self.pin)
                 pin["assets"]["linux-arm64"]["sha256"] = hashlib.sha256(response.getvalue()).hexdigest()
                 with (

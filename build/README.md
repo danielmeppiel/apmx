@@ -55,7 +55,7 @@ download it at runtime. The development override is not consulted by frozen apmx
 
 ## Acceptance boundary
 
-`python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.1.0`
+`python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.2.0`
 uses a temporary caller outside the checkout, isolated HOME/config directories,
 and no `PYTHONPATH` or `PYTHONHOME`. It does not import or install the application.
 It rejects source launchers and runs six mandatory frozen local/package cases:
@@ -78,6 +78,24 @@ terminated with no continuing heartbeat. These **eight** cases run on all five
 targets, including Windows; none is a help-only or skipped execution fallback.
 Fixture children have their own finite lifetime and an emergency fixture-only
 stop marker, which is written only after cleanup observations (or test failure).
+
+Every gate checks the bundled APM executable hash and version/source against
+release provenance. Before each of the original eight cases, the genuine bundled
+backend installs a private package plus a transitive local skill, producing a real
+lockfile and checked skill bytes. This also establishes APM's normal bootstrap
+configuration before the unchanged-profile snapshot. All isolated HOME,
+config/data/cache, Windows app-data and Copilot profiles must then remain
+byte-identical. An executable `apm` refusal sentinel leads PATH, and the
+source-only backend override points at that sentinel: frozen execution must
+ignore both and records must identify the exact bundled backend.
+
+A **ninth** package case starts from a genuinely empty profile. It allows only
+official APM's documented bootstrap files, `~/.apm/config.json` and
+`~/.cache/apm/last_version_check`, and rejects every other profile write or
+plugin/hook/service activation. No production HOME rewriting, credential
+copying, patched backend, or claim of zero APM host writes is introduced. All
+nine cases run both on native CI archives and fresh downloaded release assets.
+Only Copilot is simulated; APM's version and installs are genuine native execution.
 
 Short deadline/timeout behavior is covered separately by native-platform source
 tests using the existing `ProcessRequest` API. The frozen gate does **not** claim
@@ -123,7 +141,7 @@ Fresh native runners download the **actual draft release assets by asset ID**.
 The manifest digest is anchored in the draft job's output, and the full candidate
 asset identity fingerprint must remain unchanged. No app sources or app
 installation are present in these verification checkouts. Each runner verifies
-checksums, extracts with traversal/link/special-file guards, and repeats all eight
+checksums, extracts with traversal/link/special-file guards, and repeats all nine
 functional cases. Publication requires every downloaded-asset job to pass and
 rechecks repository privacy, tag identity, draft identity, and asset fingerprint.
 

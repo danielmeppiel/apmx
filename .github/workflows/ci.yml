@@ -72,7 +72,7 @@ jobs:
       - name: Build native Windows hermetic protocol actor
         if: runner.os == 'Windows'
         run: uv run --frozen --extra dev --extra build python scripts/smoke.py --build-actor dist/smoke-actor
-      - name: Freeze and archive the standalone application
+      - name: Freeze application and bundle the verified official APM backend
         id: build
         run: uv run --frozen --extra dev --extra build python scripts/release.py build --target "$TARGET"
       - name: Verify checksum and safely extract outside the checkout
@@ -80,7 +80,7 @@ jobs:
         env:
           ARCHIVE: ${{ steps.build.outputs.archive }}
         run: python scripts/release.py extract --archive "$ARCHIVE" --destination "$RUNNER_TEMP/frozen-bundle"
-      - name: Exercise extracted binary with real independent checks
+      - name: Exercise real bundled APM installs, selected imports and independent checks
         env:
           BUNDLE: ${{ steps.extract.outputs.bundle }}
         run: |

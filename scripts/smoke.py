@@ -20,9 +20,16 @@ import threading
 import time
 from pathlib import Path
 
+if __package__:
+    from . import release
+else:
+    import release
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 ROOT = FIXTURES.parents[1]
 PRIVATE_MARKERS = ("PRIVATE_REASONING_SENTINEL", "PRIVATE_TOOL_SENTINEL")
+PROFILE_DIRECTORIES = ("home", "config", "data", "cache", "appdata", "localappdata", "copilot")
+APM_BOOTSTRAP_FILES = {"home/.apm/config.json", "home/.cache/apm/last_version_check"}
 
 
 def require(condition: bool, message: str) -> None:
@@ -117,8 +124,92 @@ def prepare_tools(root: Path, actor: Path | None) -> Path:
     return tools
 
 
+def poison_host_apm(tools: Path, env: dict[str, str]) -> None:
+    """An executable refusal sentinel, never an APM installation substitute."""
+    decoy = tools / ("apm.exe" if os.name == "nt" else "apm")
+    env["APMX_DECOY_APM_LOG"] = str(tools / "host-apm-called")
+    if os.name == "nt":
+        shutil.copyfile(tools / "copilot.exe", decoy)
+    else:
+        decoy.write_text(
+            '#!/bin/sh\nprintf "host apm selected\\n" > "$APMX_DECOY_APM_LOG"\nexit 97\n',
+            encoding="utf-8",
+        )
+        decoy.chmod(0o755)
+    env["APMX_APM_BACKEND"] = str(decoy)
+    selected = shutil.which("apm", path=env["PATH"])
+    require(selected is not None and Path(selected).resolve() == decoy.resolve(), "APM decoy not first on PATH")
+
+
+def install_backend_fixture(backend: Path, root: Path, env: dict[str, str]) -> dict:
+    source = root / "source"
+    skill = source / "skills/bootstrap-style"
+    skill.mkdir(parents=True)
+    (source / "apm.yml").write_text(
+        "name: release-bootstrap\nversion: 0.1.0\ndependencies:\n"
+        "  apm:\n    - path: ./skills/bootstrap-style\n",
+        encoding="utf-8",
+    )
+    (skill / "apm.yml").write_text(
+        "name: bootstrap-style\nversion: 0.1.0\ndependencies:\n  apm: []\n",
+        encoding="utf-8",
+    )
+    (skill / "SKILL.md").write_text(
+        "---\nname: bootstrap-style\ndescription: Real APM install fixture.\n---\n"
+        "GENUINE_APM_BOOTSTRAP_SKILL\n",
+        encoding="utf-8",
+    )
+    project = root / "project"
+    project.mkdir()
+    result = run_binary(
+        backend,
+        ["install", str(source), "--root", str(project), "--only", "apm",
+         "--target", "agent-skills", "--no-trust-bin"],
+        root, {**env, "APM_NO_SCRIPTS": "1", "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+    )
+    require(result.returncode == 0, f"Real APM install failed:\n{result.stdout}\n{result.stderr}")
+    lock = project / "apm.lock.yaml"
+    require(lock.is_file(), "Real APM install did not create a lockfile")
+    installed = list((project / "apm_modules").rglob("SKILL.md"))
+    require(
+        any(digest(path) == digest(skill / "SKILL.md") for path in installed),
+        "Real APM did not install the fixture dependency skill",
+    )
+    require(not Path(env["APMX_DECOY_APM_LOG"]).exists(), "Host APM decoy was executed")
+    return {
+        "exit_code": result.returncode, "lock_sha256": digest(lock),
+        "skill_sha256": digest(skill / "SKILL.md"),
+        "command": ["install", "<owned-source>", "--root", "<owned-project>", "--only", "apm",
+                    "--target", "agent-skills", "--no-trust-bin"],
+    }
+
+
 def snapshot(root: Path) -> dict[str, str]:
     return {str(path.relative_to(root)): digest(path) for path in root.rglob("*") if path.is_file()}
+
+
+def profile_snapshot(root: Path) -> dict[str, str]:
+    return {
+        f"{directory}/{Path(path).as_posix()}": sha
+        for directory in PROFILE_DIRECTORIES
+        for path, sha in snapshot(root / directory).items()
+    }
+
+
+def check_profiles(root: Path, before: dict[str, str], fresh_home: bool) -> list[str]:
+    after = profile_snapshot(root)
+    changes = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+    if fresh_home:
+        require(not before, "Fresh-home case must start without profile files")
+        require("home/.apm/config.json" in changes, "Real APM bootstrap config was not created")
+        require(set(changes) <= APM_BOOTSTRAP_FILES, f"Unexpected fresh-home activation/write: {changes}")
+        require(
+            isinstance(json.loads((root / "home/.apm/config.json").read_text(encoding="utf-8")), dict),
+            "APM bootstrap config is not a JSON object",
+        )
+    else:
+        require(not changes, f"Ambient profiles changed after APM bootstrap: {changes}")
+    return changes
 
 
 def run_binary(binary: Path, args: list[str], caller: Path, env: dict[str, str], timeout: float = 90):
@@ -229,11 +320,20 @@ def require_child_cleanup(root: Path) -> None:
     require(heartbeat.read_bytes() == before, "Fixture descendant kept writing after recorded cleanup")
 
 
-def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode: str) -> dict:
+def run_case(
+    binary: Path, root: Path, actor: Path | None, selection: str, mode: str,
+    *, fresh_home: bool = False,
+) -> dict:
     root.mkdir()
     require(not root.resolve().is_relative_to(ROOT.resolve()), "Smoke caller must be outside checkout")
     tools = prepare_tools(root, actor)
     env = isolated_env(root, tools)
+    poison_host_apm(tools, env)
+    pin = release.check_backend_metadata(binary.parent, release.native_target())
+    backend = binary.parent / "libexec/apm" / pin["assets"][release.native_target()]["executable"]
+    installation = (
+        None if fresh_home else install_backend_fixture(backend, root / "backend-bootstrap", env)
+    )
     env["APMX_ACTOR_MODE"] = mode
     env.update({
         "APMX_CHILD_PID": str(root / "child.pid"),
@@ -283,7 +383,7 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
     )
     caller_before = snapshot(caller)
     package_before = snapshot(package)
-    home_before = snapshot(root / "home")
+    profiles_before = profile_snapshot(root)
     temp_before = snapshot(root / "temp")
     args = ["handoff.contract.md"]
     if selection == "package":
@@ -371,7 +471,8 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
         )
         require(digest(assessments[0] / "handoff.json") == digest(artifact), "Assessment output")
     require(snapshot(package) == package_before, "Source package was changed")
-    require(snapshot(root / "home") == home_before, "Ambient profile was changed")
+    profile_changes = check_profiles(root, profiles_before, fresh_home)
+    require(not Path(env["APMX_DECOY_APM_LOG"]).exists(), "Host APM decoy was executed")
     temp_after = snapshot(root / "temp")
     changed_temp = sorted(
         path for path in temp_before.keys() | temp_after.keys()
@@ -387,6 +488,14 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
     for path in set(snapshot(caller)) - set(caller_before):
         require((caller / path).resolve().is_relative_to(run), f"Unexpected caller write: {path}")
     if selection == "package":
+        require(
+            record.get("apm_backend") == {
+                "version": pin["version"], "source_commit": pin["source_commit"],
+                "executable_sha256": digest(backend),
+                "pin_sha256": digest(binary.parent / "apm-backend.json"),
+            },
+            "Package record did not identify the genuine bundled APM backend",
+        )
         prepared_root = Path(record["source"]["package"]["root"])
         if prepared_root.resolve() != package.resolve():
             require(not prepared_root.exists(), "Private package not cleaned")
@@ -409,6 +518,8 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
     return {
         "selection": selection, "mode": mode, "exit_code": result.returncode,
         "actor": "hermetic Copilot JSONL protocol fixture; NOT live model inference",
+        "backend_installation": installation,
+        "fresh_home": fresh_home, "profile_changes": profile_changes,
         "record": record,
     }
 
@@ -435,6 +546,10 @@ def main() -> None:
         "Smoke must receive a native frozen executable, not a source launcher",
     )
     actor = args.actor.resolve() if args.actor else None
+    target = release.native_target()
+    pin = release.check_backend_metadata(binary.parent, target)
+    backend = binary.parent / "libexec/apm" / pin["assets"][target]["executable"]
+    backend_version = release.probe_backend(backend, pin)
     with tempfile.TemporaryDirectory(prefix="apmx frozen smoke-") as temporary:
         root = Path(temporary).resolve()
         tools = root / "version-tools"
@@ -455,14 +570,22 @@ def main() -> None:
         cases += [
             run_case(binary, root / "local-quiet", actor, "local", "quiet"),
             run_case(binary, root / "local-linger", actor, "local", "linger"),
+            run_case(binary, root / "package-fresh-home", actor, "package", "pass", fresh_home=True),
         ]
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(
-                json.dumps({"binary_sha256": digest(binary), "version": args.version, "cases": cases}, indent=2) + "\n",
+                json.dumps({
+                    "binary_sha256": digest(binary), "version": args.version, "cases": cases,
+                    "apm_backend": {
+                        **release.backend_provenance(backend.parent, pin, target),
+                        "pin_sha256": digest(binary.parent / "apm-backend.json"),
+                        "version_output": backend_version,
+                    },
+                }, indent=2) + "\n",
                 encoding="utf-8",
             )
-    print("Frozen smoke: 8 local/package cases passed; hermetic protocol, NOT live inference.")
+    print("Frozen smoke: 9 local/package cases passed with genuine bundled APM; hermetic Copilot, NOT live inference.")
 
 
 if __name__ == "__main__":

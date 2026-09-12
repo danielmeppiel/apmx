@@ -131,7 +131,7 @@ jobs:
             --release-id "$RELEASE_ID" --manifest-sha "$MANIFEST_SHA" \
             --assets-fingerprint "$ASSETS_FINGERPRINT" --target "$TARGET" \
             --destination "$RUNNER_TEMP/released-assets"
-      - name: Exercise downloaded release bytes outside checkout with no app installation
+      - name: Exercise downloaded bytes and genuine bundled APM outside checkout
         env:
           BUNDLE: ${{ steps.download.outputs.bundle }}
         run: |

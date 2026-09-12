@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import smoke
+from tests.release.test_backend import add_backend_fixture
 
 
 class SmokeFixtureTests(unittest.TestCase):
@@ -65,8 +66,10 @@ class SmokeFixtureTests(unittest.TestCase):
             alias.symlink_to(actual, target_is_directory=True)
             binary = root / "apmx"
             binary.write_bytes(b"MZ fixture header")
+            add_backend_fixture(root, smoke.release.native_target())
             result = subprocess.CompletedProcess([], 0, "apmx 0.1.0", "")
             with (
+                patch.object(smoke.release, "probe_backend", return_value="unit fixture"),
                 patch.object(smoke.tempfile, "TemporaryDirectory", return_value=contextlib.nullcontext(str(alias))),
                 patch.object(smoke, "run_binary", return_value=result),
                 patch.object(smoke, "run_case", return_value={}) as run,
@@ -74,7 +77,7 @@ class SmokeFixtureTests(unittest.TestCase):
                 patch("builtins.print"),
             ):
                 smoke.main()
-            self.assertEqual(run.call_count, 8)
+            self.assertEqual(run.call_count, 9)
             for call in run.call_args_list:
                 self.assertEqual(call.args[1], call.args[1].resolve())
 
@@ -246,6 +249,9 @@ class SmokeFixtureTests(unittest.TestCase):
             tools.mkdir()
             with (
                 patch.object(smoke, "prepare_tools", return_value=tools),
+                patch.object(smoke, "poison_host_apm"),
+                patch.object(smoke.release, "check_backend_metadata", return_value=smoke.release.read_backend_pin()),
+                patch.object(smoke, "install_backend_fixture", return_value={}),
                 patch.object(smoke, "run_binary", side_effect=RuntimeError("stop before binary")) as run,
             ):
                 with self.assertRaisesRegex(RuntimeError, "stop before binary"):
@@ -257,6 +263,52 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertIn("apm: []", (package / "skills/release-style/apm.yml").read_text())
             self.assertEqual(run.call_args.args[3]["APMX_EXPECT_SKILL"], "1")
             self.assertFalse((root / "caller/apm.yml").exists())
+
+    @unittest.skipIf(os.name == "nt", "Windows sentinel reuses the native fixture actor")
+    def test_host_apm_decoy_is_executable_refusal_not_fake_installation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = smoke.prepare_tools(root, None)
+            env = smoke.isolated_env(root, tools)
+            smoke.poison_host_apm(tools, env)
+            result = subprocess.run(
+                [str(tools / "apm"), "install"], env=env, capture_output=True, timeout=5,
+            )
+            self.assertEqual(result.returncode, 97)
+            self.assertTrue(Path(env["APMX_DECOY_APM_LOG"]).is_file())
+            self.assertEqual(env["APMX_APM_BACKEND"], str(tools / "apm"))
+
+    def test_fresh_home_allowlist_rejects_plugin_hook_and_profile_activation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            smoke.isolated_env(root, root / "tools")
+            config = root / "home/.apm/config.json"
+            config.parent.mkdir()
+            config.write_text("{}")
+            self.assertEqual(smoke.check_profiles(root, {}, True), ["home/.apm/config.json"])
+            before = smoke.profile_snapshot(root)
+            self.assertEqual(smoke.check_profiles(root, before, False), [])
+            for relative in (
+                "home/.copilot/installed_plugins.json", "config/mcp.json",
+                "copilot/hooks.json", "appdata/services.json",
+            ):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("unselected activation")
+                with self.assertRaisesRegex(AssertionError, "activation/write"):
+                    smoke.check_profiles(root, {}, True)
+                with self.assertRaisesRegex(AssertionError, "Ambient profiles changed"):
+                    smoke.check_profiles(root, before, False)
+                path.unlink()
+
+    def test_backend_install_requires_lock_and_genuine_dependency_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env = {"APMX_DECOY_APM_LOG": str(root / "decoy")}
+            result = subprocess.CompletedProcess([], 0, "pretend success", "")
+            with patch.object(smoke, "run_binary", return_value=result):
+                with self.assertRaisesRegex(AssertionError, "did not create a lockfile"):
+                    smoke.install_backend_fixture(Path("unrun-backend"), root / "missing", env)
 
 
 if __name__ == "__main__":
