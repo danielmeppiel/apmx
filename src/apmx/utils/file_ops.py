@@ -157,13 +157,15 @@ def _debug_file_op(message: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _on_readonly_retry(func: Callable, path: str, _exc_info: Any) -> None:
-    """``onerror`` callback: chmod writable and retry the failing removal."""
-    try:
-        os.chmod(path, stat.S_IWRITE)
-        func(path)
-    except OSError:
-        pass
+def _on_readonly_retry(func: Callable, path: str, exc_info: Any) -> None:
+    """Retry an owned non-link path; let the outer retry policy handle errors."""
+    from .path_security import has_symlink_component
+
+    absolute = Path(path).absolute()
+    if has_symlink_component(Path(absolute.anchor), absolute):
+        raise exc_info[1]
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
 
 
 # ---------------------------------------------------------------------------

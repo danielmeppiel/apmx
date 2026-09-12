@@ -84,5 +84,12 @@ empty configuration file is invocation-private temporary state, not a shared APM
 configuration path. Terminal rendering preserves copyable Windows backslashes
 while continuing to visibly escape control characters and Unicode.
 
+Temporary package cleanup preserves the existing owned-path fence and bounded
+file-lock retries. Exhausted permission or removal failures propagate rather
+than reporting successful cleanup; explicit internal `ignore_errors=True`
+remains opt-in. Read-only retries refuse observed symlink/reparse components
+before changing permissions. Failed prepared-source cleanup reports HALTED with
+`source_cleanup`, including when invocation already produced a retained record.
+
 No sandbox, cryptographic evidence signature, notarization, publisher signature,
 or production/live-inference claim follows from a green fixture test.

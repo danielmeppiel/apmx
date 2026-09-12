@@ -85,6 +85,29 @@ def _prepare(
     )
 
 
+def test_package_cleanup_failure_halts_after_completed_invocation(caller, tmp_path, monkeypatch):
+    package = _package(tmp_path / "package", imports=True)
+    _skill(tmp_path / "style")
+    invoked = []
+
+    def completed(ctx, *args, **kwargs):
+        invoked.append(kwargs["source"].root)
+        ctx.exit(int(Outcome.UNPROVEN))
+
+    monkeypatch.setattr("apmx.cli.invoke_contract", completed)
+    monkeypatch.setattr(
+        contract_source, "safe_rmtree", Mock(side_effect=PermissionError("private fixture path")),
+    )
+    result = CliRunner().invoke(main, [
+        "job.contract.md", "--from", str(package), "--on", "copilot", "--allow-host-access",
+    ])
+    assert invoked
+    assert result.exit_code == int(Outcome.HALTED), result.output
+    assert "Temporary package source cleanup failed" in result.output
+    assert "Package preparation failed" not in result.output
+    assert "private fixture path" not in result.output
+
+
 @pytest.mark.parametrize(
     "args,code",
     [

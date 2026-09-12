@@ -146,7 +146,14 @@ def _private_root(caller_root: Path, original_root: Path | None) -> Iterator[Pat
     try:
         yield directory
     finally:
-        safe_rmtree(directory, parent)
+        try:
+            safe_rmtree(directory, parent)
+        except OSError:
+            raise ContractError(
+                "Temporary package source cleanup failed. "
+                "Inspect any retained run record and resolve filesystem permissions or locks.",
+                code="source_cleanup",
+            ) from None
 
 
 def _copy_preparation(
