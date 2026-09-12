@@ -140,6 +140,8 @@ def run_contract(
         model=plan.model,
         limits=plan.limits,
         source=plan.source,
+        imports_root=plan.imports_root,
+        apm_backend=plan.apm_backend,
     )
     if current_plan != plan:
         raise ContractError(

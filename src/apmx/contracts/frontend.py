@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 import stat
-from dataclasses import replace
+from collections.abc import Mapping
 from pathlib import Path
 
 from ..utils.path_security import (
@@ -150,9 +150,10 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
             )
         checks.append(CheckSpec(name, command, at("verify", name)))
     imports = data.get("imports", [])
-    if not isinstance(imports, list) or len(imports) > 1:
+    if not isinstance(imports, list) or len(imports) > limits.resource_files:
         raise ContractError(
-            "imports must be a list containing at most one installed skill.", location=at("imports")
+            "imports must be a bounded list of installed package/context names.",
+            location=at("imports"),
         )
     for name in imports:
         if (
@@ -169,6 +170,9 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
             validate_path_segments(name, context="import", reject_empty=True)
         except PathTraversalError as exc:
             raise ContractError(str(exc), location=at("imports")) from exc
+    if len({name.casefold() for name in imports}) != len(imports):
+        raise ContractError("imports contains duplicate or case-colliding names.",
+                            location=at("imports"))
     return LeafContract(
         path=path,
         source_digest=hashlib.sha256(document.raw).hexdigest(),
@@ -205,11 +209,13 @@ def plan_contract(
     model: str | None = None,
     limits: ContractLimits | None = None,
     source: ContractSource | None = None,
+    imports_root: Path | None = None,
+    apm_backend: Mapping[str, str] | None = None,
 ) -> LeafPlan:
     """Resolve a bounded leaf using local reads only; no version/inference probe."""
     from ..runtime.registry import get_runtime_descriptor
     from ..runtime.utils import find_runtime_binary
-    from .imports import read_project_manifest, resolve_installed_skills
+    from .imports import read_lock, read_project_manifest, resolve_installed_skills
 
     limits = limits or ContractLimits()
     root = project_root.resolve()
@@ -253,6 +259,8 @@ def plan_contract(
     if (
         output_name == "checks"
         or output_name.startswith("checks/")
+        or output_name == "_apmx_context"
+        or output_name.startswith("_apmx_context/")
         or any(
             output_name == item
             or output_name.startswith(item + "/")
@@ -273,6 +281,18 @@ def plan_contract(
     package, _, manifest_digest = read_project_manifest(
         source_root, limits, allow_missing=source is None
     )
+    consumer, _, consumer_manifest_digest = read_project_manifest(root, limits, allow_missing=True)
+    consumer_lock, consumer_lock_digest = read_lock(root, limits)
+    if imports_root is None:
+        has_consumer = bool(
+            (consumer.dependencies or {}).get("apm")
+            or (consumer.dev_dependencies or {}).get("apm")
+            or consumer_lock is not None
+        )
+        imports_root = (
+            root if has_consumer else (source.imports_root or source.root) if source else root
+        )
+    import_package, _, _ = read_project_manifest(imports_root, limits, allow_missing=True)
     if source:
         from ..install.contract_source_validation import validate_source
 
@@ -297,17 +317,9 @@ def plan_contract(
     executable = Path(binary).resolve()
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise ContractError("The selected runtime is not executable.", code="runtime_missing")
-    skills, lock_digest = resolve_installed_skills(contract, source_root, package, limits=limits)
-    if source:
-        from ..install.contract_source_validation import package_dependency
-
-        for skill in skills:
-            package_dependency(
-                skill.source_path.parent,
-                replace(contract, imports=()),
-                limits,
-                allow_missing_manifest=True,
-            )
+    skills, lock_digest = resolve_installed_skills(
+        contract, imports_root, import_package, limits=limits
+    )
     return LeafPlan(
         contract=contract,
         project_root=root,
@@ -320,4 +332,8 @@ def plan_contract(
         lock_digest=lock_digest,
         source=source,
         evidence_root=root / ".apm" / "runs",
+        imports_root=imports_root,
+        apm_backend=apm_backend or (source.apm_backend if source else None),
+        consumer_manifest_digest=consumer_manifest_digest,
+        consumer_lock_digest=consumer_lock_digest,
     )

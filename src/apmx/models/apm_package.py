@@ -11,7 +11,7 @@ _TARGET_ALIASES = {"vscode": "copilot", "agents": "copilot", "agy": "antigravity
 KNOWN_TARGET_NAMES = frozenset({
     "copilot", "claude", "cursor", "kiro", "opencode", "gemini", "grok-build",
     "grok-cloud", "antigravity", "codex", "vscode", "agents", "copilot-app",
-    "copilot-cowork", "openclaw",
+    "copilot-cowork", "openclaw", "agent-skills",
 })
 
 

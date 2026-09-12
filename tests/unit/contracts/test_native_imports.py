@@ -1,0 +1,141 @@
+"""Real official APM owns graphs; apmx projects only selected context."""
+
+import hashlib
+import json
+import shutil
+import sys
+from pathlib import Path
+
+import pytest
+
+from apmx.contracts.frontend import parse_contract, plan_contract
+from apmx.contracts.models import ContractError, ContractLimits
+from apmx.contracts.records import AttemptStore
+from apmx.contracts.workspace import capture_workspace
+from apmx.install.apm_backend import install
+from apmx.install.contract_source import prepare_contract_source, prepare_imports
+from apmx.install.contract_source_validation import source_hash
+
+EXAMPLE = Path(__file__).resolve().parents[3] / "examples/contracts/packaged-job"
+LIMITS = ContractLimits()
+
+
+@pytest.fixture
+def fixture(tmp_path, monkeypatch):
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    package = tmp_path / "package"
+    shutil.copytree(EXAMPLE, package)
+    monkeypatch.delenv("APM_NO_SCRIPTS", raising=False)
+    monkeypatch.delenv("APM_POLICY_DISABLE", raising=False)
+    monkeypatch.setattr("apmx.runtime.utils.find_runtime_binary", lambda _: sys.executable)
+    (caller / "notes.md").write_text("CALLER INPUT\n")
+    return caller, package
+
+
+def _contract(package):
+    return next(package.rglob("*.contract.md")).relative_to(package).as_posix()
+
+
+def test_native_package_import_record_and_retained_bytes(fixture):
+    caller, package = fixture
+    before = source_hash(package, LIMITS)
+    with prepare_contract_source(
+        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        plan = plan_contract(Path(_contract(package)), caller, harness="copilot", source=source)
+        assert plan.apm_backend["version"] == "0.30.0"
+        assert len(plan.imported_skills) == 1
+        assert plan.imported_skills[0].version == "0.1.0"
+        store = AttemptStore.create(plan)
+        record = json.loads(store.record_path.read_text())
+        assert record["imports"][0]["version"] == "0.1.0"
+        lock = Path(record["source"]["retained"]["apm.lock.yaml"])
+        assert b"apm_version: 0.30.0" in lock.read_bytes()
+        assert hashlib.sha256(lock.read_bytes()).hexdigest() == record["lock_sha256"]
+        assert "depth: 2" in lock.read_text()
+    assert source_hash(package, LIMITS) == before
+
+
+def test_consumer_lock_wins_for_packaged_contract(fixture, tmp_path):
+    caller, package = fixture
+    override = tmp_path / "override"
+    shutil.copytree(package / "skills/handoff-style", override)
+    manifest = override / "apm.yml"
+    manifest.write_text(manifest.read_text().replace("0.1.0", "9.0.0"))
+    (caller / "apm.yml").write_text(
+        "name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n    - ../override\n"
+    )
+    install(caller, limits=LIMITS)
+    before = {name: (caller / name).read_bytes() for name in ("apm.yml", "apm.lock.yaml")}
+    with prepare_contract_source(
+        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        with prepare_imports(
+            caller, source.root / _contract(package), source=source, planning=False, limits=LIMITS
+        ) as (root, identity):
+            plan = plan_contract(
+                Path(_contract(package)), caller, harness="copilot", source=source,
+                imports_root=root, apm_backend=identity,
+            )
+            assert {item.version for item in plan.imported_skills} == {"9.0.0"}
+            assert all("override" in item.lock_identity for item in plan.imported_skills)
+    assert all((caller / name).read_bytes() == raw for name, raw in before.items())
+
+
+def test_multiple_package_context_and_resources_exclude_decoys(fixture, tmp_path):
+    caller, package = fixture
+    style = package / "skills/handoff-style"
+    rules = tmp_path / "rules"
+    (rules / ".apm/instructions").mkdir(parents=True)
+    (rules / "apm.yml").write_text("name: house-rules\nversion: 2.0.0\n")
+    # Reuse existing primitive body: this regression tests selection, not prompt design.
+    (rules / ".apm/instructions/style.instructions.md").write_bytes(
+        (style / "SKILL.md").read_bytes().replace(b"name: handoff-style", b"name: house-guidance")
+    )
+    (style / "references").mkdir()
+    (style / "references/marker.txt").write_text("resource marker")
+    (style / "hooks").mkdir()
+    (style / "hooks/decoy.json").write_text('{"not":"selected"}')
+    (caller / "apm.yml").write_text(
+        f"name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n"
+        f"    - {style}\n    - {rules}\n"
+    )
+    source = caller / "work.contract.md"
+    original = (package / _contract(package)).read_text()
+    source.write_text(original.replace("  - handoff-style", "  - handoff-style\n  - house-rules"))
+    assert len(parse_contract(source).imports) == 2
+    with prepare_imports(caller, source, source=None, planning=False, limits=LIMITS) as (root, backend):
+        plan = plan_contract(source, caller, harness="copilot", imports_root=root, apm_backend=backend)
+        assert {item.kind for item in plan.imported_skills} == {"skill", "instruction"}
+        store = AttemptStore.create(plan)
+        snapshot = capture_workspace(plan, store.directory)
+        assert (snapshot.producer / "_apmx_context/import-1/references/marker.txt").read_text() == "resource marker"
+        assert not list((snapshot.producer / "_apmx_context").rglob("decoy.json"))
+        assert plan.imported_skills[0].resources[0].relative_path == "references/marker.txt"
+
+
+@pytest.mark.parametrize("imports", ["[missing]", "[handoff-style@^1]", "[handoff-style, handoff-style]"])
+def test_missing_versioned_duplicate_context_refuses_before_producer(fixture, imports):
+    caller, package = fixture
+    source = package / _contract(package)
+    source.write_text(source.read_text().replace("imports:\n  - handoff-style", f"imports: {imports}"))
+    with pytest.raises(ContractError):
+        with prepare_contract_source(
+            str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+        ) as prepared:
+            plan_contract(Path(_contract(package)), caller, harness="copilot", source=prepared)
+    assert not (caller / ".apm/runs").exists()
+
+
+def test_malformed_consumer_lock_never_invokes_backend(fixture, monkeypatch):
+    caller, package = fixture
+    (caller / "apm.lock.yaml").write_text("dependencies: [\n")
+    def forbidden(*args, **kwargs):
+        pytest.fail("native acquisition ran before lock admission")
+    monkeypatch.setattr("apmx.install.apm_backend.install", forbidden)
+    with pytest.raises(ContractError, match="malformed"):
+        with prepare_contract_source(
+            str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+        ):
+            pytest.fail("invalid lock admitted")

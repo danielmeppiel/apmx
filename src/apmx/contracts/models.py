@@ -87,6 +87,14 @@ class LeafContract:
 
 
 @dataclass(frozen=True)
+class ImportedResource:
+    source_path: Path
+    relative_path: str
+    sha256: str
+    size: int
+
+
+@dataclass(frozen=True)
 class ImportedSkill:
     """Selected installed context, with honest local-versus-pinned identity."""
 
@@ -98,6 +106,11 @@ class ImportedSkill:
     resolved_commit: str | None = None
     verified_package_hash: str | None = None
     assurance: str = "observed-local-source"
+    kind: str = "skill"
+    version: str | None = None
+    context_name: str | None = None
+    source_relative_path: str | None = None
+    resources: tuple[ImportedResource, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -114,6 +127,8 @@ class ContractSource:
     original_root: Path | None = None
     original_manifest: bytes | None = None
     original_lock: bytes | None = None
+    imports_root: Path | None = None
+    apm_backend: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +148,10 @@ class LeafPlan:
     lock_digest: str | None = None
     source: ContractSource | None = None
     evidence_root: Path | None = None
+    imports_root: Path | None = None
+    apm_backend: Mapping[str, str] | None = None
+    consumer_manifest_digest: str | None = None
+    consumer_lock_digest: str | None = None
 
 
 @dataclass(frozen=True)

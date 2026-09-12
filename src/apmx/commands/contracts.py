@@ -20,28 +20,40 @@ def invoke_contract(
 ) -> None:
     """Plan or execute one leaf using the contract-specific error boundary."""
     from ..contracts import frontend, workspace
-    from ..contracts.models import ContractError, Outcome
+    from ..contracts.models import ContractError, ContractLimits, Outcome
     from ..core.contract_logger import ContractLogger
+    from ..install.contract_source import prepare_imports
 
     logger = ContractLogger(verbose=verbose)
     try:
         logger.start_activity("Reading contract")
-        plan = frontend.plan_contract(
-            Path(contract),
-            Path.cwd(),
-            harness=harness,
-            model=model,
-            source=source,
-        )
-        inventory = workspace.inspect_workspace(plan)
-        logger.stop_activity()
-        if planning:
-            logger.render_plan(plan, inventory)
-            return
-        from ..contracts.engine import run_contract
+        limits = ContractLimits()
+        frontend.admit_caller_policy(Path.cwd(), limits=limits)
+        if not planning and not allow_advisory:
+            raise ContractError(
+                "Copilot, APM and checks can use host files, network and available login details. "
+                "Add --allow-host-access to allow this run; policy still applies.",
+                code="advisory_consent_required", outcome=Outcome.UNPROVEN,
+            )
+        selected = Path(contract)
+        if not selected.is_absolute():
+            selected = (source.root if source else Path.cwd()) / selected
+        with prepare_imports(
+            Path.cwd(), selected, source=source, planning=planning, limits=limits
+        ) as (imports_root, backend):
+            plan = frontend.plan_contract(
+                Path(contract), Path.cwd(), harness=harness, model=model, source=source,
+                imports_root=imports_root, apm_backend=backend,
+            )
+            inventory = workspace.inspect_workspace(plan)
+            logger.stop_activity()
+            if planning:
+                logger.render_plan(plan, inventory)
+                return
+            from ..contracts.engine import run_contract
 
-        result = run_contract(plan, logger=logger, allow_advisory=allow_advisory)
-        ctx.exit(int(result.outcome))
+            result = run_contract(plan, logger=logger, allow_advisory=allow_advisory)
+            ctx.exit(int(result.outcome))
     except ContractError as exc:
         logger.render_error(exc)
         ctx.exit(int(exc.outcome))

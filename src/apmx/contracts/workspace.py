@@ -143,6 +143,20 @@ def _check_names(root: Path, limits: ContractLimits) -> tuple[str, ...]:
 def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
     """Own caller/package mapping and collision admission for inspection and copy."""
     selected = [(plan.project_root, name, name) for name in _selected_names(plan)]
+    if plan.imported_skills:
+        if any(child.name.casefold() == "_apmx_context" for child in plan.project_root.iterdir()):
+            raise ContractError("Reserved _apmx_context collides with caller content.",
+                                code="source_collision")
+        for index, context in enumerate(plan.imported_skills, start=1):
+            base = f"_apmx_context/import-{index}"
+            selected.append((
+                context.source_path.parent, context.source_path.name,
+                f"{base}/{context.source_path.name}",
+            ))
+            selected.extend(
+                (context.source_path.parent, item.relative_path, f"{base}/{item.relative_path}")
+                for item in context.resources
+            )
     if plan.source is not None:
         from ..install.contract_source_validation import validate_source
 
@@ -208,13 +222,17 @@ def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
         else plan.contract.path.relative_to(plan.project_root).as_posix()
     )
     expected = {source: plan.contract.source_digest}
+    for index, context in enumerate(plan.imported_skills, start=1):
+        base = f"_apmx_context/import-{index}"
+        expected[f"{base}/{context.source_path.name}"] = context.source_digest
+        expected.update({f"{base}/{item.relative_path}": item.sha256 for item in context.resources})
     if plan.source is None:
         expected["apm.yml"] = plan.manifest_digest
-    if plan.source is None and plan.lock_digest is not None:
+    if plan.source is None and plan.consumer_lock_digest is not None:
         lock_name = (
             "apm.lock.yaml" if (plan.project_root / "apm.lock.yaml").exists() else "apm.lock"
         )
-        expected[lock_name] = plan.lock_digest
+        expected[lock_name] = plan.consumer_lock_digest
     for captured in captures:
         entry = captured.entry
         digest = expected.get(entry.relative_path)
@@ -239,22 +257,38 @@ def capture_provenance(
     root = plan.source.root if plan.source else plan.project_root
     selected = [
         (
+            root,
             plan.contract.path.relative_to(root).as_posix(),
             "contract.contract.md",
             plan.contract.source_digest,
         )
     ]
     if plan.manifest_digest is not None:
-        selected.append(("apm.yml", "apm.yml", plan.manifest_digest))
+        selected.append((root, "apm.yml", "apm.yml", plan.manifest_digest))
     if plan.lock_digest is not None:
-        lock = resolve_lockfile_path_for_read(root, read_only=True)
-        selected.append((lock.relative_to(root).as_posix(), lock.name, plan.lock_digest))
+        imports_root = plan.imports_root or root
+        lock = resolve_lockfile_path_for_read(imports_root, read_only=True)
+        selected.append((imports_root, lock.name, lock.name, plan.lock_digest))
+    if plan.imports_root and plan.imports_root != root:
+        manifest = plan.imports_root / "apm.yml"
+        if manifest.is_file():
+            _, entry = _read(plan.imports_root, "apm.yml", plan.limits.source_bytes)
+            selected.append((plan.imports_root, "apm.yml", "imports-apm.yml", entry.sha256))
+    if plan.consumer_manifest_digest is not None:
+        selected.append((
+            plan.project_root, "apm.yml", "consumer-apm.yml", plan.consumer_manifest_digest,
+        ))
+    if plan.consumer_lock_digest is not None:
+        lock = resolve_lockfile_path_for_read(plan.project_root, read_only=True)
+        selected.append((
+            plan.project_root, lock.name, "consumer-apm.lock.yaml", plan.consumer_lock_digest,
+        ))
     destination = run_directory / "source"
     destination.mkdir(mode=0o700)
     retained = {}
     identities = []
-    for original, name, expected in selected:
-        raw, entry = _read(root, original, plan.limits.file_bytes)
+    for selected_root, original, name, expected in selected:
+        raw, entry = _read(selected_root, original, plan.limits.file_bytes)
         if entry.sha256 != expected:
             raise ContractError("Source changed before provenance capture.", code="plan_changed")
         entry = replace(entry, relative_path=name, mode=0o400)
@@ -272,7 +306,7 @@ def capture_provenance(
                 identities.append(entry)
                 retained[name] = str(destination / name)
     for index, skill in enumerate(plan.imported_skills, start=1):
-        name = f"import-{index}.SKILL.md"
+        name = f"import-{index}.{'SKILL.md' if skill.kind == 'skill' else 'instructions.md'}"
         raw = skill.content.encode("utf-8")
         if hashlib.sha256(raw).hexdigest() != skill.source_digest:
             raise ContractError("Imported skill evidence changed.", code="import_drift")

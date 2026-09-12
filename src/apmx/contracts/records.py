@@ -136,6 +136,9 @@ class AttemptStore:
                 "evidence_root": str(parent),
                 "manifest_sha256": plan.manifest_digest,
                 "lock_sha256": plan.lock_digest,
+                "consumer_manifest_sha256": plan.consumer_manifest_digest,
+                "consumer_lock_sha256": plan.consumer_lock_digest,
+                "apm_backend": plan.apm_backend,
                 "harness": plan.harness,
                 "executable": str(plan.executable),
                 "executable_version": plan.executable_version,
@@ -148,6 +151,15 @@ class AttemptStore:
                         "lock_identity": skill.lock_identity,
                         "assurance": skill.assurance,
                         "resolved_commit": skill.resolved_commit,
+                        "version": skill.version,
+                        "kind": skill.kind,
+                        "context_name": skill.context_name,
+                        "source_relative_path": skill.source_relative_path,
+                        "resources": [
+                            {"path": resource.relative_path, "sha256": resource.sha256,
+                             "size": resource.size}
+                            for resource in skill.resources
+                        ],
                     }
                     for skill in plan.imported_skills
                 ],

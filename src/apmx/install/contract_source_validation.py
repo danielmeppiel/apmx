@@ -141,4 +141,6 @@ def validate_source(
         raise ContractError(
             "Prepared package content changed. Prepare again.", code="source_changed"
         )
-    package_dependency(source.root, contract, limits)
+    if source.original_root is not None and source.original_root != source.root:
+        if source_hash(source.original_root, limits) != source.package_hash:
+            raise ContractError("Original package content changed.", code="source_changed")

@@ -1,4 +1,4 @@
-"""Read-only linking of one directly declared, installed self-contained skill."""
+"""Read-only projection of selected context from official APM lock inventory."""
 
 from __future__ import annotations
 
@@ -9,19 +9,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from ..utils.file_capture import capture_path_stat, open_readonly_nofollow
 
 from ..deps.lockfile import LockFile, resolve_lockfile_path_for_read
 from ..models.apm_package import APMPackage
-from ..models.dependency.reference import DependencyReference
-from ..models.dependency.selection import (
-    DependencySelectionStatus,
-    parse_dependency_entry,
-    select_manifest_dependency,
+from ..utils.file_capture import capture_path_stat, open_readonly_nofollow
+from ..utils.path_security import ensure_path_within, has_symlink_component
+from ..utils.yaml_io import load_yaml_str, loads_frontmatter_document
+from .models import (
+    ContractError, ContractLimits, ImportedResource, ImportedSkill, LeafContract, SourceLocation,
 )
-from ..utils.path_security import ensure_path_within, has_symlink_component, is_link_or_reparse
-from ..utils.yaml_io import FrontmatterDocument, load_yaml_str, loads_frontmatter_document
-from .models import ContractError, ContractLimits, ImportedSkill, LeafContract, SourceLocation
 
 
 def _read_bytes(path: Path, *, maximum: int, root: Path) -> bytes:
@@ -36,8 +32,7 @@ def _read_bytes(path: Path, *, maximum: int, root: Path) -> bytes:
         with os.fdopen(open_readonly_nofollow(path), "rb") as stream:
             opened = os.fstat(stream.fileno())
             if not stat.S_ISREG(opened.st_mode) or (before.st_dev, before.st_ino) != (
-                opened.st_dev,
-                opened.st_ino,
+                opened.st_dev, opened.st_ino,
             ):
                 raise ValueError("Selected file changed before capture.")
             raw = stream.read(maximum + 1)
@@ -45,13 +40,7 @@ def _read_bytes(path: Path, *, maximum: int, root: Path) -> bytes:
         if (
             len(raw) > maximum
             or len(raw) != before.st_size
-            or (
-                before.st_dev,
-                before.st_ino,
-                before.st_size,
-                before.st_mtime_ns,
-                before.st_ctime_ns,
-            )
+            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
             != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
         ):
             raise ValueError("Selected file changed during capture.")
@@ -59,8 +48,7 @@ def _read_bytes(path: Path, *, maximum: int, root: Path) -> bytes:
     except (OSError, ValueError) as exc:
         raise ContractError(
             f"Cannot read selected file {path.name}: {exc}",
-            code="import_source",
-            location=SourceLocation(path, 1),
+            code="import_source", location=SourceLocation(path, 1),
         ) from exc
 
 
@@ -76,84 +64,82 @@ def _package(raw: bytes, root: Path) -> tuple[APMPackage, dict[str, Any]]:
     except (ValueError, TypeError, KeyError, yaml.YAMLError) as exc:
         raise ContractError(
             f"Invalid selected manifest: {exc}",
-            code="invalid_manifest",
-            location=SourceLocation(root / "apm.yml", 1),
+            code="invalid_manifest", location=SourceLocation(root / "apm.yml", 1),
         ) from exc
 
 
 def read_project_manifest(
     root: Path, limits: ContractLimits, *, allow_missing: bool = False
 ) -> tuple[APMPackage, dict[str, Any], str | None]:
-    """Interpret project declarations through their no-config-write owner."""
     manifest = root / "apm.yml"
     if allow_missing and not manifest.exists() and not manifest.is_symlink():
         package = APMPackage.from_mapping(
             {"name": "contract-caller", "version": "0.0.0"},
-            package_path=root,
-            source_path=root,
-            create_config=False,
+            package_path=root, source_path=root, create_config=False,
         )
         return package, {}, None
-    raw = _read_bytes(root / "apm.yml", maximum=limits.source_bytes, root=root)
+    raw = _read_bytes(manifest, maximum=limits.source_bytes, root=root)
     package, data = _package(raw, root)
     return package, data, hashlib.sha256(raw).hexdigest()
 
 
-def _skill_document(path: Path, root: Path, limits: ContractLimits) -> FrontmatterDocument:
-    raw = _read_bytes(path, maximum=limits.source_bytes, root=root)
+def read_lock(root: Path, limits: ContractLimits) -> tuple[LockFile | None, str | None]:
+    path = resolve_lockfile_path_for_read(root, read_only=True)
+    if not path.exists() and not path.is_symlink():
+        return None, None
+    raw = _read_bytes(path, maximum=limits.file_bytes, root=root)
     try:
-        document = loads_frontmatter_document(raw, max_bytes=limits.source_bytes)
-    except ValueError as exc:
-        raise ContractError(
-            f"Invalid installed skill frontmatter: {exc}",
-            code="invalid_import",
-            location=SourceLocation(path, getattr(exc, "line", 1), getattr(exc, "column", 1)),
-        ) from exc
-    if not document.body.strip():
-        raise ContractError("Installed skill body is empty.", code="invalid_import")
-    return document
+        lock = LockFile.from_yaml(raw.decode("utf-8"))
+    except (ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
+        raise ContractError("Existing lockfile is malformed.", code="invalid_lock") from exc
+    return lock, hashlib.sha256(raw).hexdigest()
 
 
-def _self_contained(root: Path, limits: ContractLimits) -> None:
-    """Reject companion content before calling the whole-package hash owner."""
-    # .git is transport administration, not imported content; hashes exclude it.
-    allowed = {"apm.yml", "SKILL.md", ".apm-pin"}
-    with os.scandir(root) as entries:
-        for entry in entries:
-            if is_link_or_reparse(Path(entry.path)):
-                raise ContractError("Installed skill contains a symlink.", code="invalid_import")
-            if entry.name == ".git" and entry.is_dir(follow_symlinks=False):
-                # The hash owner traverses then excludes Git administration;
-                # bound that otherwise-hidden traversal before delegating.
-                pending = [Path(entry.path)]
-                visited = 0
-                while pending:
-                    with os.scandir(pending.pop()) as metadata:
-                        for item in metadata:
-                            visited += 1
-                            if visited > limits.resource_files:
-                                raise ContractError(
-                                    "Git metadata exceeds the import scan limit.",
-                                    code="import_limit",
-                                )
-                            if is_link_or_reparse(Path(item.path)):
-                                raise ContractError(
-                                    "Installed Git metadata contains a symlink.",
-                                    code="invalid_import",
-                                )
-                            if item.is_dir(follow_symlinks=False):
-                                pending.append(Path(item.path))
-                continue
-            if entry.name not in allowed or not entry.is_file(follow_symlinks=False):
-                raise ContractError(
-                    "Only a self-contained root SKILL.md and apm.yml are supported; "
-                    "companion resources are unsupported.",
-                    code="unsupported_import",
-                )
-            if entry.stat(follow_symlinks=False).st_size > limits.source_bytes:
-                raise ContractError(
-                    "Installed skill package exceeds its byte limit.", code="import_limit"
-                )
+def _context_files(root: Path, limits: ContractLimits) -> tuple[tuple[Path, str, str], ...]:
+    from ..install.contract_source_validation import bounded_tree
+
+    files = bounded_tree(root, limits)
+    nested_packages = []
+    if (root / "apm.yml").exists():
+        manifest, _, _ = read_project_manifest(root, limits)
+        for section in (manifest.dependencies, manifest.dev_dependencies):
+            for dependency in (section or {}).get("apm", []):
+                if dependency.is_local:
+                    child = root / (dependency.local_path or "")
+                    if child.is_relative_to(root):
+                        nested_packages.append(child)
+    selected = []
+    for name in files:
+        path = Path(name)
+        if any((root / path).is_relative_to(child) for child in nested_packages):
+            continue
+        kind = None
+        if name == "SKILL.md" or (
+            path.name == "SKILL.md"
+            and (
+                len(path.parts) == 3 and path.parts[0] == "skills"
+                or len(path.parts) == 4 and path.parts[:2] == (".apm", "skills")
+            )
+        ):
+            kind = "skill"
+        elif name.startswith(".apm/instructions/") and name.endswith(".instructions.md"):
+            kind = "instruction"
+        if kind is None:
+            continue
+        raw = _read_bytes(root / name, maximum=limits.source_bytes, root=root)
+        try:
+            document = loads_frontmatter_document(raw, max_bytes=limits.source_bytes)
+        except ValueError as exc:
+            raise ContractError("Invalid selected context frontmatter.", code="invalid_import") from exc
+        if not document.body.strip():
+            raise ContractError("Selected context body is empty.", code="invalid_import")
+        context_name = document.metadata.get("name") or (
+            path.parent.name if kind == "skill" else path.name.removesuffix(".instructions.md")
+        )
+        if not isinstance(context_name, str) or not context_name.strip():
+            raise ContractError("Selected context name is invalid.", code="invalid_import")
+        selected.append((root / name, kind, context_name))
+    return tuple(selected)
 
 
 def resolve_installed_skills(
@@ -163,171 +149,133 @@ def resolve_installed_skills(
     *,
     limits: ContractLimits | None = None,
 ) -> tuple[tuple[ImportedSkill, ...], str | None]:
-    """Link declared names through lock identity and canonical materialization.
+    """Select package/context names, never resolve or acquire dependencies.
 
-    Local locks attest identity only. Git packages additionally require their
-    existing locked package-content hash and current declared-reference check.
-    No resolver/download/install/deployment lifecycle is invoked.
+    The public APM lock model is an inventory/path codec, not a second
+    dependency resolver. APM itself owns graph traversal and frozen replay.
     """
-    from ..drift import detect_ref_change
     from ..utils.content_hash import verify_package_hash
 
     limits = limits or ContractLimits()
-    lock_path = resolve_lockfile_path_for_read(project_root, read_only=True)
-    if not lock_path.exists():
-        if contract.imports:
-            raise ContractError(
-                "Import requires an existing lockfile; install explicitly first.",
-                code="missing_lock",
-            )
-        return (), None
-    raw_lock = _read_bytes(lock_path, maximum=limits.file_bytes, root=project_root)
-    lock_digest = hashlib.sha256(raw_lock).hexdigest()
-    # Parse the exact captured bytes with the lockfile's semantic owner.
-    try:
-        lock = LockFile.from_yaml(raw_lock.decode("utf-8"))
-    except (ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
-        raise ContractError("Existing lockfile is malformed.", code="invalid_lock") from exc
+    lock, lock_digest = read_lock(project_root, limits)
     if not contract.imports:
         return (), lock_digest
-    name = contract.imports[0]
-    location = contract.locations.get("imports", SourceLocation(contract.path, 1))
-    declarations = list((package.dependencies or {}).get("apm", []))
-    declarations.extend((package.dev_dependencies or {}).get("apm", []))
-    if len(declarations) > 256:
-        raise ContractError(
-            "Too many direct dependencies for bounded import selection.", location=location
-        )
-    selected = select_manifest_dependency(name, declarations, lock)
-    if selected.status == DependencySelectionStatus.AMBIGUOUS:
-        raise ContractError(
-            "Import declaration is ambiguous.", code="ambiguous_import", location=location
-        )
-    modules = project_root / "apm_modules"
-    matches: list[tuple[DependencyReference, Path, FrontmatterDocument]] = []
-    for declaration in declarations:
-        dependency = parse_dependency_entry(declaration)
-        if not dependency.is_local and dependency.source not in {None, "git"}:
+    if lock is None:
+        raise ContractError("Imports require an installed APM lock inventory.", code="missing_lock")
+    if len(lock.dependencies) > limits.resource_files:
+        raise ContractError("Import inventory exceeds its package limit.", code="import_limit")
+    inventory = []
+    for locked in lock.dependencies.values():
+        root = locked.to_dependency_ref().get_install_path(project_root / "apm_modules")
+        if has_symlink_component(project_root, root):
+            raise ContractError("Installed package contains a symlink.", code="import_source")
+        if not root.is_dir():
             continue
-        if dependency.is_virtual_file() or dependency.is_marketplace:
-            continue
-        if (
-            selected.status == DependencySelectionStatus.MATCHED
-            and declaration != selected.manifest_entry
+        manifest_name = None
+        if (root / "apm.yml").exists():
+            installed, _, _ = read_project_manifest(root, limits)
+            manifest_name = installed.name
+        contexts = _context_files(root, limits)
+        aliases = {
+            locked.repo_url,
+            locked.get_unique_key(),
+            locked.repo_url.split("/")[-1],
+            manifest_name,
+        }
+        if locked.virtual_path:
+            aliases.add(f"{locked.repo_url}/{locked.virtual_path}")
+        inventory.append((locked, root, aliases, contexts))
+    result = []
+    seen_paths: set[Path] = set()
+    seen_names: set[tuple[str, str]] = set()
+    total = 0
+    for name in contract.imports:
+        matches = [
+            (item, item[3] if name in item[2] else tuple(
+                context for context in item[3] if context[2] == name
+            ))
+            for item in inventory
+            if name in item[2] or any(context[2] == name for context in item[3])
+        ]
+        if len(matches) != 1:
+            raise ContractError(
+                "Import must identify exactly one installed package or context.",
+                code="ambiguous_import" if matches else "missing_import",
+            )
+        (locked, root, _, _), contexts = matches[0]
+        if locked.depth == 1:
+            from ..drift import detect_ref_change
+
+            declarations = [
+                dependency
+                for section in (package.dependencies, package.dev_dependencies)
+                for dependency in (section or {}).get("apm", [])
+                if dependency.get_unique_key() == locked.get_unique_key()
+            ]
+            if len(declarations) != 1 or detect_ref_change(declarations[0], locked):
+                raise ContractError("Manifest and installed lock reference differ.",
+                                    code="import_drift")
+        elif not locked.resolved_by or not any(
+            locked.resolved_by in {entry.get_unique_key(), entry.repo_url}
+            for entry in lock.dependencies.values()
         ):
-            continue
-        locked = lock.get_dependency(dependency.get_unique_key())
-        if locked is None:
-            if selected.status == DependencySelectionStatus.MATCHED or (
-                dependency.is_local and Path(dependency.local_path or "").name == name
-            ):
-                raise ContractError(
-                    "Selected import has no lock identity.", code="missing_lock", location=location
-                )
-            continue
-        try:
-            installed = locked.to_dependency_ref().get_install_path(modules)
-            if has_symlink_component(project_root, installed):
-                raise ValueError("Installed root is a symlink.")
-            skill_path = installed / "SKILL.md"
-            if not skill_path.exists():
-                if selected.status == DependencySelectionStatus.MATCHED or (
-                    dependency.is_local and Path(dependency.local_path or "").name == name
-                ):
-                    raise ContractError(
-                        "Selected skill is not installed.", code="missing_import", location=location
-                    )
+            raise ContractError("Transitive context lacks its parent lock identity.",
+                                code="import_drift")
+        if not contexts:
+            raise ContractError("Selected package has no supported context.", code="missing_import")
+        if locked.source == "local":
+            from ..install.contract_source_validation import bounded_tree
+
+            origin = Path(locked.anchored_local_path or locked.local_path or "")
+            if origin.is_absolute() and origin.exists():
+                bounded_tree(origin, limits)
+        if locked.source != "local":
+            if not locked.resolved_commit or not locked.content_hash:
+                raise ContractError("Git import needs a locked commit and package hash.",
+                                    code="import_drift")
+            if not verify_package_hash(root, locked.content_hash):
+                raise ContractError("Installed package hash differs from its lock.",
+                                    code="import_drift")
+        for path, kind, context_name in contexts:
+            if path in seen_paths:
                 continue
-            document = _skill_document(skill_path, installed, limits)
-            # Explicit dependency identities win selection. Short skill/package
-            # names are read from declared installations, never storage strings.
-            declared_name = None
-            if (installed / "apm.yml").exists():
-                installed_package, _ = _package(
-                    _read_bytes(installed / "apm.yml", maximum=limits.source_bytes, root=installed),
-                    installed,
-                )
-                declared_name = installed_package.name
-            if (
-                selected.status == DependencySelectionStatus.MATCHED
-                or document.metadata.get("name") == name
-                or declared_name == name
-            ):
-                matches.append((dependency, installed, document))
-        except (OSError, ValueError) as exc:
-            if isinstance(exc, ContractError):
-                raise
-            raise ContractError(
-                "Cannot safely select installed import.", location=location
-            ) from exc
-    if len(matches) != 1:
-        raise ContractError(
-            "Import must identify exactly one directly declared installed skill.",
-            code="ambiguous_import" if matches else "missing_import",
-            location=location,
-        )
-    dependency, installed, document = matches[0]
-    locked = lock.get_dependency(dependency.get_unique_key())
-    if locked is None:
-        raise ContractError(
-            "Selected lock identity disappeared.", code="missing_lock", location=location
-        )
-    if locked.depth != 1 or locked.resolved_by or locked.declaring_parent:
-        raise ContractError("Transitive skill imports are unsupported.", location=location)
-    if detect_ref_change(dependency, locked):
-        raise ContractError(
-            "Manifest and installed lock reference differ.", code="import_drift", location=location
-        )
-    locked_ref = locked.to_dependency_ref()
-    if locked_ref.get_identity() != dependency.get_identity():
-        raise ContractError(
-            "Installed host or dependency identity differs.", code="import_drift", location=location
-        )
-    _self_contained(installed, limits)
-    if (installed / "apm.yml").exists():
-        installed_package, _ = _package(
-            _read_bytes(installed / "apm.yml", maximum=limits.source_bytes, root=installed),
-            installed,
-        )
-        if any((installed_package.dependencies or {}).values()) or any(
-            (installed_package.dev_dependencies or {}).values()
-        ):
-            raise ContractError(
-                "Imported skills with dependencies are unsupported.", location=location
-            )
-    if dependency.is_local:
-        verified_hash = None
-        assurance = "observed-local-source"
-    else:
-        if not locked.resolved_commit or not locked.content_hash:
-            raise ContractError(
-                "Git import needs a locked commit and package hash.", location=location
-            )
-        if not verify_package_hash(installed, locked.content_hash):
-            raise ContractError(
-                "Installed package hash does not match its lock.",
-                code="import_drift",
-                location=location,
-            )
-        verified_hash = locked.content_hash
-        assurance = "locked-package-hash"
-    # Catch selected source replacement during manifest/integrity observations.
-    if (
-        _read_bytes(installed / "SKILL.md", maximum=limits.source_bytes, root=installed)
-        != document.raw
-    ):
-        raise ContractError(
-            "Imported skill changed during planning.", code="import_drift", location=location
-        )
-    return (
-        ImportedSkill(
-            name=name,
-            source_path=installed / "SKILL.md",
-            content=document.raw.decode("utf-8"),
-            source_digest=hashlib.sha256(document.raw).hexdigest(),
-            lock_identity=locked.get_unique_key(),
-            resolved_commit=locked.resolved_commit,
-            verified_package_hash=verified_hash,
-            assurance=assurance,
-        ),
-    ), lock_digest
+            key = (kind, context_name.casefold())
+            if key in seen_names:
+                raise ContractError("Selected context names collide.", code="ambiguous_import")
+            seen_paths.add(path)
+            seen_names.add(key)
+            raw = _read_bytes(path, maximum=limits.source_bytes, root=root)
+            total += len(raw)
+            resources = []
+            if kind == "skill":
+                from ..install.contract_source_validation import bounded_tree
+
+                for relative in bounded_tree(path.parent, limits):
+                    if Path(relative).parts[0] not in {"references", "assets", "scripts"}:
+                        continue
+                    resource_path = path.parent / relative
+                    data = _read_bytes(resource_path, maximum=limits.file_bytes, root=root)
+                    total += len(data)
+                    resources.append(ImportedResource(
+                        resource_path, relative, hashlib.sha256(data).hexdigest(), len(data)
+                    ))
+                if len(resources) > limits.resource_files:
+                    raise ContractError("Skill resources exceed their limit.", code="import_limit")
+            if len(seen_paths) > limits.resource_files or total > limits.resource_bytes:
+                raise ContractError("Selected context exceeds its limit.", code="import_limit")
+            result.append(ImportedSkill(
+                name=name,
+                source_path=path,
+                content=raw.decode("utf-8"),
+                source_digest=hashlib.sha256(raw).hexdigest(),
+                lock_identity=locked.get_unique_key(),
+                resolved_commit=locked.resolved_commit,
+                verified_package_hash=locked.content_hash if locked.source != "local" else None,
+                assurance="observed-local-source" if locked.source == "local" else "locked-package-hash",
+                kind=kind,
+                version=locked.version,
+                context_name=context_name,
+                source_relative_path=path.relative_to(root).as_posix(),
+                resources=tuple(resources),
+            ))
+    return tuple(result), lock_digest

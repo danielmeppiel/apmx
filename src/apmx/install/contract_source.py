@@ -1,143 +1,28 @@
-"""Acquire one contract package without activating or installing a project."""
+"""Prepare package sources through the bundled official APM CLI."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
-import shutil
 from uuid import uuid4
 
-import yaml
-
-from apmx.contracts.frontend import package_contract_path as _contract_path
-from apmx.contracts.frontend import parse_contract
+from apmx.contracts.frontend import admit_caller_policy, package_contract_path, parse_contract
 from apmx.contracts.imports import (
-    _read_bytes,
-    _self_contained,
-    read_project_manifest,
-    resolve_installed_skills,
+    _read_bytes, read_lock, read_project_manifest, resolve_installed_skills,
 )
-from apmx.contracts.models import (
-    ContractError,
-    ContractLimits,
-    ContractSource,
-    LeafContract,
-    Outcome,
-)
-from apmx.contracts.workspace import _check_names, _read, _write
-from apmx.deps.lockfile import LockedDependency, LockFile, resolve_lockfile_path_for_read
-from apmx.drift import build_download_ref, detect_ref_change
-from apmx.install.contract_source_validation import (
-    bounded_tree,
-    package_dependency,
-    source_hash,
-    validate_reference,
-)
+from apmx.contracts.models import ContractError, ContractLimits, ContractSource, Outcome
+from apmx.install import apm_backend
+from apmx.install.contract_source_validation import source_hash, validate_reference
 from apmx.models.dependency.reference import DependencyReference
 from apmx.models.dependency.selection import (
     DependencySelectionStatus,
-    parse_dependency_entry,
     select_manifest_dependency,
 )
-from apmx.utils.content_hash import verify_package_hash
-from apmx.utils.path_security import (
-    ensure_path_within,
-    has_symlink_component,
-    safe_rmtree,
-)
-from apmx.utils.yaml_io import dump_yaml
-
-
-def _read_lock(root: Path, limits: ContractLimits) -> LockFile | None:
-    path = resolve_lockfile_path_for_read(root, read_only=True)
-    if not path.exists():
-        return None
-    raw = _read_bytes(path, maximum=limits.file_bytes, root=root)
-    try:
-        return LockFile.from_yaml(raw.decode("utf-8"))
-    except (ValueError, TypeError, KeyError, yaml.YAMLError) as exc:
-        raise ContractError("Existing package lock is malformed.", code="invalid_lock") from exc
-
-
-def _caller_source_pin(
-    requested: DependencyReference, caller_root: Path, limits: ContractLimits
-) -> tuple[LockFile, LockedDependency] | None:
-    """Select the same direct caller lock authority for planning and execution."""
-    from apmx.utils.github_host import is_full_commit_sha
-
-    package, _, _ = read_project_manifest(caller_root, limits, allow_missing=True)
-    lock = _read_lock(caller_root, limits)
-    declarations = list((package.dependencies or {}).get("apm", []))
-    declarations.extend((package.dev_dependencies or {}).get("apm", []))
-    selection = select_manifest_dependency(str(requested), declarations, lock)
-    if selection.status == DependencySelectionStatus.AMBIGUOUS:
-        raise ContractError(
-            "Caller source declaration is ambiguous. Select one direct declaration before retrying.",
-            code="unresolved_source",
-            outcome=Outcome.UNPROVEN,
-        )
-    if lock is None or selection.status != DependencySelectionStatus.MATCHED:
-        return None
-    declared = parse_dependency_entry(selection.manifest_entry)
-    locked = lock.get_dependency(declared.get_unique_key())
-    if (
-        locked is None
-        or locked.depth != 1
-        or locked.resolved_by
-        or locked.declaring_parent
-        or not is_full_commit_sha(locked.resolved_commit)
-        or not locked.content_hash
-        or detect_ref_change(requested, locked)
-        or detect_ref_change(declared, locked)
-        or locked.to_dependency_ref().get_identity() != requested.get_identity()
-    ):
-        raise ContractError(
-            "Remote source lacks an exact direct caller lock identity. "
-            "Repair the matching caller declaration and lock before retrying.",
-            code="unresolved_source",
-            outcome=Outcome.UNPROVEN,
-        )
-    return lock, locked
-
-
-def _installed_source(
-    locked: LockedDependency, caller_root: Path, limits: ContractLimits
-) -> Path | None:
-    """Verify existing materialization; absence permits replay, drift never does."""
-    root = locked.to_dependency_ref().get_install_path(caller_root / "apm_modules")
-    ensure_path_within(root, caller_root / "apm_modules")
-    if has_symlink_component(caller_root, root):
-        raise ContractError("Installed source contains a symlink.", code="source_changed")
-    if not root.exists():
-        return None
-    if not root.is_dir():
-        raise ContractError("Installed source is not a directory.", code="source_changed")
-    bounded_tree(root, limits)
-    if not verify_package_hash(root, locked.content_hash):
-        raise ContractError("Installed source differs from its lock.", code="source_changed")
-    return root.resolve()
-
-
-def _offline_source(
-    requested: DependencyReference, caller_root: Path, limits: ContractLimits
-) -> tuple[Path, str, str]:
-    """Select a declared, exact installed root without invoking transport owners."""
-    pin = _caller_source_pin(requested, caller_root, limits)
-    root = _installed_source(pin[1], caller_root, limits) if pin else None
-    if root is None:
-        raise ContractError(
-            "Remote source is unresolved offline. "
-            "Run with --allow-host-access to download and execute it.",
-            code="unresolved_source",
-            outcome=Outcome.UNPROVEN,
-        )
-    locked = pin[1]
-    return root, locked.resolved_commit, locked.content_hash
+from apmx.utils.path_security import has_symlink_component, safe_rmtree
+from apmx.deps.lockfile import resolve_lockfile_path_for_read
 
 
 @contextmanager
 def _private_root(caller_root: Path, original_root: Path | None) -> Iterator[Path]:
-    """Allocate exclusive preparation outside the selected source, then remove it."""
     parent = caller_root
     if original_root is not None and parent.is_relative_to(original_root):
         parent = original_root.parent
@@ -156,210 +41,57 @@ def _private_root(caller_root: Path, original_root: Path | None) -> Iterator[Pat
             ) from None
 
 
-def _copy_preparation(
-    root: Path, destination: Path, contract: LeafContract, limits: ContractLimits
-) -> tuple[bytes, bytes | None]:
-    """Select only contract resources and declarations, never native activation."""
-    expected = source_hash(root, limits)
-    selected = {"apm.yml", contract.path.relative_to(root).as_posix()}
-    selected.update(_check_names(root, limits))
-    lock_path = resolve_lockfile_path_for_read(root, read_only=True)
-    original_lock = None
-    if lock_path.exists():
-        selected.add(lock_path.name)
-        original_lock = _read_bytes(lock_path, maximum=limits.file_bytes, root=root)
+def _original_bytes(root: Path, limits: ContractLimits) -> tuple[bytes, bytes | None]:
     manifest = _read_bytes(root / "apm.yml", maximum=limits.source_bytes, root=root)
-    destination.mkdir(mode=0o700)
-    for name in sorted(selected):
-        raw, entry = _read(root, name, limits.file_bytes)
-        _write(destination, entry, raw)
-    if source_hash(root, limits) != expected:
-        raise ContractError("Package changed during preparation capture.", code="source_changed")
-    return manifest, original_lock
+    path = resolve_lockfile_path_for_read(root, read_only=True)
+    lock = _read_bytes(path, maximum=limits.file_bytes, root=root) if path.exists() else None
+    return manifest, lock
 
 
-def _download(
-    dependency: DependencyReference,
-    target: Path,
-    *,
-    reference_text: str | None = None,
-    materialize: bool = False,
-    contract_path: str | None = None,
-) -> tuple[DependencyReference, str, Path]:
-    """Acquire directly without importing APM installers or global config."""
-    from .git_source import download_git
-
-    if reference_text is not None:
-        dependency = DependencyReference.parse(reference_text)
-    validate_reference(dependency)
-    if materialize:
-        target = dependency.get_install_path(target)
-    return download_git(dependency, target)
-
-
-def _expand_import(
-    original_root: Path,
-    prepared: Path,
-    dependency: DependencyReference,
-    parent: DependencyReference | None,
-    modules: Path | None,
-    limits: ContractLimits,
-) -> DependencyReference:
-    """Reuse the dependency resolver's same-repository expansion, without graph traversal."""
-    if not dependency.is_parent_repo_inheritance and not (parent and dependency.is_local):
-        return dependency
-    if parent is None or modules is None:
-        raise ContractError(
-            "Git parent imports require a remote package.", code="unsupported_import"
-        )
-    package, data, _ = read_project_manifest(original_root, limits)
-    from apmx.install.source_paths import expand_remote_import
-
-    effective = expand_remote_import(parent, dependency)
-    validate_reference(effective)
-    for key in ("dependencies", "devDependencies"):
-        if (data.get(key) or {}).get("apm"):
-            data[key]["apm"] = [effective.to_apm_yml_entry()]
-    dump_yaml(data, prepared / "apm.yml")
-    return effective
-
-
-def _materialize_skill(
-    root: Path,
-    original_root: Path,
-    contract: LeafContract,
-    dependency: DependencyReference,
-    limits: ContractLimits,
-    *,
-    remote_parent: bool,
-) -> None:
-    """Materialize exactly one skill, recording one canonical direct lock entry."""
-    package, _, _ = read_project_manifest(root, limits)
-    locked = LockedDependency.from_dependency_ref(
-        dependency,
-        None,
-        depth=1,
-        resolved_by=None,
-        is_dev=bool((package.dev_dependencies or {}).get("apm")),
-    )
-    existing = _read_lock(root, limits)
-    previous = existing.get_dependency(dependency.get_unique_key()) if existing else None
-    if existing is not None and previous is None:
-        raise ContractError(
-            "Existing lock cannot be mapped to the expanded direct import. "
-            "Publish a matching direct Git declaration and lock.",
-            code="import_drift",
-        )
-    target = locked.to_dependency_ref().get_install_path(root / "apm_modules")
-    ensure_path_within(target, root / "apm_modules")
-    if target.exists() or has_symlink_component(root, target):
-        raise ContractError(
-            "Partial import content exists. Repair the package explicitly.", code="import_drift"
-        )
-    if dependency.is_local:
-        if remote_parent:
-            raise ContractError(
-                "Remote packages cannot acquire local-path dependencies.", code="unsupported_import"
+def _selected_source(stage: Path, requested: DependencyReference, limits: ContractLimits):
+    lock, _ = read_lock(stage, limits)
+    matches = [] if lock is None else [
+        entry for entry in lock.dependencies.values()
+        if entry.depth == 1 and (
+            entry.to_dependency_ref().get_identity() == requested.get_identity()
+            or (
+                requested.is_local and entry.source == "local"
+                and entry.local_path == requested.local_path
             )
-        parent_package, _, _ = read_project_manifest(original_root, limits)
-        local_path = Path(dependency.local_path or "").expanduser()
-        candidate = local_path if local_path.is_absolute() else original_root / local_path
-        if has_symlink_component(Path(candidate.anchor), candidate):
-            raise ContractError("Local import path contains a symlink.", code="source_escape")
-        original = candidate.resolve()
-        _self_contained(original, limits)
-        expected = source_hash(original, limits)
-        if previous and previous.content_hash and expected != previous.content_hash:
-            raise ContractError("Local skill differs from its existing lock.", code="import_drift")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        copied = shutil.copytree(original, target, ignore=shutil.ignore_patterns(".git"))
-        if (
-            copied is None
-            or source_hash(original, limits) != expected
-            or source_hash(target, limits) != expected
-        ):
-            raise ContractError("Local import changed during preparation.", code="import_drift")
-    else:
-        download_ref = dependency
-        if previous is not None:
-            if (
-                detect_ref_change(dependency, previous)
-                or not previous.resolved_commit
-                or not previous.content_hash
-            ):
-                raise ContractError(
-                    "Existing import lock cannot be reproduced.", code="import_drift"
-                )
-            download_ref = build_download_ref(
-                dependency, existing, update_refs=False, ref_changed=False
-            )
-        _, revision, _ = _download(download_ref, target)
-        locked.resolved_commit = revision
-        if previous is not None:
-            bounded_tree(target, limits)
-            if revision != previous.resolved_commit or not verify_package_hash(
-                target, previous.content_hash
-            ):
-                raise ContractError(
-                    "Acquired skill differs from its existing lock.", code="import_drift"
-                )
-    _self_contained(target, limits)
-    skill_package, _, _ = read_project_manifest(target, limits, allow_missing=True)
-    if any((skill_package.dependencies or {}).values()) or any(
-        (skill_package.dev_dependencies or {}).values()
+        )
+    ]
+    if len(matches) != 1:
+        raise ContractError(
+            "The requested package has no unique installed APM lock identity.",
+            code="unresolved_source",
+            outcome=Outcome.UNPROVEN,
+        )
+    locked = matches[0]
+    _validate_source_pin(requested, locked)
+    root = locked.to_dependency_ref().get_install_path(stage / "apm_modules")
+    if not root.is_dir() or has_symlink_component(stage, root):
+        raise ContractError("Selected package is not safely installed.", code="source_changed")
+    if locked.content_hash:
+        from apmx.utils.content_hash import verify_package_hash
+
+        if not verify_package_hash(root, locked.content_hash):
+            raise ContractError("Installed source differs from its lock.", code="source_changed")
+    return root.resolve(), locked
+
+
+def _validate_source_pin(requested, locked):
+    from apmx.drift import detect_ref_change
+    from apmx.utils.github_host import is_full_commit_sha
+
+    if detect_ref_change(requested, locked) or (
+        not requested.is_local and (
+            not is_full_commit_sha(locked.resolved_commit) or not locked.content_hash
+        )
     ):
         raise ContractError(
-            "Transitive skill dependencies are unsupported.", code="unsupported_import"
+            "Requested source differs from its exact caller lock reference.",
+            code="unresolved_source", outcome=Outcome.UNPROVEN,
         )
-    locked.content_hash = source_hash(target, limits)
-    lock = LockFile()
-    lock.add_dependency(locked)
-    lock.write(root / "apm.lock.yaml")
-    package, _, _ = read_project_manifest(root, limits)
-    resolve_installed_skills(contract, root, package, limits=limits)
-
-
-def _missing_import(
-    root: Path, contract: LeafContract, limits: ContractLimits, *, planning: bool
-) -> DependencyReference | None:
-    dependency = package_dependency(root, contract, limits)
-    lock = _read_lock(root, limits)
-    if lock is not None and (
-        len(lock.dependencies) != (1 if dependency else 0)
-        or (dependency and lock.get_dependency(dependency.get_unique_key()) is None)
-        or lock.mcp_servers
-        or lock.lsp_servers
-    ):
-        raise ContractError(
-            "Package lock must describe exactly its direct skill.", code="unsupported_import"
-        )
-    if lock is not None and dependency is not None:
-        locked = lock.get_dependency(dependency.get_unique_key())
-        if locked is None or (
-            locked.depth != 1
-            or locked.resolved_by
-            or locked.declaring_parent
-            or detect_ref_change(dependency, locked)
-            or locked.to_dependency_ref().get_identity() != dependency.get_identity()
-        ):
-            raise ContractError(
-                "Existing import lock is not an exact direct dependency. Repair it explicitly.",
-                code="import_drift",
-            )
-    package, _, _ = read_project_manifest(root, limits)
-    try:
-        resolve_installed_skills(contract, root, package, limits=limits)
-    except ContractError as exc:
-        if dependency is None or exc.code not in {"missing_lock", "missing_import"}:
-            raise
-        if planning:
-            raise ContractError(
-                "Imported skill is unresolved offline. Execute to prepare its direct dependency.",
-                code="unresolved_import",
-                outcome=Outcome.UNPROVEN,
-            ) from exc
-        return dependency
-    return None
 
 
 @contextmanager
@@ -371,114 +103,142 @@ def prepare_contract_source(
     planning: bool,
     limits: ContractLimits,
 ) -> Iterator[ContractSource]:
-    """Prepare one explicit package source; never activate or modify caller setup."""
+    """Never run APM from the real caller or package checkout."""
+    admit_caller_policy(caller_root, limits=limits)
     try:
-        dependency = DependencyReference.parse(package_ref)
-        validate_reference(dependency)
-        _contract_path(caller_root, contract_relative_path)
-        if dependency.is_local:
-            raw = Path(dependency.local_path or "").expanduser()
-            original = raw if raw.is_absolute() else caller_root / raw
-            if has_symlink_component(
-                (original.anchor and Path(original.anchor)) or caller_root, original
-            ):
-                raise ContractError("Local package path contains a symlink.", code="source_escape")
-            root = original.resolve()
-            digest = source_hash(root, limits)
-            contract = parse_contract(_contract_path(root, contract_relative_path), limits=limits)
-            missing = _missing_import(root, contract, limits, planning=planning)
-            if missing is None:
-                yield ContractSource(root, contract_relative_path, package_ref, package_hash=digest)
-                return
-            with _private_root(caller_root, root) as private:
-                prepared = private / "package"
-                manifest, lock = _copy_preparation(root, prepared, contract, limits)
-                missing = _expand_import(root, prepared, missing, None, None, limits)
-                _materialize_skill(prepared, root, contract, missing, limits, remote_parent=False)
-                if source_hash(root, limits) != digest:
-                    raise ContractError(
-                        "Original package changed during preparation.", code="source_changed"
-                    )
-                yield ContractSource(
-                    prepared,
-                    contract_relative_path,
-                    package_ref,
-                    package_hash=digest,
-                    prepared_hash=source_hash(prepared, limits),
-                    original_root=root,
-                    original_manifest=manifest,
-                    original_lock=lock,
+        requested = DependencyReference.parse(package_ref)
+        validate_reference(requested)
+        package_contract_path(caller_root, contract_relative_path)
+        caller_package, _, _ = read_project_manifest(caller_root, limits, allow_missing=True)
+        caller_lock, _ = read_lock(caller_root, limits)
+        declarations = list((caller_package.dependencies or {}).get("apm", []))
+        declarations.extend((caller_package.dev_dependencies or {}).get("apm", []))
+        selection = select_manifest_dependency(package_ref, declarations, caller_lock)
+        if selection.status == DependencySelectionStatus.AMBIGUOUS:
+            raise ContractError("Caller package declaration is ambiguous.", code="unresolved_source")
+        if selection.status == DependencySelectionStatus.MATCHED and caller_lock is not None:
+            from apmx.models.dependency.selection import parse_dependency_entry
+
+            declared = parse_dependency_entry(selection.manifest_entry)
+            locked = caller_lock.get_dependency(declared.get_unique_key())
+            if locked is None:
+                raise ContractError("Caller source is missing from its lock.", code="invalid_lock")
+            _validate_source_pin(requested, locked)
+            _validate_source_pin(declared, locked)
+        original = None
+        original_hash = None
+        manifest = lock_bytes = None
+        if requested.is_local:
+            path = Path(requested.local_path or "").expanduser()
+            path = path if path.is_absolute() else caller_root / path
+            if has_symlink_component(Path(path.anchor), path):
+                raise ContractError("Local package contains a symlink.", code="source_escape")
+            original = path.resolve()
+            original_hash = source_hash(original, limits)
+            manifest, lock_bytes = _original_bytes(original, limits)
+            read_lock(original, limits)
+            parse_contract(package_contract_path(original, contract_relative_path), limits=limits)
+            requested = DependencyReference.parse(str(original))
+            if planning:
+                context_root = caller_root if declarations or caller_lock else original
+                context_package, _, _ = read_project_manifest(
+                    context_root, limits, allow_missing=True
                 )
-            return
-        if planning:
-            root, revision, digest = _offline_source(dependency, caller_root, limits)
-            contract = parse_contract(_contract_path(root, contract_relative_path), limits=limits)
-            _missing_import(root, contract, limits, planning=True)
+                contract = parse_contract(
+                    package_contract_path(original, contract_relative_path), limits=limits
+                )
+                try:
+                    resolve_installed_skills(contract, context_root, context_package, limits=limits)
+                except ContractError as exc:
+                    if exc.code not in {"missing_lock", "missing_import"}:
+                        raise
+                    raise ContractError(
+                        "Imported context is unresolved offline; install it explicitly first.",
+                        code="unresolved_import", outcome=Outcome.UNPROVEN,
+                    ) from exc
+                yield ContractSource(
+                    original, contract_relative_path, package_ref,
+                    package_hash=original_hash, imports_root=original,
+                )
+                return
+        elif planning:
+            if selection.status != DependencySelectionStatus.MATCHED or caller_lock is None:
+                raise ContractError(
+                    "Remote source is unresolved offline; install it explicitly first.",
+                    code="unresolved_source", outcome=Outcome.UNPROVEN,
+                )
+            root, locked = _selected_source(caller_root, requested, limits)
             yield ContractSource(
-                root, contract_relative_path, package_ref, revision, digest, "locked-package-hash"
+                root, contract_relative_path, package_ref, locked.resolved_commit,
+                source_hash(root, limits), "locked-package-hash",
+                imports_root=caller_root,
             )
             return
-        pin = _caller_source_pin(dependency, caller_root, limits)
-        installed = _installed_source(pin[1], caller_root, limits) if pin else None
-        with _private_root(caller_root, None) as private:
-            if installed is not None:
-                modules = caller_root / "apm_modules"
-                parent, revision, root = (
-                    pin[1].to_dependency_ref(),
-                    pin[1].resolved_commit,
-                    installed,
-                )
+        with _private_root(caller_root, original) as private:
+            stage = private / "install"
+            stage.mkdir(mode=0o700)
+            if selection.status == DependencySelectionStatus.MATCHED:
+                frozen = apm_backend.snapshot_manifest(caller_root, stage, limits)
+                identity = apm_backend.install(stage, frozen=frozen, limits=limits)
             else:
-                modules = private / "packages"
-                download_ref = build_download_ref(
-                    dependency, pin[0] if pin else None, update_refs=False, ref_changed=False
+                identity = apm_backend.install(
+                    stage, package_ref=str(original) if original else package_ref, limits=limits
                 )
-                parent, revision, root = _download(
-                    download_ref,
-                    modules,
-                    reference_text=None if pin else package_ref,
-                    materialize=True,
-                    contract_path=contract_relative_path,
-                )
-            digest = source_hash(root, limits)
-            if pin and (revision != pin[1].resolved_commit or digest != pin[1].content_hash):
-                raise ContractError(
-                    "Acquired source differs from the caller lock. "
-                    "Check the locked revision and package integrity before retrying.",
-                    code="source_changed",
-                )
-            contract = parse_contract(_contract_path(root, contract_relative_path), limits=limits)
-            missing = _missing_import(root, contract, limits, planning=False)
-            original_root = root
-            manifest = lock = None
-            if missing is not None:
-                prepared = private / "prepared"
-                manifest, lock = _copy_preparation(root, prepared, contract, limits)
-                missing = _expand_import(
-                    root, prepared, missing, replace(parent, reference=revision), modules, limits
-                )
-                _materialize_skill(prepared, root, contract, missing, limits, remote_parent=True)
-                root = prepared
-            if source_hash(original_root, limits) != digest:
-                raise ContractError(
-                    "Acquired package changed during preparation.", code="source_changed"
-                )
+            root, locked = _selected_source(stage, requested, limits)
+            parse_contract(package_contract_path(root, contract_relative_path), limits=limits)
+            if original and source_hash(original, limits) != original_hash:
+                raise ContractError("Original package changed during preparation.",
+                                    code="source_changed")
             yield ContractSource(
-                root,
-                contract_relative_path,
-                package_ref,
-                revision,
-                digest,
-                "locked-package-hash" if pin else "observed-resolved-source",
-                prepared_hash=source_hash(root, limits) if root != original_root else None,
-                original_root=original_root,
+                root, contract_relative_path, package_ref, locked.resolved_commit,
+                original_hash or source_hash(root, limits),
+                "observed-local-source" if original else "observed-resolved-source",
+                prepared_hash=source_hash(root, limits),
+                original_root=original,
                 original_manifest=manifest,
-                original_lock=lock,
+                original_lock=lock_bytes,
+                imports_root=stage,
+                apm_backend=identity,
             )
     except (ValueError, TypeError, KeyError) as exc:
         if isinstance(exc, ContractError):
             raise
-        raise ContractError(
-            "Invalid package source. Use a local APM directory or an explicit Git package reference.",
-            code="invalid_source",
-        ) from exc
+        raise ContractError("Invalid APM package source.", code="invalid_source") from exc
+
+
+@contextmanager
+def prepare_imports(
+    caller_root: Path,
+    contract_path: Path,
+    *,
+    source: ContractSource | None,
+    planning: bool,
+    limits: ContractLimits,
+) -> Iterator[tuple[Path, dict[str, str] | None]]:
+    """The consumer manifest/lock wins over a packaged contract's dependencies."""
+    admit_caller_policy(caller_root, limits=limits)
+    contract = parse_contract(contract_path, limits=limits)
+    package, _, manifest_digest = read_project_manifest(caller_root, limits, allow_missing=True)
+    lock, _ = read_lock(caller_root, limits)
+    declarations = list((package.dependencies or {}).get("apm", []))
+    declarations.extend((package.dev_dependencies or {}).get("apm", []))
+    consumer = bool(declarations or lock is not None)
+    fallback = source.imports_root or source.root if source else caller_root
+    if planning or not contract.imports or not consumer:
+        yield (
+            caller_root if consumer else fallback,
+            dict(source.apm_backend) if source and source.apm_backend else None,
+        )
+        return
+    if manifest_digest is None:
+        raise ContractError("Consumer lock requires its manifest.", code="invalid_manifest")
+    before = _original_bytes(caller_root, limits)
+    with _private_root(caller_root, None) as private:
+        stage = private / "consumer"
+        stage.mkdir(mode=0o700)
+        frozen = apm_backend.snapshot_manifest(caller_root, stage, limits)
+        identity = apm_backend.install(stage, frozen=frozen, limits=limits)
+        if _original_bytes(caller_root, limits) != before:
+            raise ContractError("Consumer declarations changed during preparation.",
+                                code="plan_changed")
+        yield stage, identity
