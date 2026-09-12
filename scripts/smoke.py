@@ -212,6 +212,54 @@ def check_profiles(root: Path, before: dict[str, str], fresh_home: bool) -> list
     return changes
 
 
+def add_mixed_context(package: Path, env: dict[str, str]) -> dict[str, Path]:
+    skill = package / "skills/release-style"
+    resources = {
+        "references/detail.txt": b"SELECTED_REFERENCE_SENTINEL\n",
+        "assets/example.json": b'{"fixture":"SELECTED_ASSET_SENTINEL"}\n',
+        "scripts/data_only.py": (
+            b"import os\nfrom pathlib import Path\n"
+            b"Path(os.environ['APMX_RESOURCE_EXECUTED']).write_text('unexpected activation')\n"
+        ),
+    }
+    for relative, content in resources.items():
+        path = skill / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    context = package / "contexts/release-context-package"
+    instruction = context / ".apm/instructions/release-guidance.instructions.md"
+    instruction.parent.mkdir(parents=True)
+    instruction.write_text(
+        "---\napplyTo: '**'\n---\nRELEASE_INSTRUCTION_SENTINEL\n", encoding="utf-8",
+    )
+    unselected = context / ".apm/skills/unselected-style/SKILL.md"
+    unselected.parent.mkdir(parents=True)
+    unselected.write_text(
+        (skill / "SKILL.md").read_text(encoding="utf-8").replace(
+            "release-style", "unselected-style",
+        ).replace("RELEASE_SKILL_SENTINEL", "UNSELECTED_SKILL_SENTINEL"),
+        encoding="utf-8",
+    )
+    (context / "apm.yml").write_text(
+        "name: release-context-package\nversion: 0.1.0\ndependencies:\n  apm: []\n",
+        encoding="utf-8",
+    )
+    hooks = context / ".github/hooks/unselected.json"
+    hooks.parent.mkdir(parents=True)
+    hooks.write_text('{"fixture":"UNSELECTED_HOOK_SENTINEL"}\n', encoding="utf-8")
+    (package / "apm.yml").write_text(
+        (package / "apm.yml").read_text(encoding="utf-8")
+        + "    - path: ./contexts/release-context-package\n",
+        encoding="utf-8",
+    )
+    env["APMX_EXPECT_INSTRUCTION"] = "1"
+    env["APMX_CONTEXT_RESOURCE_DIGESTS"] = json.dumps({
+        relative: digest(skill / relative) for relative in resources
+    })
+    env["APMX_RESOURCE_EXECUTED"] = str(package.parent / "resource-was-executed")
+    return {relative: skill / relative for relative in resources}
+
+
 def run_binary(binary: Path, args: list[str], caller: Path, env: dict[str, str], timeout: float = 90):
     process = subprocess.Popen(
         [str(binary), *args],
@@ -322,7 +370,7 @@ def require_child_cleanup(root: Path) -> None:
 
 def run_case(
     binary: Path, root: Path, actor: Path | None, selection: str, mode: str,
-    *, fresh_home: bool = False,
+    *, fresh_home: bool = False, mixed_imports: bool = False,
 ) -> dict:
     root.mkdir()
     require(not root.resolve().is_relative_to(ROOT.resolve()), "Smoke caller must be outside checkout")
@@ -352,6 +400,7 @@ def run_case(
         "name: release-smoke\nversion: 0.1.0\ndependencies:\n  apm: []\n", encoding="utf-8"
     )
     imports = ""
+    resources = {}
     if selection == "package":
         skill = package / "skills/release-style"
         skill.mkdir(parents=True)
@@ -368,6 +417,9 @@ def run_case(
         )
         imports = "imports:\n  - release-style\n"
         env["APMX_EXPECT_SKILL"] = "1"
+        if mixed_imports:
+            resources = add_mixed_context(package, env)
+            imports += "  - release-guidance\n"
     source = caller if selection == "local" else package
     (source / "checks").mkdir()
     shutil.copyfile(FIXTURES / "check.py", source / "checks/check.py")
@@ -499,11 +551,42 @@ def run_case(
         prepared_root = Path(record["source"]["package"]["root"])
         if prepared_root.resolve() != package.resolve():
             require(not prepared_root.exists(), "Private package not cleaned")
-        require(len(record["imports"]) == 1, "Expected exactly one packaged skill")
+        require(len(record["imports"]) == (2 if mixed_imports else 1), "Unexpected selected import count")
         imported = record["imports"][0]
         require(imported["name"] == "release-style", "Wrong packaged skill")
         require(imported["lock_identity"] == "./skills/release-style", "Wrong skill source identity")
         require(imported["sha256"] == digest(package / "skills/release-style/SKILL.md"), "Skill digest")
+        if mixed_imports:
+            instruction = package / "contexts/release-context-package/.apm/instructions/release-guidance.instructions.md"
+            selected_instruction = record["imports"][1]
+            require(selected_instruction["kind"] == "instruction", "Instruction context kind was lost")
+            require(selected_instruction["context_name"] == "release-guidance", "Wrong instruction selected")
+            require(selected_instruction["sha256"] == digest(instruction), "Instruction context digest")
+            context_root = run / "producer/_apmx_context"
+            context_files = [path for path in context_root.rglob("*") if path.is_file()]
+            require(context_files, "Selected contexts were not staged for native Copilot")
+            require(
+                not any(
+                    marker in path.read_bytes()
+                    for path in context_files
+                    for marker in (b"UNSELECTED_SKILL_SENTINEL", b"UNSELECTED_HOOK_SENTINEL")
+                ),
+                "Unselected package content was activated in the producer",
+            )
+            for relative, source_resource in resources.items():
+                matches = list(context_root.glob(f"import-*/{relative}"))
+                require(len(matches) == 1, f"Expected one staged selected resource: {relative}")
+                require(digest(matches[0]) == digest(source_resource), f"Selected resource changed: {relative}")
+                require(
+                    any(
+                        item["path"] == relative
+                        and item["sha256"] == digest(source_resource)
+                        and item["size"] == source_resource.stat().st_size
+                        for item in imported["resources"]
+                    ),
+                    f"Selected resource provenance missing: {relative}",
+                )
+            require(not Path(env["APMX_RESOURCE_EXECUTED"]).exists(), "Supporting script executed during import")
         retained = record["source"]["retained"]
         require(digest(Path(retained["contract.contract.md"])) == digest(contract), "Retained contract identity")
         require(digest(Path(retained["apm.lock.yaml"])) == record["lock_sha256"], "Retained package lock identity")
@@ -520,6 +603,7 @@ def run_case(
         "actor": "hermetic Copilot JSONL protocol fixture; NOT live model inference",
         "backend_installation": installation,
         "fresh_home": fresh_home, "profile_changes": profile_changes,
+        "mixed_imports": mixed_imports,
         "record": record,
     }
 
@@ -571,6 +655,7 @@ def main() -> None:
             run_case(binary, root / "local-quiet", actor, "local", "quiet"),
             run_case(binary, root / "local-linger", actor, "local", "linger"),
             run_case(binary, root / "package-fresh-home", actor, "package", "pass", fresh_home=True),
+            run_case(binary, root / "package-mixed-asf", actor, "package", "pass", mixed_imports=True),
         ]
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -585,7 +670,7 @@ def main() -> None:
                 }, indent=2) + "\n",
                 encoding="utf-8",
             )
-    print("Frozen smoke: 9 local/package cases passed with genuine bundled APM; hermetic Copilot, NOT live inference.")
+    print("Frozen smoke: 10 local/package cases passed with genuine bundled APM; hermetic Copilot, NOT live inference.")
 
 
 if __name__ == "__main__":

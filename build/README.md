@@ -94,8 +94,16 @@ official APM's documented bootstrap files, `~/.apm/config.json` and
 `~/.cache/apm/last_version_check`, and rejects every other profile write or
 plugin/hook/service activation. No production HOME rewriting, credential
 copying, patched backend, or claim of zero APM host writes is introduced. All
-nine cases run both on native CI archives and fresh downloaded release assets.
+ten cases run both on native CI archives and fresh downloaded release assets.
 Only Copilot is simulated; APM's version and installs are genuine native execution.
+
+A **tenth** mixed-ASF case imports the existing selected skill and an individually
+named instruction from another dependency, not that entire package. The native
+actor must receive both selected documents and the skill's byte-identical
+reference, JSON asset and script-as-data resources. Their recorded path/hash/size
+must match the original sources. An unselected sibling skill and hook fixture
+must be absent from the prompt and staged contexts; the supporting script must
+never execute. The original single-skill gates remain separate.
 
 Short deadline/timeout behavior is covered separately by native-platform source
 tests using the existing `ProcessRequest` API. The frozen gate does **not** claim
@@ -141,7 +149,7 @@ Fresh native runners download the **actual draft release assets by asset ID**.
 The manifest digest is anchored in the draft job's output, and the full candidate
 asset identity fingerprint must remain unchanged. No app sources or app
 installation are present in these verification checkouts. Each runner verifies
-checksums, extracts with traversal/link/special-file guards, and repeats all nine
+checksums, extracts with traversal/link/special-file guards, and repeats all ten
 functional cases. Publication requires every downloaded-asset job to pass and
 rechecks repository privacy, tag identity, draft identity, and asset fingerprint.
 

@@ -77,7 +77,7 @@ class SmokeFixtureTests(unittest.TestCase):
                 patch("builtins.print"),
             ):
                 smoke.main()
-            self.assertEqual(run.call_count, 9)
+            self.assertEqual(run.call_count, 10)
             for call in run.call_args_list:
                 self.assertEqual(call.args[1], call.args[1].resolve())
 
@@ -309,6 +309,58 @@ class SmokeFixtureTests(unittest.TestCase):
             with patch.object(smoke, "run_binary", return_value=result):
                 with self.assertRaisesRegex(AssertionError, "did not create a lockfile"):
                     smoke.install_backend_fixture(Path("unrun-backend"), root / "missing", env)
+
+    def test_mixed_context_fixture_selects_instruction_not_whole_package(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "case"
+            tools = root.parent / "tools"
+            tools.mkdir()
+            with (
+                patch.object(smoke, "prepare_tools", return_value=tools),
+                patch.object(smoke, "poison_host_apm"),
+                patch.object(smoke.release, "check_backend_metadata", return_value=smoke.release.read_backend_pin()),
+                patch.object(smoke, "install_backend_fixture", return_value={}),
+                patch.object(smoke, "run_binary", side_effect=RuntimeError("stop before binary")) as run,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "stop before binary"):
+                    smoke.run_case(Path("unrun-apmx"), root, None, "package", "pass", mixed_imports=True)
+            contract = (root / "package/handoff.contract.md").read_text()
+            self.assertIn("  - release-guidance\n", contract)
+            self.assertNotIn("  - release-context-package\n", contract)
+            env = run.call_args.args[3]
+            resources = json.loads(env["APMX_CONTEXT_RESOURCE_DIGESTS"])
+            self.assertEqual(set(resources), {"references/detail.txt", "assets/example.json", "scripts/data_only.py"})
+            self.assertFalse(Path(env["APMX_RESOURCE_EXECUTED"]).exists())
+
+    def test_mixed_actor_rejects_unselected_prompt_and_changed_supporting_resource(self):
+        for failure in (None, "unselected", "resource"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                env = smoke.isolated_env(root, root / "tools")
+                env["APMX_ACTOR_MODE"] = "pass"
+                package = root / "package"
+                skill = package / "skills/release-style"
+                skill.mkdir(parents=True)
+                (skill / "SKILL.md").write_text("RELEASE_SKILL_SENTINEL\n")
+                (package / "apm.yml").write_text("dependencies:\n  apm: []\n")
+                resources = smoke.add_mixed_context(package, env)
+                for relative, source in resources.items():
+                    target = root / "_apmx_context/import-1" / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+                (root / "checks").mkdir()
+                (root / "notes.md").write_text('{"source":"caller","value":7}')
+                prompt = "RELEASE_SKILL_SENTINEL RELEASE_INSTRUCTION_SENTINEL"
+                if failure == "unselected":
+                    prompt += " UNSELECTED_SKILL_SENTINEL"
+                if failure == "resource":
+                    (root / "_apmx_context/import-1/references/detail.txt").write_text("changed")
+                result = subprocess.run(
+                    [sys.executable, "-I", str(smoke.FIXTURES / "copilot_actor.py"), "-p", prompt],
+                    cwd=root, env=env, capture_output=True, timeout=10,
+                )
+                self.assertEqual(result.returncode == 0, failure is None, result.stderr)
+                self.assertFalse(Path(env["APMX_RESOURCE_EXECUTED"]).exists())
 
 
 if __name__ == "__main__":
