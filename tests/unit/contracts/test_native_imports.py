@@ -2,8 +2,10 @@
 
 import hashlib
 import json
+import os
 import shlex
 import shutil
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -15,9 +17,10 @@ from apmx.contracts.models import ContractError, ContractLimits
 from apmx.contracts.records import AttemptStore
 from apmx.contracts.workspace import capture_workspace
 from apmx.contracts.workspace import local_git
-from apmx.install.apm_backend import install
+from apmx.install.apm_backend import install, locate_backend
 from apmx.install.contract_source import prepare_contract_source, prepare_imports
 from apmx.install.contract_source_validation import source_hash
+from apmx.utils.git_env import redact_git_diagnostic
 
 EXAMPLE = Path(__file__).resolve().parents[3] / "examples/contracts/packaged-job"
 LIMITS = ContractLimits()
@@ -247,9 +250,9 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
     assert git
     wrapper = tmp_path / "git_transport.py"
     wrapper.write_text(
-        "import os, sys\n"
+        "import subprocess, sys\n"
         "if '-G' in sys.argv: raise SystemExit(0)\n"
-        f"os.execv({git!r}, [{git!r}, 'upload-pack', {str(repo)!r}])\n"
+        f"raise SystemExit(subprocess.call([{git!r}, 'upload-pack', {str(repo)!r}]))\n"
     )
     # A hermetic SSH transport serves real Git objects. Neither APM nor its
     # resolver, lockfile, checkout, or installed context is mocked.
@@ -259,11 +262,26 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
     )
     monkeypatch.setenv("GIT_SSH_VARIANT", "ssh")
     url = "ssh://git@localhost/fixtures/handoff-style.git"
+    transport = subprocess.run(
+        [git, "ls-remote", url, "refs/tags/v9"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert transport.returncode == 0, redact_git_diagnostic(transport.stderr)
+    assert revision in transport.stdout
     (caller / "apm.yml").write_text(
         "name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n"
         f"    - git: {url}\n      ref: v9\n"
     )
-    install(caller, limits=LIMITS)
+    generated = subprocess.run(
+        [
+            str(locate_backend()), "install", "--root", str(caller),
+            "--only", "apm", "--target", "agent-skills", "--no-trust-bin",
+        ],
+        cwd=caller,
+        env={**os.environ, "APM_NO_SCRIPTS": "1", "APM_PROGRESS": "never"},
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert generated.returncode == 0, redact_git_diagnostic(generated.stdout + generated.stderr)
     (package / "apm.yml").write_text(
         "name: packaged-handoff\nversion: 0.1.0\ndependencies:\n  apm:\n"
         f"    - git: {url}\n      ref: publisher-version-does-not-exist\n"
