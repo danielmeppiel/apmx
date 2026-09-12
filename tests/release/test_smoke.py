@@ -4,6 +4,7 @@ import json
 import contextlib
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -348,6 +349,76 @@ class SmokeFixtureTests(unittest.TestCase):
                 unix.write_text("not the pinned Windows cache path")
                 with self.assertRaisesRegex(AssertionError, "activation/write"):
                     smoke.check_profiles(root, {}, True)
+
+    def test_windows_fresh_temp_bootstrap_allows_only_exact_owned_empty_regular_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            config = root / ".apm_empty_gitconfig"
+            config.write_bytes(b"")
+            with patch.object(smoke, "os", SimpleNamespace(name="nt")):
+                changes = smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                self.assertEqual(changes, [".apm_empty_gitconfig"])
+                self.assertEqual(config.read_bytes(), b"")
+                with self.assertRaisesRegex(AssertionError, "outside owned"):
+                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root / "different", case="unit")
+                with self.assertRaisesRegex(AssertionError, "not cleaned"):
+                    smoke.check_temporary(root, {}, fresh_home=False, owned_directory=root, case="unit")
+                config.write_bytes(b"unexpected Git configuration")
+                with self.assertRaisesRegex(AssertionError, "zero bytes"):
+                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                before = smoke.snapshot(root)
+                config.write_bytes(b"")
+                with self.assertRaisesRegex(AssertionError, "not cleaned"):
+                    smoke.check_temporary(root, before, fresh_home=True, owned_directory=root, case="unit")
+                other = root / "unexpected"
+                other.write_bytes(b"")
+                with self.assertRaisesRegex(AssertionError, "not cleaned"):
+                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                other.unlink()
+                config.unlink()
+                nested = root / "nested/.apm_empty_gitconfig"
+                nested.parent.mkdir()
+                nested.write_bytes(b"")
+                with self.assertRaisesRegex(AssertionError, "not cleaned"):
+                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                nested.unlink()
+                config.mkdir()
+                with self.assertRaisesRegex(AssertionError, "regular non-reparse"):
+                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                config.rmdir()
+            config.write_bytes(b"")
+            with patch.object(smoke, "os", SimpleNamespace(name="posix")):
+                with self.assertRaisesRegex(AssertionError, "not cleaned"):
+                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+
+    def test_windows_temp_bootstrap_rejects_reparse_attribute(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / ".apm_empty_gitconfig").write_bytes(b"")
+            info = SimpleNamespace(
+                st_mode=stat.S_IFREG | 0o600, st_size=0,
+                st_file_attributes=0x400, st_nlink=1,
+            )
+            with (
+                patch.object(smoke, "os", SimpleNamespace(name="nt")),
+                patch.object(Path, "lstat", return_value=info),
+            ):
+                with self.assertRaisesRegex(AssertionError, "regular non-reparse"):
+                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+
+    @unittest.skipIf(os.name == "nt", "Windows symlink creation requires extra host privileges")
+    def test_windows_temp_bootstrap_rejects_symlink_to_empty_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            target = parent / "preexisting"
+            target.write_bytes(b"")
+            root = parent / "owned"
+            root.mkdir()
+            (root / ".apm_empty_gitconfig").symlink_to(target)
+            with patch.object(smoke, "os", SimpleNamespace(name="nt")):
+                with self.assertRaisesRegex(AssertionError, "regular non-reparse"):
+                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+            self.assertEqual(target.read_bytes(), b"")
 
     def test_mixed_context_fixture_selects_packages_not_primitive_symbols(self):
         with tempfile.TemporaryDirectory() as temporary:

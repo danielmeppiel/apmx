@@ -101,6 +101,13 @@ plugin/hook/service activation. No production HOME rewriting, credential
 copying, patched backend, or claim of zero APM host writes is introduced. All
 ten cases run both on native CI archives and fresh downloaded release assets.
 Only Copilot is simulated; APM's version and installs are genuine native execution.
+Windows also intentionally retains an empty `.apm_empty_gitconfig` in its
+temporary directory. Only the fresh case may add that exact root-relative file
+inside its owned temporary directory: it must be regular, non-symlink,
+non-reparse, single-link, zero-byte, and have the empty SHA-256 digest. The
+report names this third native bootstrap artifact. Nonempty content, aliases,
+other paths, mutations of preexisting files, and every other temporary change
+still refuse. No global or preexisting file is deleted to manufacture cleanup.
 
 A **tenth** mixed-ASF case imports two logical packages, one containing the existing
 skill and another containing an instruction and a differently named contained

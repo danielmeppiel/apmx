@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -225,6 +226,52 @@ def check_profiles(root: Path, before: dict[str, str], fresh_home: bool) -> list
     else:
         require(not changes, f"Ambient profiles changed after APM bootstrap: {changes}")
     return changes
+
+
+def check_temporary(
+    directory: Path, before: dict[str, str], *, fresh_home: bool,
+    owned_directory: Path | None, case: str,
+) -> list[str]:
+    bootstrap = ".apm_empty_gitconfig"
+    candidate = directory / bootstrap
+    allowed = False
+    if os.name == "nt" and fresh_home and bootstrap not in before:
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            info = None
+        if info is not None:
+            require(
+                owned_directory is not None
+                and directory == owned_directory == directory.resolve()
+                and not directory.is_symlink(),
+                "Native empty Git config bootstrap is outside owned temporary storage",
+            )
+            require(
+                stat.S_ISREG(info.st_mode)
+                and not stat.S_ISLNK(info.st_mode)
+                and not getattr(info, "st_file_attributes", 0) & 0x400
+                and info.st_nlink == 1,
+                "Native empty Git config bootstrap must be a regular non-reparse file",
+            )
+            require(info.st_size == 0, "Native empty Git config bootstrap must contain zero bytes")
+            allowed = True
+    after = snapshot(directory)
+    changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+    permitted = []
+    if allowed and bootstrap in changed:
+        require(
+            after.get(bootstrap) == hashlib.sha256(b"").hexdigest(),
+            "Native empty Git config bootstrap has a nonempty digest",
+        )
+        changed.remove(bootstrap)
+        permitted.append(bootstrap)
+    require(
+        not changed,
+        f"{case}: Temporary producer/package files were not cleaned; "
+        f"changed paths ({len(changed)}): {changed[:12]}",
+    )
+    return permitted
 
 
 def add_mixed_context(package: Path, env: dict[str, str]) -> dict[str, Path]:
@@ -717,15 +764,9 @@ def _run_case(
     require(snapshot(package) == package_before, "Source package was changed")
     profile_changes = check_profiles(root, profiles_before, fresh_home)
     require(not Path(env["APMX_DECOY_APM_LOG"]).exists(), "Host APM decoy was executed")
-    temp_after = snapshot(temp_directory)
-    changed_temp = sorted(
-        path for path in temp_before.keys() | temp_after.keys()
-        if temp_before.get(path) != temp_after.get(path)
-    )
-    require(
-        not changed_temp,
-        f"{selection}/{mode}: Temporary producer/package files were not cleaned; "
-        f"changed paths ({len(changed_temp)}): {changed_temp[:12]}",
+    temporary_bootstrap_changes = check_temporary(
+        temp_directory, temp_before, fresh_home=fresh_home,
+        owned_directory=temporary_root, case=f"{selection}/{mode}",
     )
     require(not snapshot(root / "temp"), "Unused case-local temporary directory was written")
     for path, expected_digest in caller_before.items():
@@ -838,6 +879,7 @@ def _run_case(
         "actor": "hermetic Copilot JSONL protocol fixture; NOT live model inference",
         "backend_installation": installation,
         "fresh_home": fresh_home, "profile_changes": profile_changes,
+        "temporary_bootstrap_changes": temporary_bootstrap_changes,
         "mixed_imports": mixed_imports,
         "consumer_pin": consumer_pin,
         "record": record,
