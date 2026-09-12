@@ -91,7 +91,8 @@ ignore both and records must identify the exact bundled backend.
 
 A **ninth** package case starts from a genuinely empty profile. It allows only
 official APM's documented bootstrap files, `~/.apm/config.json` and
-`~/.cache/apm/last_version_check`, and rejects every other profile write or
+`~/.cache/apm/last_version_check` on Unix or
+`~/AppData/Local/apm/cache/last_version_check` on Windows, and rejects every other profile write or
 plugin/hook/service activation. No production HOME rewriting, credential
 copying, patched backend, or claim of zero APM host writes is introduced. All
 ten cases run both on native CI archives and fresh downloaded release assets.

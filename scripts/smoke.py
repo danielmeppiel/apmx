@@ -29,7 +29,10 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 ROOT = FIXTURES.parents[1]
 PRIVATE_MARKERS = ("PRIVATE_REASONING_SENTINEL", "PRIVATE_TOOL_SENTINEL")
 PROFILE_DIRECTORIES = ("home", "config", "data", "cache", "appdata", "localappdata", "copilot")
-APM_BOOTSTRAP_FILES = {"home/.apm/config.json", "home/.cache/apm/last_version_check"}
+APM_UPDATE_CACHE_FILES = {
+    "nt": "home/AppData/Local/apm/cache/last_version_check",
+    "posix": "home/.cache/apm/last_version_check",
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -202,7 +205,8 @@ def check_profiles(root: Path, before: dict[str, str], fresh_home: bool) -> list
     if fresh_home:
         require(not before, "Fresh-home case must start without profile files")
         require("home/.apm/config.json" in changes, "Real APM bootstrap config was not created")
-        require(set(changes) <= APM_BOOTSTRAP_FILES, f"Unexpected fresh-home activation/write: {changes}")
+        allowed = {"home/.apm/config.json", APM_UPDATE_CACHE_FILES[os.name]}
+        require(set(changes) <= allowed, f"Unexpected fresh-home activation/write: {changes}")
         require(
             isinstance(json.loads((root / "home/.apm/config.json").read_text(encoding="utf-8")), dict),
             "APM bootstrap config is not a JSON object",

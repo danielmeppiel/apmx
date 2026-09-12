@@ -310,6 +310,34 @@ class SmokeFixtureTests(unittest.TestCase):
                 with self.assertRaisesRegex(AssertionError, "did not create a lockfile"):
                     smoke.install_backend_fixture(Path("unrun-backend"), root / "missing", env)
 
+    def test_windows_bootstrap_uses_home_appdata_cache_not_redirected_localappdata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            smoke.isolated_env(root, root / "tools")
+            config = root / "home/.apm/config.json"
+            config.parent.mkdir()
+            config.write_text("{}")
+            cache = root / "home/AppData/Local/apm/cache/last_version_check"
+            cache.parent.mkdir(parents=True)
+            cache.write_text("pinned APM Windows update cache")
+            with patch.object(smoke, "os", SimpleNamespace(name="nt")):
+                changes = smoke.check_profiles(root, {}, True)
+                self.assertEqual(set(changes), {
+                    "home/.apm/config.json",
+                    "home/AppData/Local/apm/cache/last_version_check",
+                })
+                wrong = root / "localappdata/apm/cache/last_version_check"
+                wrong.parent.mkdir(parents=True)
+                wrong.write_text("not the pinned cache path")
+                with self.assertRaisesRegex(AssertionError, "activation/write"):
+                    smoke.check_profiles(root, {}, True)
+                wrong.unlink()
+                unix = root / "home/.cache/apm/last_version_check"
+                unix.parent.mkdir(parents=True)
+                unix.write_text("not the pinned Windows cache path")
+                with self.assertRaisesRegex(AssertionError, "activation/write"):
+                    smoke.check_profiles(root, {}, True)
+
     def test_mixed_context_fixture_selects_instruction_not_whole_package(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "case"
