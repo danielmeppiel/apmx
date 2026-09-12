@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from scripts import promotion
 from scripts.release import TARGETS, archive_bundle, digest, make_manifest
+from tests.release.test_backend import add_backend_fixture
 
 
 class PromotionTests(unittest.TestCase):
@@ -149,6 +150,7 @@ class PromotionTests(unittest.TestCase):
                 executable = bundle / ("apmx.exe" if target.startswith("windows") else "apmx")
                 executable.write_bytes(b"fixture executable bytes")
                 executable.chmod(0o755)
+                add_backend_fixture(bundle, target)
                 archive_bundle(bundle, assets_dir, self.version, target)
             manifest = make_manifest(assets_dir, self.version, self.commit)
             uploaded = [

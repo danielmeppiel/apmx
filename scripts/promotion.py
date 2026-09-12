@@ -98,7 +98,8 @@ def create_draft(repository: str, assets: Path, version: str, commit: str) -> No
     manifest = make_manifest(assets, version, commit)
     notes = (
         f"Standalone apmx {version}; candidate commit `{commit}`.\n\n"
-        "Five native onedir archives include the runtime, LICENSE, NOTICE, and release metadata. "
+        "Five native onedir archives include the runtime, LICENSE, NOTICE, release metadata, "
+        "and the pinned official APM backend with its complete runtime under libexec/apm. "
         "Extract the complete archive; do not move the executable out of its runtime directory.\n\n"
         "Git, Copilot CLI, and contract-declared checker tools are external prerequisites. "
         "The CI actor is an explicitly hermetic Copilot JSONL protocol fixture, NOT live inference. "

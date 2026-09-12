@@ -20,6 +20,7 @@ from scripts.release import (
     validate_lock,
     verify_archive,
 )
+from tests.release.test_backend import add_backend_fixture
 
 
 class ReleaseTests(unittest.TestCase):
@@ -41,6 +42,7 @@ class ReleaseTests(unittest.TestCase):
         (bundle / "LICENSES").mkdir()
         (bundle / "LICENSES/Python-LICENSE.txt").write_text("Python license fixture\n")
         (bundle / "LICENSES/manifest.json").write_text("{}\n")
+        add_backend_fixture(bundle, target)
         return bundle
 
     def test_round_trip_all_targets_and_checksums(self):
@@ -52,6 +54,10 @@ class ReleaseTests(unittest.TestCase):
                 extracted = extract_archive(archive, self.root / ("extract-" + target))
                 self.assertEqual((extracted / "LICENSE").read_text(), "MIT\n")
                 self.assertEqual((extracted / "_internal/runtime").read_bytes(), b"runtime")
+                self.assertEqual(
+                    (extracted / "libexec/apm/_internal/runtime").read_bytes(),
+                    b"backend runtime fixture",
+                )
                 if os.name != "nt" and not target.startswith("windows"):
                     self.assertTrue((extracted / "apmx").stat().st_mode & 0o111)
                 archive.write_bytes(archive.read_bytes() + b"tampered")

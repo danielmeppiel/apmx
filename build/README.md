@@ -6,8 +6,9 @@ creates a PyInstaller directory and `dist/assets/apmx-VERSION-macos-arm64.tar.gz
 with its SHA-256 sidecar. Use the runner-native target: `linux-x86_64`,
 `linux-arm64`, `macos-x86_64`, `macos-arm64`, or `windows-x86_64`. The bundle
 contains `apmx`/`apmx.exe`, `_internal`, `LICENSE`, `NOTICE`, `LICENSES`, and
-`RELEASE.json`.
-Extract the whole archive and keep the executable beside its runtime directory.
+`RELEASE.json`, `apm-backend.json`, and the complete official APM onedir under
+`libexec/apm/`. Extract the whole archive and keep this layout intact: APM's
+`_internal` stays under `libexec/apm`, separate from the application's runtime.
 
 The app requires no APM installation or Python interpreter. Git, native Copilot
 CLI, and tools explicitly named by a contract remain external prerequisites.
@@ -23,6 +24,34 @@ distribution superset rather than claiming a complete bundled-dependency audit.
 Missing Python license or a missing file declared by installed metadata blocks
 the build. The original standalone/upstream MIT license and NOTICE remain at the
 archive root.
+
+## Pinned APM backend
+
+`src/apmx/apm-backend.json` is the single version/source/asset authority. Builds
+download the official native archive from `microsoft/apm`, verify its pinned
+SHA-256 before extraction, reject unsafe paths/links/special files, require the
+expected root, native executable and upstream license, and execute `--version`
+to check the pinned version and source commit on the native runner. HTTPS
+certificate verification remains enabled. All upstream resources and license
+files remain unmodified inside the bundled onedir.
+
+`RELEASE.json` records the backend version, full source commit, platform, original
+archive name/hash, explicit bundled executable path/hash and pin-file hash.
+Extraction verifies this provenance and byte-identical outer/runtime copies of
+the pin. The outer archive hash anchors these files during fresh release-asset
+verification; the pin and provenance are integrity evidence, not signatures.
+
+For source development, provision a separate real backend explicitly:
+
+```sh
+python scripts/release.py provision-apm --target macos-arm64 --output dist/apm-backend
+export APMX_APM_BACKEND="$PWD/dist/apm-backend/apm"
+```
+
+Use the matching native target and `apm.exe` on Windows. Provisioning requires a
+fresh destination, never silently reuses host `apm`, and requires network only
+to acquire the pinned backend. Released archives already contain APM and do not
+download it at runtime. The development override is not consulted by frozen apmx.
 
 ## Acceptance boundary
 
