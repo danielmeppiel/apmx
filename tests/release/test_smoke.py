@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -34,7 +35,7 @@ class SmokeFixtureTests(unittest.TestCase):
                 patch("builtins.print"),
             ):
                 smoke.main()
-            self.assertEqual(run.call_count, 6)
+            self.assertEqual(run.call_count, 8)
             for call in run.call_args_list:
                 self.assertEqual(call.args[1], call.args[1].resolve())
 
@@ -55,7 +56,7 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertEqual(env["COPILOT_HOME"], str(root / "copilot"))
 
     def test_actor_and_independent_checker_distinguish_pass_rejection_and_halt(self):
-        for mode, expected in (("pass", 0), ("reject", 1), ("halt", None)):
+        for mode, expected in (("pass", 0), ("reject", 1), ("halt", None), ("quiet", 0)):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 (root / "checks").mkdir()
@@ -77,7 +78,9 @@ class SmokeFixtureTests(unittest.TestCase):
                     event["data"]["phase"] for event in events
                     if event["type"] == "assistant.message_start"
                 }
-                self.assertEqual(phases, {"commentary", "analysis", "final_answer"})
+                self.assertEqual(phases, set() if mode == "quiet" else {"commentary", "analysis", "final_answer"})
+                if mode == "quiet":
+                    self.assertEqual(len(events), 1)
                 if mode == "halt":
                     self.assertFalse((root / "handoff.json").exists())
                 else:
@@ -118,6 +121,103 @@ class SmokeFixtureTests(unittest.TestCase):
             ]):
                 with self.assertRaisesRegex(AssertionError, "native frozen"):
                     smoke.main()
+
+    def test_live_reader_acknowledges_progress_before_child_completion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            env = smoke.isolated_env(root, root / "tools")
+            env["APMX_STREAM_GATE"] = str(root / "gate")
+            code = (
+                "import os,time; from pathlib import Path; "
+                "print('Hermetic fixture progress.',flush=True); "
+                "deadline=time.monotonic()+2\n"
+                "while not Path(os.environ['APMX_STREAM_GATE']).exists():\n"
+                " if time.monotonic()>deadline: raise RuntimeError('output was buffered')\n"
+                " time.sleep(.01)\n"
+                "print('completed after acknowledgement',flush=True)\n"
+            )
+            result = smoke.run_binary(Path(sys.executable), ["-I", "-c", code], root, env, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("completed after acknowledgement", result.stdout)
+            self.assertTrue((root / "gate").is_file())
+
+    def test_live_actor_waits_for_narration_acknowledgement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            env = smoke.isolated_env(root, root / "tools")
+            env["APMX_ACTOR_MODE"] = "pass"
+            env["APMX_STREAM_GATE"] = str(root / "gate")
+            (root / "notes.md").write_text('{"source": "caller", "value": 7}\n')
+            (root / "checks").mkdir()
+            process = subprocess.Popen(
+                [sys.executable, "-I", str(smoke.FIXTURES / "copilot_actor.py"), "-p", "fixture"],
+                cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                for _ in range(3):
+                    event = json.loads(process.stdout.readline())
+                    self.assertEqual(event["data"]["messageId"], "commentary")
+                self.assertIsNone(process.poll())
+                self.assertFalse((root / "handoff.json").exists())
+                (root / "gate").write_text("observed\n")
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual(json.loads(stdout.splitlines()[-1])["type"], "result")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+                process.stdout.close()
+                process.stderr.close()
+
+    def test_lingering_fixture_is_detected_and_fixture_stop_cleans_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            env = smoke.isolated_env(root, root / "tools")
+            env.update({
+                "APMX_ACTOR_MODE": "linger",
+                "APMX_CHILD_PID": str(root / "child.pid"),
+                "APMX_CHILD_HEARTBEAT": str(root / "child.heartbeat"),
+                "APMX_CHILD_STOP": str(root / "child.stop"),
+            })
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-I", str(smoke.FIXTURES / "copilot_actor.py"), "-p", "fixture"],
+                    cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=20, check=False,
+                )
+                self.assertEqual(result.returncode, 0)
+                pid = int((root / "child.pid").read_text())
+                self.assertTrue(smoke.child_running(pid))
+                with self.assertRaisesRegex(AssertionError, "remains alive"):
+                    smoke.require_child_cleanup(root)
+            finally:
+                (root / "child.stop").write_text("fixture cleanup\n")
+                deadline = time.monotonic() + 5
+                while (root / "child.pid").exists() and smoke.child_running(int((root / "child.pid").read_text())):
+                    if time.monotonic() >= deadline:
+                        self.fail("Fixture child did not honor its cleanup marker")
+                    time.sleep(0.05)
+            smoke.require_child_cleanup(root)
+
+    def test_packaged_smoke_prepares_one_self_contained_skill_and_explicit_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "case"
+            tools = root.parent / "structural-fixture-tools"
+            tools.mkdir()
+            with (
+                patch.object(smoke, "prepare_tools", return_value=tools),
+                patch.object(smoke, "run_binary", side_effect=RuntimeError("stop before binary")) as run,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "stop before binary"):
+                    smoke.run_case(Path("unrun-apmx"), root, None, "package", "pass")
+            package = root / "package"
+            self.assertIn("path: ./skills/release-style", (package / "apm.yml").read_text())
+            self.assertIn("imports:\n  - release-style", (package / "handoff.contract.md").read_text())
+            self.assertIn("RELEASE_SKILL_SENTINEL", (package / "skills/release-style/SKILL.md").read_text())
+            self.assertIn("apm: []", (package / "skills/release-style/apm.yml").read_text())
+            self.assertEqual(run.call_args.args[3]["APMX_EXPECT_SKILL"], "1")
+            self.assertFalse((root / "caller/apm.yml").exists())
 
 
 if __name__ == "__main__":

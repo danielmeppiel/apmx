@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -108,18 +110,62 @@ def snapshot(root: Path) -> dict[str, str]:
     return {str(path.relative_to(root)): digest(path) for path in root.rglob("*") if path.is_file()}
 
 
-def run_binary(binary: Path, args: list[str], caller: Path, env: dict[str, str]):
-    result = subprocess.run(
+def run_binary(binary: Path, args: list[str], caller: Path, env: dict[str, str], timeout: float = 90):
+    process = subprocess.Popen(
         [str(binary), *args],
         cwd=caller,
         env=env,
-        input="",
-        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=90,
-        check=False,
+    )
+    output: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    errors: list[OSError] = []
+
+    def read(stream, name):
+        try:
+            for line in stream:
+                output[name].append(line)
+                if (
+                    name == "stdout"
+                    and "Hermetic fixture progress." in line
+                    and env.get("APMX_STREAM_GATE")
+                ):
+                    Path(env["APMX_STREAM_GATE"]).write_text("observed before completion\n", encoding="ascii")
+        except OSError as error:
+            errors.append(error)
+        finally:
+            stream.close()
+
+    readers = [
+        threading.Thread(target=read, args=(process.stdout, "stdout"), daemon=True),
+        threading.Thread(target=read, args=(process.stderr, "stderr"), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+        if env.get("APMX_CHILD_STOP"):
+            Path(env["APMX_CHILD_STOP"]).write_text("smoke watchdog cleanup\n", encoding="ascii")
+        raise
+    finally:
+        for reader in readers:
+            reader.join(timeout=5)
+    undrained = any(reader.is_alive() for reader in readers)
+    if undrained and env.get("APMX_CHILD_STOP"):
+        Path(env["APMX_CHILD_STOP"]).write_text("fixture pipe cleanup after failure\n", encoding="ascii")
+        for reader in readers:
+            reader.join(timeout=5)
+    require(not errors, f"Could not drain frozen process output: {errors}")
+    require(not undrained, "Frozen process left inherited output pipes open")
+    result = subprocess.CompletedProcess(
+        [str(binary), *args], process.returncode, "".join(output["stdout"]), "".join(output["stderr"]),
     )
     require(
         all(marker not in result.stdout + result.stderr for marker in PRIVATE_MARKERS),
@@ -128,12 +174,63 @@ def run_binary(binary: Path, args: list[str], caller: Path, env: dict[str, str])
     return result
 
 
+def child_running(pid: int) -> bool:
+    require(pid > 0, "Invalid fixture child PID")
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x100000, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:
+                return False
+            raise ctypes.WinError(error)
+        try:
+            state = kernel.WaitForSingleObject(handle, 0)
+            require(state in (0, 258), "Could not inspect fixture child termination")
+            return state == 258
+        finally:
+            kernel.CloseHandle(handle)
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "stat="],
+        capture_output=True, text=True, timeout=5, check=False,
+    )
+    require(result.returncode in (0, 1), f"Could not inspect fixture child: {result.stderr}")
+    return bool(result.stdout.strip()) and not result.stdout.strip().startswith("Z")
+
+
+def require_child_cleanup(root: Path) -> None:
+    pid = int((root / "child.pid").read_text(encoding="ascii"))
+    heartbeat = root / "child.heartbeat"
+    before = heartbeat.read_bytes()
+    deadline = time.monotonic() + 2
+    while child_running(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    require(not child_running(pid), "Fixture descendant remains alive after recorded cleanup")
+    time.sleep(0.15)
+    require(heartbeat.read_bytes() == before, "Fixture descendant kept writing after recorded cleanup")
+
+
 def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode: str) -> dict:
     root.mkdir()
     require(not root.resolve().is_relative_to(ROOT.resolve()), "Smoke caller must be outside checkout")
     tools = prepare_tools(root, actor)
     env = isolated_env(root, tools)
     env["APMX_ACTOR_MODE"] = mode
+    env.update({
+        "APMX_CHILD_PID": str(root / "child.pid"),
+        "APMX_CHILD_HEARTBEAT": str(root / "child.heartbeat"),
+        "APMX_CHILD_STOP": str(root / "child.stop"),
+    })
+    if mode == "pass":
+        env["APMX_STREAM_GATE"] = str(root / "actor-stream-observed")
     caller = root / "caller"
     package = root / "package"
     caller.mkdir()
@@ -143,15 +240,32 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
     (package / "apm.yml").write_text(
         "name: release-smoke\nversion: 0.1.0\ndependencies:\n  apm: []\n", encoding="utf-8"
     )
+    imports = ""
+    if selection == "package":
+        skill = package / "skills/release-style"
+        skill.mkdir(parents=True)
+        (skill / "apm.yml").write_text(
+            "name: release-style\nversion: 0.1.0\ndependencies:\n  apm: []\n", encoding="utf-8",
+        )
+        (skill / "SKILL.md").write_text(
+            "---\nname: release-style\ndescription: Hermetic release acceptance fixture.\n---\n"
+            "RELEASE_SKILL_SENTINEL\n", encoding="utf-8",
+        )
+        (package / "apm.yml").write_text(
+            "name: release-smoke\nversion: 0.1.0\ndependencies:\n"
+            "  apm:\n    - path: ./skills/release-style\n", encoding="utf-8",
+        )
+        imports = "imports:\n  - release-style\n"
+        env["APMX_EXPECT_SKILL"] = "1"
     source = caller if selection == "local" else package
     (source / "checks").mkdir()
     shutil.copyfile(FIXTURES / "check.py", source / "checks/check.py")
-    # Forward slashes preserve the absolute interpreter through POSIX sh and cmd.
+    # Forward slashes preserve the absolute interpreter through POSIX and Git-for-Windows sh.
     interpreter = Path(sys.executable).as_posix()
     checker_command = f'"{interpreter}" -I checks/check.py'
     contract = source / "handoff.contract.md"
     contract.write_text(
-        "---\nneeds: notes.md\nproduces: handoff.json\nverify:\n"
+        f"---\nneeds: notes.md\nproduces: handoff.json\n{imports}verify:\n"
         f"  identity: {json.dumps(checker_command)}\n---\n"
         "Read notes.md and write its JSON object to handoff.json without changing any values.\n",
         encoding="utf-8",
@@ -168,7 +282,15 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
         [*args, "--on", "copilot", "--model", "fixture-model", "--allow-host-access"],
         caller, env,
     )
-    code, outcome = {"pass": (21, "UNPROVEN"), "reject": (20, "REJECTED"), "halt": (22, "HALTED")}[mode]
+    if mode == "linger":
+        try:
+            require_child_cleanup(root)
+        finally:
+            Path(env["APMX_CHILD_STOP"]).write_text("fixture cleanup after observation\n", encoding="ascii")
+    code, outcome = {
+        "pass": (21, "UNPROVEN"), "reject": (20, "REJECTED"), "halt": (22, "HALTED"),
+        "quiet": (21, "UNPROVEN"), "linger": (22, "HALTED"),
+    }[mode]
     require(
         result.returncode == code,
         f"{selection}/{mode}: expected {code}, got {result.returncode}\n{result.stdout}\n{result.stderr}",
@@ -193,28 +315,36 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
     require(0 <= record["producer"]["elapsed_seconds"] < 90, "Producer execution was not bounded")
     require(record["producer"]["returncode"] == (7 if mode == "halt" else 0), "Native process exit")
     require(record["native_reported_exit_code"] == (7 if mode == "halt" else 0), "Native envelope exit")
-    require(
-        "Hermetic fixture progress." in result.stdout and "Hermetic fixture finished." in result.stdout,
-        "Public phase/delta narration was not surfaced",
-    )
-    if mode == "halt":
+    if mode == "quiet":
+        require("Hermetic fixture progress." not in result.stdout, "Quiet actor invented narration")
+    else:
+        require(
+            "Hermetic fixture progress." in result.stdout and "Hermetic fixture finished." in result.stdout,
+            "Public phase/delta narration was not surfaced",
+        )
+    if mode == "pass":
+        require(Path(env["APMX_STREAM_GATE"]).exists(), "Public narration was buffered until completion")
+    if mode in {"halt", "linger"}:
         require(bool(record["result"]["stop_reason"]), "Operational halt needs a stop reason")
         require(record["result"]["checks"] == [], "Failed producer must not run checks")
         require(record["artifact"] is None, "Failed producer must not capture an earlier artifact")
+        if mode == "linger":
+            require(record["producer"]["stop_reason"] == "lingering_children", "Missing lingering-child stop")
     else:
         require(record["result"]["stop_reason"] is None, "Unexpected operational stop")
         artifact = Path(record["artifact"]["path"])
         require(artifact.resolve().is_relative_to(run), "Artifact is outside retained run")
         require(record["artifact"]["sha256"] == digest(artifact), "Artifact digest mismatch")
         require(record["artifact"]["size"] == artifact.stat().st_size, "Artifact size mismatch")
-        expected = {"source": "caller", "value": 7 if mode == "pass" else -1}
+        expected = {"source": "caller", "value": -1 if mode == "reject" else 7}
         require(json.loads(artifact.read_bytes()) == expected, "Wrong output identity")
         checks = record["checks"]
         require(len(checks) == 1, "Expected exactly one independent check")
         checked = checks[0]
         require(record["result"]["checks"] == checks, "Final result lost check observations")
         require(record["result"]["artifact"] == record["artifact"], "Final result changed output identity")
-        require(checked["normalized"] == (0 if mode == "pass" else 1), "Incorrect check result")
+        expected_check = 1 if mode == "reject" else 0
+        require(checked["normalized"] == expected_check, "Incorrect check result")
         require(checked["subject_digest"] == digest(artifact), "Checker assessed different bytes")
         require(checked["process"]["pid"] is not None, "Independent checker was not launched")
         require(checked["process"]["cleanup_confirmed"] is True, "Checker cleanup unconfirmed")
@@ -240,7 +370,19 @@ def run_case(binary: Path, root: Path, actor: Path | None, selection: str, mode:
         prepared_root = Path(record["source"]["package"]["root"])
         if prepared_root.resolve() != package.resolve():
             require(not prepared_root.exists(), "Private package not cleaned")
-    transcript = (run / "transcript.log").read_text(encoding="utf-8")
+        require(len(record["imports"]) == 1, "Expected exactly one packaged skill")
+        imported = record["imports"][0]
+        require(imported["name"] == "release-style", "Wrong packaged skill")
+        require(imported["lock_identity"] == "./skills/release-style", "Wrong skill source identity")
+        require(imported["sha256"] == digest(package / "skills/release-style/SKILL.md"), "Skill digest")
+        retained = record["source"]["retained"]
+        require(digest(Path(retained["contract.contract.md"])) == digest(contract), "Retained contract identity")
+        require(digest(Path(retained["apm.lock.yaml"])) == record["lock_sha256"], "Retained package lock identity")
+    transcript_path = run / "transcript.log"
+    require(record["transcript"]["relative_path"] == "transcript.log", "Transcript identity")
+    require(record["transcript"]["sha256"] == digest(transcript_path), "Transcript digest")
+    require(record["transcript"]["size"] == transcript_path.stat().st_size, "Transcript size")
+    transcript = transcript_path.read_text(encoding="utf-8")
     require(not any(marker in transcript for marker in PRIVATE_MARKERS), "Private payload retained")
     calls = [json.loads(line) for line in Path(env["APMX_ACTOR_LOG"]).read_text().splitlines()]
     require(sum("-p" in call["argv"] for call in calls) == 1, "Expected exactly one fixture producer")
@@ -273,7 +415,7 @@ def main() -> None:
         "Smoke must receive a native frozen executable, not a source launcher",
     )
     actor = args.actor.resolve() if args.actor else None
-    with tempfile.TemporaryDirectory(prefix="apmx-frozen-smoke-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="apmx frozen smoke-") as temporary:
         root = Path(temporary).resolve()
         tools = root / "version-tools"
         tools.mkdir()
@@ -290,13 +432,17 @@ def main() -> None:
             for selection in ("local", "package")
             for mode in ("pass", "reject", "halt")
         ]
+        cases += [
+            run_case(binary, root / "local-quiet", actor, "local", "quiet"),
+            run_case(binary, root / "local-linger", actor, "local", "linger"),
+        ]
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(
                 json.dumps({"binary_sha256": digest(binary), "version": args.version, "cases": cases}, indent=2) + "\n",
                 encoding="utf-8",
             )
-    print("Frozen smoke: 6 local/package cases passed; hermetic protocol, NOT live inference.")
+    print("Frozen smoke: 8 local/package cases passed; hermetic protocol, NOT live inference.")
 
 
 if __name__ == "__main__":

@@ -29,17 +29,39 @@ archive root.
 `python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.1.0`
 uses a temporary caller outside the checkout, isolated HOME/config directories,
 and no `PYTHONPATH` or `PYTHONHOME`. It does not import or install the application.
-It rejects source launchers and runs six actual frozen local/package cases:
+It rejects source launchers and runs six mandatory frozen local/package cases:
 passing independent checks produce `UNPROVEN` (21), rejected output 20, and an
 operational producer failure 22. It verifies retained source/output identities,
-record completion, assessment bytes, process cleanup, and unchanged caller and
-package input. The producer poisons its checker; the independent checker must
+record completion, assessment bytes, transcript digest/size, process cleanup,
+and unchanged caller and package input. Each package contains one self-contained
+local skill; import, retained contract, and lock identities are checked. The
+producer poisons its checker; the independent checker must
 still use the baseline copy. Public commentary/final-answer deltas must appear;
 private reasoning/tool sentinels must never appear in output or transcript.
+Passing producers wait for a bounded acknowledgement from the smoke stdout
+reader before completing, proving live delivery rather than only final capture.
+The handshake is test-actor control outside caller/source/home, not an app hook.
+
+Two additional frozen cases cover a quiet, result-only producer and a producer
+that exits while leaving a heartbeat child. The latter must halt with
+`lingering_children`, confirm cleanup, and leave the independently observed child
+terminated with no continuing heartbeat. These **eight** cases run on all five
+targets, including Windows; none is a help-only or skipped execution fallback.
+Fixture children have their own finite lifetime and an emergency fixture-only
+stop marker, which is written only after cleanup observations (or test failure).
+
+Short deadline/timeout behavior is covered separately by native-platform source
+tests using the existing `ProcessRequest` API. The frozen gate does **not** claim
+end-to-end default-duration timeout coverage. No public timeout flags, startup
+hooks, source monkeypatching, or shortened frozen limits are introduced.
 
 Copilot alone is an explicitly identified **hermetic JSONL protocol actor**,
 not live model inference. The genuine independent fixture checker uses the
 verification runner's Python interpreter, an external test prerequisite.
+Independent checks retain `sh -c` semantics; Windows requires Git for Windows'
+`sh.exe`. The shell and checker interpreter are not bundled in the app archive.
+The interpreter's absolute path is quoted, and caller/package/tool paths include
+spaces to exercise native argument handling.
 On Windows, build a native actor with
 `uv run --frozen --extra dev --extra build python scripts/smoke.py --build-actor dist/smoke-actor`
 and pass `--actor /absolute/copilot.exe` to smoke. This does not test or authorize
@@ -61,7 +83,7 @@ Fresh native runners download the **actual draft release assets by asset ID**.
 The manifest digest is anchored in the draft job's output, and the full candidate
 asset identity fingerprint must remain unchanged. No app sources or app
 installation are present in these verification checkouts. Each runner verifies
-checksums, extracts with traversal/link/special-file guards, and repeats all six
+checksums, extracts with traversal/link/special-file guards, and repeats all eight
 functional cases. Publication requires every downloaded-asset job to pass and
 rechecks repository privacy, tag identity, draft identity, and asset fingerprint.
 
