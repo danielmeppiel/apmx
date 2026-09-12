@@ -9,7 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from apmx.utils.git_env import get_git_executable
+from apmx.utils.git_env import get_git_executable, git_long_paths_args
 from apmx.utils.subprocess_env import external_process_env
 
 from .events import HEARTBEAT_SECONDS, EventEmitter
@@ -259,6 +259,7 @@ def local_git(
         ProcessRequest(
             (
                 executable,
+                *git_long_paths_args(),
                 "-c",
                 f"core.hooksPath={os.devnull}",
                 "-c",

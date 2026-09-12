@@ -366,6 +366,47 @@ def test_local_git_uses_trusted_lookup_and_preserves_loader_restoration_inputs(
     assert "GIT_DIR" not in requests[0].env
 
 
+def test_local_git_applies_only_process_scoped_native_path_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests = []
+    monkeypatch.setattr(process, "get_git_executable", lambda: "/trusted/git")
+    monkeypatch.setattr(
+        process, "git_long_paths_args", lambda: ["-c", "core.longpaths=true"]
+    )
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.extraheader")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "sensitive-fixture")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "untrusted-fixture")
+
+    def observe(request, **kwargs):
+        requests.append(request)
+        return ProcessObservation(0)
+
+    monkeypatch.setattr(process, "supervise_process", observe)
+    process.local_git(tmp_path, "status")
+    request = requests[0]
+    assert request.argv[1:3] == ("-c", "core.longpaths=true")
+    assert f"core.hooksPath={os.devnull}" in request.argv
+    assert "core.fsmonitor=false" in request.argv
+    assert "GIT_SSH_COMMAND" not in request.env
+    assert "GIT_CONFIG_COUNT" not in request.env
+    assert os.environ["GIT_CONFIG_VALUE_0"] == "sensitive-fixture"
+
+
+def test_native_local_git_preserves_long_workspace_bytes(tmp_path: Path) -> None:
+    root = tmp_path / "long-workspace"
+    while len(str(root)) < 240:
+        root /= "captured-input"
+    root.mkdir(parents=True)
+    (root / "input.txt").write_bytes(b"exact baseline\r\n")
+    process.local_git(root, "init", "--quiet", "--template=")
+    process.local_git(root, "add", "--", "input.txt")
+    process.local_git(root, "commit", "--quiet", "-m", "Long path baseline")
+    assert process.local_git(root, "show", "HEAD:input.txt") == b"exact baseline\r\n"
+    assert b"core.longpaths" not in (root / ".git/config").read_bytes()
+
+
 def test_durable_atomic_writer_syncs_file_and_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

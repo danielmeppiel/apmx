@@ -55,6 +55,9 @@ On Windows, only the APM child receives a process-scoped `core.longpaths=true`
 Git setting, matching the pinned backend's own Git-cache convention. Existing
 indexed Git configuration and authentication entries are preserved; malformed
 configuration is refused, not reset. No global Git configuration is changed.
+The separate local baseline Git adapter uses the same Windows-only filesystem
+option on its command line while still stripping inherited Git overrides and
+disabling hooks, filesystem monitors, and signing.
 When adding a not-yet-declared contract, its declaration is appended to that
 owned consumer manifest before full native resolution. Existing pins are retained
 and compared after installation; the publisher's graph is never first resolved
