@@ -44,6 +44,10 @@ owned manifest snapshot with `--root` pointing to that same owned directory,
 `--only apm --target agent-skills --no-trust-bin`, and child-only
 `APM_NO_SCRIPTS=1`. Relative local declarations and corresponding lock coordinates
 are anchored before native replay; original caller/package files remain unchanged.
+Staging uses a compact, private system-temporary directory rather than extending
+the caller's path: native APM's transactional Git paths can exceed Windows Git
+limits under a deep checkout. The temporary parent must be outside the caller and
+source; all staged files are removed through the existing guarded cleanup path.
 When adding a not-yet-declared contract, its declaration is appended to that
 owned consumer manifest before full native resolution. Existing pins are retained
 and compared after installation; the publisher's graph is never first resolved

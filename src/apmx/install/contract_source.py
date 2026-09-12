@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from uuid import uuid4
+import tempfile
 
 from apmx.contracts.frontend import admit_caller_policy, package_contract_path, parse_contract
 from apmx.contracts.imports import (
@@ -23,11 +23,16 @@ from apmx.deps.lockfile import resolve_lockfile_path_for_read
 
 @contextmanager
 def _private_root(caller_root: Path, original_root: Path | None) -> Iterator[Path]:
-    parent = caller_root
-    if original_root is not None and parent.is_relative_to(original_root):
-        parent = original_root.parent
-    directory = parent / (".apmx-source-" + uuid4().hex)
-    directory.mkdir(mode=0o700)
+    parent = Path(tempfile.gettempdir()).resolve()
+    if parent.is_relative_to(caller_root) or (
+        original_root is not None and parent.is_relative_to(original_root)
+    ):
+        raise ContractError(
+            "Temporary package staging must be outside the caller and source.",
+            code="source_escape",
+        )
+    # Native APM adds deep transactional Git paths; do not amplify caller depth.
+    directory = Path(tempfile.mkdtemp(prefix="apmx-", dir=parent))
     try:
         yield directory
     finally:

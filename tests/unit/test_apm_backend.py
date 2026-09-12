@@ -136,6 +136,45 @@ def test_add_package_request_rejects_invalid_dependencies(tmp_path, section):
     assert manifest.read_bytes() == before
 
 
+def test_native_staging_does_not_inherit_caller_path_length(tmp_path):
+    from apmx.install.contract_source import _private_root
+
+    caller = tmp_path / ("deep-caller-" * 12)
+    caller.mkdir()
+    with _private_root(caller, None) as stage:
+        assert not stage.is_relative_to(caller)
+        assert len(str(stage)) < len(str(caller))
+        assert stage.is_dir()
+    assert not stage.exists()
+
+
+def test_native_staging_cleans_up_after_failure(tmp_path):
+    from apmx.install.contract_source import _private_root
+
+    with pytest.raises(RuntimeError, match="fixture failure"):
+        with _private_root(tmp_path, None) as stage:
+            (stage / "partial-install").write_text("partial")
+            raise RuntimeError("fixture failure")
+    assert not stage.exists()
+
+
+@pytest.mark.parametrize("inside", ["caller", "source"])
+def test_native_staging_refuses_temporary_parent_inside_originals(tmp_path, monkeypatch, inside):
+    from apmx.install.contract_source import _private_root
+
+    caller = tmp_path / "caller"
+    source = tmp_path / "source"
+    caller.mkdir()
+    source.mkdir()
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / inside))
+    with pytest.raises(ContractError) as rejected:
+        with _private_root(caller, source):
+            pytest.fail("Unsafe temporary parent was accepted")
+    assert rejected.value.code == "source_escape"
+    assert not list(caller.iterdir())
+    assert not list(source.iterdir())
+
+
 def test_frozen_backend_cannot_escape_through_symlink(tmp_path, monkeypatch):
     from apmx.install.apm_backend import locate_backend
 

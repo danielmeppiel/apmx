@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -77,9 +78,11 @@ def test_consumer_lock_wins_for_packaged_contract(fixture, tmp_path):
     with prepare_contract_source(
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
     ) as source:
+        assert not source.imports_root.is_relative_to(caller)
         with prepare_imports(
             caller, source.root / _contract(package), source=source, planning=False, limits=LIMITS
         ) as (root, identity):
+            assert not root.is_relative_to(caller)
             plan = plan_contract(
                 Path(_contract(package)), caller, harness="copilot", source=source,
                 imports_root=root, apm_backend=identity,
@@ -273,27 +276,33 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
         f"    - git: {url}\n      ref: v9\n"
     )
     trace = tmp_path / "native-git-trace.jsonl"
-    generated = subprocess.run(
-        [
-            str(locate_backend()), "install", "--root", str(caller),
-            "--only", "apm", "--target", "agent-skills", "--no-trust-bin",
-        ],
-        cwd=caller,
-        env={
-            **os.environ, "APM_NO_SCRIPTS": "1", "APM_PROGRESS": "never",
-            "GIT_TRACE2_EVENT": str(trace),
-        },
-        capture_output=True, text=True, timeout=120, check=False,
-    )
-    errors = []
-    if trace.exists():
-        for line in trace.read_text(encoding="utf-8").splitlines():
-            event = json.loads(line)
-            if event.get("event") == "error":
-                errors.append(str(event.get("msg", "")))
-    assert generated.returncode == 0, redact_git_diagnostic(
-        generated.stdout + generated.stderr + "\n".join(errors)
-    )
+    with tempfile.TemporaryDirectory(prefix="apmx-fixture-") as temporary:
+        generation_root = Path(temporary)
+        shutil.copy2(caller / "apm.yml", generation_root / "apm.yml")
+        generated = subprocess.run(
+            [
+                str(locate_backend()), "install", "--root", str(generation_root),
+                "--only", "apm", "--target", "agent-skills", "--no-trust-bin",
+            ],
+            cwd=generation_root,
+            env={
+                **os.environ, "APM_NO_SCRIPTS": "1", "APM_PROGRESS": "never",
+                "GIT_TRACE2_EVENT": str(trace),
+            },
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        errors = []
+        if trace.exists():
+            for line in trace.read_text(encoding="utf-8").splitlines():
+                event = json.loads(line)
+                if event.get("event") == "error":
+                    errors.append(str(event.get("msg", "")))
+        assert generated.returncode == 0, redact_git_diagnostic(
+            generated.stdout + generated.stderr + "\n".join(errors)
+        )
+        for name in ("apm.yml", "apm.lock.yaml"):
+            shutil.copy2(generation_root / name, caller / name)
+        shutil.copytree(generation_root / "apm_modules", caller / "apm_modules")
     (package / "apm.yml").write_text(
         "name: packaged-handoff\nversion: 0.1.0\ndependencies:\n  apm:\n"
         f"    - git: {url}\n      ref: publisher-version-does-not-exist\n"
@@ -303,9 +312,11 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
     with prepare_contract_source(
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
     ) as source:
+        assert not source.imports_root.is_relative_to(caller)
         with prepare_imports(
             caller, source.root / _contract(package), source=source, planning=False, limits=LIMITS
         ) as (root, identity):
+            assert not root.is_relative_to(caller)
             plan = plan_contract(
                 Path(_contract(package)), caller, harness="copilot", source=source,
                 imports_root=root, apm_backend=identity,
