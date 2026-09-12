@@ -1,0 +1,116 @@
+name: Native CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+    inputs:
+      candidate:
+        description: Immutable candidate commit for release builds
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.26"
+  UV_NO_CONFIG: "true"
+  UV_DEFAULT_INDEX: https://pypi.org/simple
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.project.outputs.matrix }}
+      version: ${{ steps.project.outputs.version }}
+      sha: ${{ steps.project.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - id: project
+        name: Validate standalone interface and public dependency sources
+        run: python scripts/release.py validate
+
+  native:
+    needs: validate
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validate.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install pinned dependency manager from the public index
+        run: python -m pip --isolated --disable-pip-version-check install --index-url https://pypi.org/simple "uv==$UV_VERSION"
+      - name: Install the frozen public lock
+        run: uv sync --frozen --extra dev --extra build
+      - name: Run application and infrastructure unit tests
+        run: uv run --frozen --extra dev --extra build python -m pytest tests/unit tests/release -q
+      - name: Build native Windows hermetic protocol actor
+        if: runner.os == 'Windows'
+        run: uv run --frozen --extra dev --extra build python scripts/smoke.py --build-actor dist/smoke-actor
+      - name: Freeze and archive the standalone application
+        id: build
+        run: uv run --frozen --extra dev --extra build python scripts/release.py build --target "$TARGET"
+      - name: Verify checksum and safely extract outside the checkout
+        id: extract
+        env:
+          ARCHIVE: ${{ steps.build.outputs.archive }}
+        run: python scripts/release.py extract --archive "$ARCHIVE" --destination "$RUNNER_TEMP/frozen-bundle"
+      - name: Exercise extracted binary with real independent checks
+        env:
+          BUNDLE: ${{ steps.extract.outputs.bundle }}
+        run: |
+          args=()
+          executable=apmx
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            executable=apmx.exe
+            args+=(--actor "$GITHUB_WORKSPACE/dist/smoke-actor/copilot.exe")
+          fi
+          python scripts/smoke.py --binary "$BUNDLE/$executable" --version "$VERSION" \
+            --report "$RUNNER_TEMP/build-smoke.json" "${args[@]}"
+      - name: Retain native archives and checksums
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apmx-${{ matrix.target }}
+          path: dist/assets/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain Windows protocol actor as test support, not a release asset
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hermetic-copilot-windows-x86_64
+          path: dist/smoke-actor/copilot.exe
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain frozen acceptance evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-smoke-${{ matrix.target }}
+          path: ${{ runner.temp }}/build-smoke.json
+          if-no-files-found: error
+          retention-days: 7

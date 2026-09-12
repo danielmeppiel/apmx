@@ -1,0 +1,177 @@
+name: Private verified release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vMAJOR.MINOR.PATCH tag to build, verify and publish
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    if: github.repository == 'danielmeppiel/apmx' && github.event.repository.private
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.project.outputs.sha }}
+      version: ${{ steps.project.outputs.version }}
+      matrix: ${{ steps.project.outputs.matrix }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Validate the explicit version, tag and immutable commit
+        id: project
+        run: python scripts/release.py validate --tag "$RELEASE_TAG"
+
+  build:
+    needs: candidate
+    uses: ./.github/workflows/ci.yml
+    with:
+      candidate: ${{ needs.candidate.outputs.sha }}
+    permissions:
+      contents: read
+
+  draft:
+    needs: [candidate, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+      manifest_sha: ${{ steps.draft.outputs.manifest_sha }}
+      assets_fingerprint: ${{ steps.draft.outputs.assets_fingerprint }}
+    env:
+      VERSION: ${{ needs.candidate.outputs.version }}
+      COMMIT: ${{ needs.candidate.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: apmx-*
+          path: ${{ runner.temp }}/candidate-assets
+          merge-multiple: true
+      - name: Create private draft with all candidate assets
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.promotion draft --version "$VERSION" --commit "$COMMIT" \
+            --assets "$RUNNER_TEMP/candidate-assets"
+
+  verify-downloaded:
+    needs: [candidate, draft]
+    name: Downloaded ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.candidate.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.candidate.outputs.version }}
+      COMMIT: ${{ needs.candidate.outputs.sha }}
+      RELEASE_ID: ${{ needs.draft.outputs.release_id }}
+      MANIFEST_SHA: ${{ needs.draft.outputs.manifest_sha }}
+      ASSETS_FINGERPRINT: ${{ needs.draft.outputs.assets_fingerprint }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check out verification helpers only, not application sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts
+      - name: Supply the external fixture checker interpreter
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Fetch native Windows protocol fixture from this workflow run
+        if: runner.os == 'Windows'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: hermetic-copilot-windows-x86_64
+          path: ${{ runner.temp }}/hermetic-actor
+      - name: Download exact draft asset IDs, verify anchored hashes and extract safely
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.promotion download --version "$VERSION" --commit "$COMMIT" \
+            --release-id "$RELEASE_ID" --manifest-sha "$MANIFEST_SHA" \
+            --assets-fingerprint "$ASSETS_FINGERPRINT" --target "$TARGET" \
+            --destination "$RUNNER_TEMP/released-assets"
+      - name: Exercise downloaded release bytes outside checkout with no app installation
+        env:
+          BUNDLE: ${{ steps.download.outputs.bundle }}
+        run: |
+          args=()
+          executable=apmx
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            executable=apmx.exe
+            args+=(--actor "$RUNNER_TEMP/hermetic-actor/copilot.exe")
+          fi
+          python scripts/smoke.py --binary "$BUNDLE/$executable" --version "$VERSION" \
+            --report "$RUNNER_TEMP/released-smoke.json" "${args[@]}"
+      - name: Retain downloaded-asset acceptance evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: released-smoke-${{ matrix.target }}
+          path: ${{ runner.temp }}/released-smoke.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: [candidate, draft, verify-downloaded]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.candidate.outputs.version }}
+      COMMIT: ${{ needs.candidate.outputs.sha }}
+      RELEASE_ID: ${{ needs.draft.outputs.release_id }}
+      ASSETS_FINGERPRINT: ${{ needs.draft.outputs.assets_fingerprint }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Publish only the unchanged, fully verified private draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.promotion publish --version "$VERSION" --commit "$COMMIT" \
+            --release-id "$RELEASE_ID" --assets-fingerprint "$ASSETS_FINGERPRINT"
