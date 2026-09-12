@@ -230,7 +230,9 @@ def snapshot_manifest(original: Path, stage: Path, limits: ContractLimits) -> bo
 def add_package_request(stage: Path, package_ref: str, limits: ContractLimits) -> None:
     """Add a declaration, not a resolved lock entry; native APM resolves the graph."""
     _, data, _ = read_project_manifest(stage, limits)
-    dependencies = data.setdefault("dependencies", {})
+    dependencies = data.get("dependencies")
+    if dependencies is None:
+        dependencies = data["dependencies"] = {}
     dependencies.setdefault("apm", []).append(package_ref)
     dump_yaml(data, stage / "apm.yml")
 

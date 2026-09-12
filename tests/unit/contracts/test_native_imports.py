@@ -272,16 +272,28 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
         "name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n"
         f"    - git: {url}\n      ref: v9\n"
     )
+    trace = tmp_path / "native-git-trace.jsonl"
     generated = subprocess.run(
         [
             str(locate_backend()), "install", "--root", str(caller),
             "--only", "apm", "--target", "agent-skills", "--no-trust-bin",
         ],
         cwd=caller,
-        env={**os.environ, "APM_NO_SCRIPTS": "1", "APM_PROGRESS": "never"},
+        env={
+            **os.environ, "APM_NO_SCRIPTS": "1", "APM_PROGRESS": "never",
+            "GIT_TRACE2_EVENT": str(trace),
+        },
         capture_output=True, text=True, timeout=120, check=False,
     )
-    assert generated.returncode == 0, redact_git_diagnostic(generated.stdout + generated.stderr)
+    errors = []
+    if trace.exists():
+        for line in trace.read_text(encoding="utf-8").splitlines():
+            event = json.loads(line)
+            if event.get("event") == "error":
+                errors.append(str(event.get("msg", "")))
+    assert generated.returncode == 0, redact_git_diagnostic(
+        generated.stdout + generated.stderr + "\n".join(errors)
+    )
     (package / "apm.yml").write_text(
         "name: packaged-handoff\nversion: 0.1.0\ndependencies:\n  apm:\n"
         f"    - git: {url}\n      ref: publisher-version-does-not-exist\n"
@@ -304,3 +316,20 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
             assert plan.imported_skills[0].verified_package_hash
     assert source_hash(package, LIMITS) == source_before
     assert all((caller / name).read_bytes() == data for name, data in before.items())
+
+
+def test_native_source_bootstrap_accepts_null_consumer_dependencies(fixture):
+    caller, package = fixture
+    manifest = caller / "apm.yml"
+    manifest.write_text("name: consumer\nversion: 1.0.0\ndependencies: null\n")
+    before = manifest.read_bytes()
+    source_before = source_hash(package, LIMITS)
+    with prepare_contract_source(
+        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        assert source.root.is_dir()
+        assert source.apm_backend["version"] == "0.30.0"
+        assert (source.imports_root / "apm.lock.yaml").is_file()
+    assert manifest.read_bytes() == before
+    assert not (caller / "apm.lock.yaml").exists()
+    assert source_hash(package, LIMITS) == source_before

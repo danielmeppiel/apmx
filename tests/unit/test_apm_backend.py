@@ -97,6 +97,45 @@ def test_real_backend_replays_anchored_consumer_lock(tmp_path):
     assert all((caller / name).read_bytes() == raw for name, raw in before.items())
 
 
+@pytest.mark.parametrize("section", [
+    "", "dependencies: null\n", "dependencies: {}\n", "dependencies: {apm: []}\n",
+])
+def test_add_package_request_accepts_empty_dependencies(tmp_path, section):
+    from apmx.contracts.models import ContractLimits
+    from apmx.install.apm_backend import add_package_request, snapshot_manifest
+    from apmx.utils.yaml_io import load_yaml
+
+    caller = tmp_path / "caller"
+    stage = tmp_path / "stage"
+    caller.mkdir()
+    stage.mkdir()
+    manifest = caller / "apm.yml"
+    manifest.write_text("name: caller\nversion: 1.0.0\n" + section)
+    before = manifest.read_bytes()
+    limits = ContractLimits()
+    assert not snapshot_manifest(caller, stage, limits)
+    add_package_request(stage, "example/contract", limits)
+    assert load_yaml(stage / "apm.yml")["dependencies"]["apm"] == ["example/contract"]
+    assert manifest.read_bytes() == before
+
+
+@pytest.mark.parametrize("section", [
+    "dependencies: invalid", "dependencies: []", "dependencies: {apm: null}",
+    "dependencies: {apm: invalid}", "dependencies: {apm: {name: invalid}}",
+])
+def test_add_package_request_rejects_invalid_dependencies(tmp_path, section):
+    from apmx.contracts.models import ContractLimits
+    from apmx.install.apm_backend import add_package_request
+
+    manifest = tmp_path / "apm.yml"
+    manifest.write_text("name: caller\nversion: 1.0.0\n" + section)
+    before = manifest.read_bytes()
+    with pytest.raises(ContractError) as rejected:
+        add_package_request(tmp_path, "example/contract", ContractLimits())
+    assert rejected.value.code == "invalid_manifest"
+    assert manifest.read_bytes() == before
+
+
 def test_frozen_backend_cannot_escape_through_symlink(tmp_path, monkeypatch):
     from apmx.install.apm_backend import locate_backend
 
