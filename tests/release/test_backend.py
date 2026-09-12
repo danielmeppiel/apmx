@@ -64,6 +64,7 @@ class BackendTests(unittest.TestCase):
         for field, value in (
             ("root", "../apm"), ("archive", "https://host/file"),
             ("sha256", "not-a-hash"), ("executable", "../apm"),
+            ("version_output", "line one\nline two"), ("version_output", ""),
         ):
             pin = copy.deepcopy(self.pin)
             pin["assets"]["linux-arm64"][field] = value
@@ -176,14 +177,31 @@ class BackendTests(unittest.TestCase):
                         release.provision_backend("linux-arm64", case / "backend")
                 self.assertFalse((case / "backend").exists())
 
-    def test_version_probe_requires_both_exact_version_and_source(self):
-        for output in ("unrelated 0.30.0", "apm 0.30.0 (fffffff)", "apm 0.0.0 (8c2e0d9)"):
-            with patch.object(
+    def test_version_probe_requires_exact_platform_specific_official_output(self):
+        for target, asset in self.pin["assets"].items():
+            expected = asset["version_output"]
+            with self.subTest(target=target), patch.object(
                 release.subprocess, "run",
-                return_value=subprocess.CompletedProcess([], 0, output, ""),
+                return_value=subprocess.CompletedProcess([], 0, expected + "\n", ""),
             ):
-                with self.assertRaisesRegex(ValueError, "version/source mismatch"):
-                    release.probe_backend(self.root / "apm", self.pin)
+                self.assertEqual(release.probe_backend(self.root / asset["executable"], self.pin, target), expected)
+            wrong = {
+                expected.replace(self.pin["version"], "99.99.99"),
+                "arbitrary prefix " + expected,
+                expected + " trailing text",
+            }
+            if target.startswith("windows-"):
+                wrong.add(expected + f" ({self.pin['source_commit'][:7]})")
+            else:
+                wrong.add(expected.replace(f" ({self.pin['source_commit'][:7]})", ""))
+                wrong.add(expected.replace(self.pin["source_commit"][:7], "fffffff"))
+            for output in wrong:
+                with self.subTest(target=target, output=output), patch.object(
+                    release.subprocess, "run",
+                    return_value=subprocess.CompletedProcess([], 0, output, ""),
+                ):
+                    with self.assertRaisesRegex(ValueError, "version/source mismatch"):
+                        release.probe_backend(self.root / asset["executable"], self.pin, target)
 
 
 if __name__ == "__main__":

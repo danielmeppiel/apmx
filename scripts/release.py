@@ -57,6 +57,10 @@ def read_backend_pin(path: Path = BACKEND_PIN) -> dict:
             or asset.get("archive") != root + (".zip" if windows else ".tar.gz")
             or asset.get("executable") != ("apm.exe" if windows else "apm")
             or not re.fullmatch(r"[0-9a-f]{64}", asset.get("sha256", ""))
+            or not isinstance(asset.get("version_output"), str)
+            or not asset["version_output"]
+            or asset["version_output"] != asset["version_output"].strip()
+            or any(ord(character) < 32 for character in asset["version_output"])
         ):
             raise ValueError(f"Invalid APM backend asset pin: {target}")
     return pin
@@ -86,7 +90,7 @@ def check_backend(backend: Path, pin: dict, target: str) -> Path:
     return executable
 
 
-def probe_backend(executable: Path, pin: dict) -> str:
+def probe_backend(executable: Path, pin: dict, target: str) -> str:
     with tempfile.TemporaryDirectory(prefix="apmx-apm-version-") as temporary:
         system_keys = {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "SYSTEMDRIVE"}
         env = {key: value for key, value in os.environ.items() if key.upper() in system_keys}
@@ -102,9 +106,7 @@ def probe_backend(executable: Path, pin: dict) -> str:
             capture_output=True, text=True, encoding="utf-8", timeout=30, check=True,
         )
     output = result.stdout.strip()
-    if not re.search(
-        rf"\b{re.escape(pin['version'])}\s+\({pin['source_commit'][:7]}\)", output,
-    ):
+    if output != pin["assets"][target]["version_output"]:
         raise ValueError(f"APM backend version/source mismatch: {output!r}")
     return output
 
@@ -149,7 +151,7 @@ def provision_backend(target: str, destination: Path) -> dict:
         extracted = _extract_payload(archive, work / "extracted", target, asset["root"])
         executable = check_backend(extracted, pin, target)
         if native_target() == target:
-            probe_backend(executable, pin)
+            probe_backend(executable, pin, target)
         provenance = backend_provenance(extracted, pin, target)
         extracted.rename(destination)
     return provenance

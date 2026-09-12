@@ -31,7 +31,11 @@ archive root.
 download the official native archive from `microsoft/apm`, verify its pinned
 SHA-256 before extraction, reject unsafe paths/links/special files, require the
 expected root, native executable and upstream license, and execute `--version`
-to check the pinned version and source commit on the native runner. HTTPS
+to compare the exact platform-specific `version_output` in the pin. Official
+Unix assets print the version and short source commit; the official Windows
+asset prints only the version. Its source identity is anchored by the pinned
+official archive/source provenance, not an invented printed commit. Missing
+Unix commits, wrong versions, and arbitrary output prefixes/suffixes refuse. HTTPS
 certificate verification remains enabled. All upstream resources and license
 files remain unmodified inside the bundled onedir.
 

@@ -673,7 +673,7 @@ def main() -> None:
     target = release.native_target()
     pin = release.check_backend_metadata(binary.parent, target)
     backend = binary.parent / "libexec/apm" / pin["assets"][target]["executable"]
-    backend_version = release.probe_backend(backend, pin)
+    backend_version = release.probe_backend(backend, pin, target)
     with tempfile.TemporaryDirectory(prefix="apmx frozen smoke-") as temporary:
         root = Path(temporary).resolve()
         tools = root / "version-tools"
