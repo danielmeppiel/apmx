@@ -26,6 +26,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from ..utils.subprocess_env import run_external
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -175,7 +176,7 @@ class AzureCliBearerProvider:
         if not self._az_command:
             return None
         try:
-            result = subprocess.run(
+            result = run_external(
                 [self._az_command, "account", "show", "--query", "tenantId", "-o", "tsv"],
                 capture_output=True,
                 text=True,
@@ -223,7 +224,7 @@ class AzureCliBearerProvider:
         ]
 
         try:
-            result = subprocess.run(
+            result = run_external(
                 cmd,
                 capture_output=True,
                 text=True,

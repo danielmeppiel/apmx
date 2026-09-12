@@ -9,12 +9,12 @@ from apmx.contracts.models import ContractError, ContractLimits, ContractSource,
 from apmx.models.dependency.reference import DependencyReference
 from apmx.models.dependency.selection import parse_dependency_entry
 from apmx.utils.content_hash import compute_package_hash, verify_package_hash
-from apmx.utils.path_security import ensure_path_within, has_symlink_component
+from apmx.utils.path_security import ensure_path_within, has_symlink_component, is_link_or_reparse
 
 
 def bounded_tree(root: Path, limits: ContractLimits) -> tuple[str, ...]:
     """Reject unsafe or unbounded trees before any whole-package hash or copy."""
-    if not root.is_dir() or root.is_symlink():
+    if not root.is_dir() or is_link_or_reparse(root):
         raise ContractError("Package source must be a regular directory.", code="invalid_source")
     pending = [root]
     count = total = 0
@@ -28,7 +28,7 @@ def bounded_tree(root: Path, limits: ContractLimits) -> tuple[str, ...]:
                         "Package tree exceeds the entry limit.", code="source_limit"
                     )
                 path = Path(entry.path)
-                if entry.is_symlink():
+                if is_link_or_reparse(path):
                     raise ContractError(
                         "Package trees cannot contain symlinks.", code="source_escape"
                     )

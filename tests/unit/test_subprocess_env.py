@@ -1,0 +1,50 @@
+from unittest.mock import Mock
+import sys
+
+from apmx.contracts.models import ProcessRequest
+from apmx.contracts.process import supervise_process
+from apmx.utils.git_env import git_subprocess_env
+from apmx.utils import subprocess_env
+
+
+def test_frozen_child_restores_original_loader_paths(monkeypatch):
+    monkeypatch.setattr(subprocess_env.sys, "frozen", True, raising=False)
+    env = {
+        "LD_LIBRARY_PATH": "/bundle",
+        "LD_LIBRARY_PATH_ORIG": "/user-libs",
+        "DYLD_LIBRARY_PATH": "/bundle",
+        "KEEP": "ordinary",
+    }
+    assert subprocess_env.external_process_env(env) == {
+        "LD_LIBRARY_PATH": "/user-libs", "KEEP": "ordinary",
+    }
+    assert env["LD_LIBRARY_PATH"] == "/bundle"
+
+
+def test_external_auth_probe_uses_loader_helper(monkeypatch):
+    monkeypatch.setattr(subprocess_env.sys, "frozen", True, raising=False)
+    run = Mock()
+    monkeypatch.setattr(subprocess_env.subprocess, "run", run)
+    subprocess_env.run_external(
+        ["gh", "auth", "token"], env={"LD_LIBRARY_PATH": "/bundle", "SAFE": "value"}, timeout=5,
+    )
+    assert run.call_args.kwargs["env"] == {"SAFE": "value"}
+    assert run.call_args.kwargs["timeout"] == 5
+
+
+def test_repeated_git_env_preparation_restores_loader_once(monkeypatch, tmp_path):
+    monkeypatch.setattr(subprocess_env.sys, "frozen", True, raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/user-libs")
+    env = git_subprocess_env(git_subprocess_env())
+    output = bytearray()
+    result = supervise_process(
+        ProcessRequest(
+            (sys.executable, "-c", "import os; print(os.environ['LD_LIBRARY_PATH'])"),
+            tmp_path, 10, env,
+        ),
+        on_bytes=lambda stream, chunk: output.extend(chunk) if stream == "stdout" else None,
+    )
+    assert result.returncode == 0
+    assert result.cleanup_confirmed
+    assert bytes(output).strip() == b"/user-libs"

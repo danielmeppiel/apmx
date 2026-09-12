@@ -343,10 +343,10 @@ def test_record_redacts_credentials_in_package_reference(tmp_path: Path) -> None
     assert json.loads(retained)["source"]["package"]["package_ref"]
 
 
-def test_local_git_uses_trusted_lookup_and_unfrozen_child_environment(
+def test_local_git_uses_trusted_lookup_and_preserves_loader_restoration_inputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Frozen execution must not hand bundled library paths to system Git."""
+    """The supervisor, not request construction, restores child library paths."""
     requests = []
     monkeypatch.setattr(process, "get_git_executable", lambda: "/trusted/git")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -361,7 +361,8 @@ def test_local_git_uses_trusted_lookup_and_unfrozen_child_environment(
     monkeypatch.setattr(process, "supervise_process", observe)
     assert process.local_git(tmp_path, "status") == b""
     assert requests[0].argv[0] == "/trusted/git"
-    assert requests[0].env["LD_LIBRARY_PATH"] == "/system/lib"
+    assert requests[0].env["LD_LIBRARY_PATH"] == "/bundle/_internal"
+    assert requests[0].env["LD_LIBRARY_PATH_ORIG"] == "/system/lib"
     assert "GIT_DIR" not in requests[0].env
 
 

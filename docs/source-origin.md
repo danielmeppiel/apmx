@@ -62,8 +62,9 @@ overwriting prior evidence. Producer and checker workspaces are separate.
 POSIX retains bounded original-process-group supervision, without claiming
 containment of descendants that escape that group. Windows uses a separate
 native process adapter and direct `.exe` arguments; `.cmd`/`.bat` prompt
-interpolation is unsupported. On Windows, check strings use POSIX-style quoting
-and forward-slash paths to a direct executable, not shell pipelines. Frozen
+interpolation is unsupported. Checks preserve `sh -c` semantics on all platforms;
+Windows requires Git for Windows' native `sh.exe`. Use POSIX-style quoting
+and forward-slash paths for Windows checker executables. Frozen
 children restore external loader paths rather than inheriting bundled libraries.
 
 No sandbox, cryptographic evidence signature, notarization, publisher signature,

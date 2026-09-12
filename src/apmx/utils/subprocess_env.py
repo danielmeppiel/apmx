@@ -33,6 +33,9 @@ from __future__ import annotations
 
 import os
 import sys
+import subprocess
+import threading
+from contextlib import contextmanager
 from collections.abc import Mapping
 
 # Runtime-library search-path variables that PyInstaller's bootloader
@@ -45,6 +48,52 @@ _PYINSTALLER_MANAGED_LIBRARY_VARS: tuple[str, ...] = (
     "DYLD_LIBRARY_PATH",  # macOS dynamic library search path
     "DYLD_FRAMEWORK_PATH",  # macOS framework search path
 )
+_DLL_SEARCH_LOCK = threading.RLock()
+
+
+@contextmanager
+def external_dll_search():
+    """Temporarily remove the frozen Windows DLL directory during child creation."""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        yield
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetDllDirectoryW.argtypes = [wintypes.DWORD, wintypes.LPWSTR]
+    kernel.GetDllDirectoryW.restype = wintypes.DWORD
+    kernel.SetDllDirectoryW.argtypes = [wintypes.LPCWSTR]
+    kernel.SetDllDirectoryW.restype = wintypes.BOOL
+    with _DLL_SEARCH_LOCK:
+        ctypes.set_last_error(0)
+        size = kernel.GetDllDirectoryW(0, None)
+        if not size and ctypes.get_last_error():
+            raise ctypes.WinError(ctypes.get_last_error())
+        previous = ctypes.create_unicode_buffer(size + 1)
+        if size and not kernel.GetDllDirectoryW(len(previous), previous):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not kernel.SetDllDirectoryW(None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            yield
+        finally:
+            if not kernel.SetDllDirectoryW(previous.value or None):
+                raise ctypes.WinError(ctypes.get_last_error())
+
+
+def run_external(*args, **kwargs):
+    """Run bounded authentication probes with external loader state."""
+    kwargs["env"] = external_process_env(kwargs.get("env"))
+    with external_dll_search():
+        return subprocess.run(*args, **kwargs)
+
+
+def popen_external(*args, **kwargs):
+    """Spawn an external probe with shared frozen-loader state handling."""
+    kwargs["env"] = external_process_env(kwargs.get("env"))
+    with external_dll_search():
+        return subprocess.Popen(*args, **kwargs)
 
 
 def external_process_env(base: Mapping[str, str] | None = None) -> dict[str, str]:

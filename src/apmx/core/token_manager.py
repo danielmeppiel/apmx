@@ -24,6 +24,7 @@ import logging
 import os
 import subprocess
 import sys
+from ..utils.subprocess_env import run_external
 from urllib.parse import urlparse
 
 from apmx.utils.git_env import get_gh_executable, get_git_executable
@@ -225,7 +226,7 @@ class GitHubTokenManager:
                 stdin_lines.append(f"path={sanitized}")
         stdin = "\n".join(stdin_lines) + "\n\n"
         try:
-            result = subprocess.run(
+            result = run_external(
                 [get_git_executable(), "credential", "fill"],
                 input=stdin,
                 capture_output=True,
@@ -268,7 +269,7 @@ class GitHubTokenManager:
         if not GitHubTokenManager._supports_gh_cli_host(host):
             return None
         try:
-            result = subprocess.run(
+            result = run_external(
                 [get_gh_executable(), "auth", "token", "--hostname", host],
                 capture_output=True,
                 text=True,

@@ -1,5 +1,6 @@
 """Native Copilot contract protocol; no APM runtime installation."""
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -19,7 +20,6 @@ class CopilotRuntime:
         from ..contracts.models import ContractError, Outcome, ProcessRequest
         from ..core.tls_trust import build_child_tls_env
         from ..utils.path_security import ensure_path_within
-        from ..utils.subprocess_env import external_process_env
 
         started = time.monotonic()
         output = ensure_path_within(snapshot.producer / plan.contract.produces, snapshot.producer)
@@ -72,7 +72,7 @@ class CopilotRuntime:
             "--no-custom-instructions",
             "--disallow-temp-dir",
         ]
-        env = external_process_env()
+        env = dict(os.environ)
         # Remove broad approval by name only; never inspect credential values.
         for name in tuple(env):
             if name.startswith("COPILOT_ALLOW_") or name in {
@@ -224,4 +224,3 @@ class CopilotRuntime:
             return names
         finally:
             stdout.clear()
-

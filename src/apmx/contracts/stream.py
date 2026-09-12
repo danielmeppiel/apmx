@@ -304,7 +304,7 @@ class ContractStreamDecoder:
         self.completion_seen = True
         self._emit(
             "metadata",
-            text=f"Native completion reported exit code {code}; not an APM assessment.",
+            text=f"Native completion reported exit code {code}; not an apmx assessment.",
             native_exit_code=code,
         )
         if code != 0:

@@ -10,24 +10,43 @@ from ..contracts.process import supervise_process
 from ..core.auth import AuthResolver
 from ..core.tls_trust import build_child_tls_env
 from ..utils.git_env import get_git_executable
-from ..utils.github_host import is_full_commit_sha
+from ..models.dependency.host_virtual import dependency_repository_owner
+from ..marketplace.semver import parse_semver
+from ..utils.github_host import (
+    build_ado_ssh_url, build_ssh_url, default_host,
+    is_full_commit_sha,
+)
 from ..utils.path_security import ensure_path_within, has_symlink_component, safe_rmtree
-from ..utils.subprocess_env import external_process_env
 
 
 def download_git(dependency, target: Path):
     from .contract_source_validation import bounded_tree, validate_reference
 
     validate_reference(dependency)
-    if dependency.is_insecure or dependency.artifactory_prefix or dependency.ref_kind == "semver":
+    is_range = dependency.ref_kind == "semver" and parse_semver(dependency.reference) is None
+    if dependency.is_insecure or dependency.artifactory_prefix or is_range:
         raise ContractError(
             "Acquisition requires an HTTPS/SSH Git repository and a literal revision, not HTTP, "
             "a registry proxy or a version range.", code="unsupported_source",
         )
     url = dependency.to_clone_url()
+    if dependency.explicit_scheme == "ssh":
+        if dependency.is_azure_devops():
+            url = build_ado_ssh_url(
+                dependency.ado_organization, dependency.ado_project, dependency.ado_repo,
+                host="ssh.dev.azure.com" if dependency.host == "dev.azure.com" else dependency.host,
+            )
+        else:
+            url = build_ssh_url(
+                dependency.host or default_host(), dependency.repo_url,
+                port=dependency.port, user=dependency.ssh_user or "git",
+            )
     resolver = AuthResolver()
-    context = resolver.resolve_for_dep(dependency)
-    env = build_child_tls_env(external_process_env(resolver.git_env_for_remote(context, url)))
+    context = resolver.resolve_for_remote(
+        dependency.host or default_host(), url, dependency_repository_owner(dependency),
+        port=dependency.port, host_type=dependency.host_type,
+    )
+    env = build_child_tls_env(resolver.git_env_for_remote(context, url))
     env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
     git = get_git_executable()
     target.parent.mkdir(parents=True, exist_ok=True)

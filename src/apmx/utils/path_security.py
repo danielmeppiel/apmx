@@ -152,6 +152,10 @@ def validate_path_segments(
     PathTraversalError
         If any segment fails validation.
     """
+    import os
+
+    if os.name == "nt":
+        validate_windows_segments(path_str)
     reject = {".."} if allow_current_dir else {".", ".."}
     for segment in path_str.replace("\\", "/").split("/"):
         # Iteratively percent-decode each segment so multi-encoded traversal
@@ -171,6 +175,24 @@ def validate_path_segments(
             raise PathTraversalError(
                 f"Invalid {context} '{path_str}': path segments must not be empty"
             )
+
+
+def validate_windows_segments(path_str: str) -> None:
+    """Reject device names, alternate streams and Win32 normalization aliases."""
+    from pathlib import PureWindowsPath
+
+    reserved = {"con", "prn", "aux", "nul", "conin$", "conout$"}
+    reserved.update(f"{prefix}{number}" for prefix in ("com", "lpt") for number in range(1, 10))
+    path = PureWindowsPath(path_str)
+    for part in path.parts:
+        if part == path.anchor or part in {".", ".."}:
+            continue
+        if (
+            ":" in part or part.endswith((" ", "."))
+            or part.split(".", 1)[0].casefold() in reserved
+            or any(ord(character) < 32 for character in part)
+        ):
+            raise PathTraversalError("Unsupported Windows device, stream or normalized path.")
 
 
 def _strip_extended_prefix(p: Path) -> Path:
@@ -218,14 +240,27 @@ def ensure_path_within_resolved(path: Path, resolved_base: Path) -> Path:
     return resolved
 
 
+def is_link_or_reparse(path: Path) -> bool:
+    """Include Windows junctions and other reparse points, not only symlinks."""
+    import stat
+
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+
+
 def has_symlink_component(base_dir: Path, path: Path) -> bool:
-    """Return whether any component of *path* below *base_dir* is a symlink."""
+    """Return whether any component is a symlink or Windows reparse point."""
     try:
         relative = path.relative_to(base_dir)
         current = base_dir
+        if is_link_or_reparse(current):
+            return True
         for part in relative.parts:
             current /= part
-            if current.is_symlink():
+            if is_link_or_reparse(current):
                 return True
         return False
     except (OSError, ValueError):

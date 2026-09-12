@@ -50,6 +50,7 @@ def _observe_group(pgid: int, timeout_seconds: float) -> tuple[dict[str, object]
             capture_output=True,
             check=False,
             timeout=timeout_seconds,
+            env=external_process_env(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ({"inspection": "group inspection unavailable"},)
@@ -102,7 +103,7 @@ def supervise_process(
         child = subprocess.Popen(
             request.argv,
             cwd=request.cwd,
-            env=request.env,
+            env=external_process_env(request.env),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -236,7 +237,7 @@ def local_git(
             "Git is required for captured assessment workspaces.", code="git_missing"
         ) from exc
     env = {
-        key: value for key, value in external_process_env().items() if not key.startswith("GIT_")
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
     }
     env.update(
         GIT_CONFIG_NOSYSTEM="1",

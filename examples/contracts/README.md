@@ -36,7 +36,7 @@ mkdir -p reuse-contract/checks
 cp first-contract/notes.md reuse-contract/notes.md
 cp first-contract/checks/check_handoff.py reuse-contract/checks/check_handoff.py
 cd reuse-contract
-apmx --from . ./handoff.contract.md --on copilot --model gpt-6-astra --allow-host-access
+apmx --from ./ handoff.contract.md --on copilot --model gpt-6-astra --allow-host-access
 ```
 
 apmx prepares the skill privately. The contract names the declared
@@ -67,4 +67,5 @@ leaves, `budget`, `sandbox`, captures, output alternatives and composed jobs
 refuse before inference. Passing checks never authorizes merge or delivery.
 
 On Windows replace `python3` check commands with a native Python executable,
-using quoted forward-slash paths. Check shells and `.cmd` shims are unsupported.
+using quoted forward-slash paths. Git for Windows' `sh.exe` runs checks;
+the native Copilot producer never runs through a `.cmd` shim.

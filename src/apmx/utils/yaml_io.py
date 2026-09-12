@@ -613,13 +613,9 @@ def loads_frontmatter_document(raw: bytes, *, max_bytes: int = 256 * 1024) -> Fr
 
 def load_frontmatter_document(path: Path, *, max_bytes: int = 256 * 1024) -> FrontmatterDocument:
     """Read at most the bounded source size and parse strict frontmatter."""
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-        | getattr(os, "O_BINARY", 0)
-    )
-    with os.fdopen(os.open(path, flags), "rb") as source:
+    from .file_capture import open_readonly_nofollow
+
+    with os.fdopen(open_readonly_nofollow(path), "rb") as source:
         before = os.fstat(source.fileno())
         if not stat.S_ISREG(before.st_mode):
             raise FrontmatterSourceError("Source must be a regular file.", code="invalid_file")

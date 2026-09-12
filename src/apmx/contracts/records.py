@@ -155,7 +155,11 @@ class AttemptStore:
                 "controls": {
                     "isolation": "unavailable",
                     "spend_cap": "unavailable",
-                    "process_cleanup": "original POSIX process group; escaped descendants unobserved",
+                    "process_cleanup": (
+                        "assigned Windows Job Object; outside-job processes unobserved"
+                        if os.name == "nt"
+                        else "original POSIX process group; escaped descendants unobserved"
+                    ),
                 },
             },
         )

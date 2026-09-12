@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import stat
+from ..utils.file_capture import open_readonly_nofollow
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
@@ -45,7 +46,7 @@ def _path(root: Path, name: str) -> Path:
 def _read(root: Path, name: str, maximum: int) -> tuple[bytes, FileEntry]:
     """Bounded no-follow read with descriptor identity checked before and after."""
     path = _path(root, name)
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    fd = open_readonly_nofollow(path)
     with os.fdopen(fd, "rb") as source:
         before = os.fstat(source.fileno())
         if not stat.S_ISREG(before.st_mode) or before.st_size > maximum:

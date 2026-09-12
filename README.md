@@ -11,7 +11,8 @@ It is derived from Microsoft's MIT-licensed APM contract engine; see
 
 Install native GitHub Copilot CLI and Git. Authenticate with Copilot itself.
 Install any tools explicitly required by the selected contract's checks.
-Windows requires native `copilot.exe`, not an npm `.cmd` shim.
+Windows requires native `copilot.exe`, not an npm `.cmd` shim, and Git for
+Windows' `sh.exe` for the same shell check language used on Linux/macOS.
 
 ```sh
 apmx job.contract.md --on copilot --plan
@@ -59,10 +60,11 @@ Read notes.md and create handoff.json.
 Inputs are caller-relative; packaged contracts/checks are package-relative.
 Select an explicit `.contract.md` file; no default job or script fallback exists.
 `examples/contracts/packaged-job` includes a caller, package and imported skill.
-On Windows use a direct native checker executable with POSIX-style quoting and
+On Windows use a native checker executable with POSIX-style quoting and
 forward slashes, for example
 `'"C:/Program Files/Python312/python.exe" -I checks/check_handoff.py'`.
-Windows shell pipelines and batch shims are not supported.
+Checks use `sh -c` on every platform, preserving compound commands and pipelines.
+Git for Windows' shell is found on PATH or beside its Git installation.
 
 ## Develop
 

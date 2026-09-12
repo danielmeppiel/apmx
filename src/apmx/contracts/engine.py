@@ -20,7 +20,6 @@ from .models import (
 )
 from .stream import ContractStreamDecoder
 from .check_command import check_argv
-from ..utils.subprocess_env import external_process_env
 
 
 def _remaining(deadline: float) -> float:
@@ -74,7 +73,6 @@ def _run_checks(
                 argv=check_argv(check.command),
                 cwd=check_root,
                 timeout_seconds=min(plan.limits.check_seconds, _remaining(deadline)),
-                env=external_process_env(),
             )
             observation = process.supervise_process(
                 request,

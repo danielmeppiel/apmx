@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from ..utils.file_capture import open_readonly_nofollow
 
 from ..deps.lockfile import LockFile, resolve_lockfile_path_for_read
 from ..models.apm_package import APMPackage
@@ -18,7 +19,7 @@ from ..models.dependency.selection import (
     parse_dependency_entry,
     select_manifest_dependency,
 )
-from ..utils.path_security import ensure_path_within, has_symlink_component
+from ..utils.path_security import ensure_path_within, has_symlink_component, is_link_or_reparse
 from ..utils.yaml_io import FrontmatterDocument, load_yaml_str, loads_frontmatter_document
 from .models import ContractError, ContractLimits, ImportedSkill, LeafContract, SourceLocation
 
@@ -32,13 +33,7 @@ def _read_bytes(path: Path, *, maximum: int, root: Path) -> bytes:
         before = path.stat()
         if not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
             raise ValueError("Expected a bounded regular file.")
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0)
-            | getattr(os, "O_BINARY", 0)
-        )
-        with os.fdopen(os.open(path, flags), "rb") as stream:
+        with os.fdopen(open_readonly_nofollow(path), "rb") as stream:
             opened = os.fstat(stream.fileno())
             if not stat.S_ISREG(opened.st_mode) or (before.st_dev, before.st_ino) != (
                 opened.st_dev,
@@ -125,7 +120,7 @@ def _self_contained(root: Path, limits: ContractLimits) -> None:
     allowed = {"apm.yml", "SKILL.md", ".apm-pin"}
     with os.scandir(root) as entries:
         for entry in entries:
-            if entry.is_symlink():
+            if is_link_or_reparse(Path(entry.path)):
                 raise ContractError("Installed skill contains a symlink.", code="invalid_import")
             if entry.name == ".git" and entry.is_dir(follow_symlinks=False):
                 # The hash owner traverses then excludes Git administration;
@@ -141,7 +136,7 @@ def _self_contained(root: Path, limits: ContractLimits) -> None:
                                     "Git metadata exceeds the import scan limit.",
                                     code="import_limit",
                                 )
-                            if item.is_symlink():
+                            if is_link_or_reparse(Path(item.path)):
                                 raise ContractError(
                                     "Installed Git metadata contains a symlink.",
                                     code="invalid_import",

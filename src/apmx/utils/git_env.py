@@ -30,12 +30,12 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
-from apmx.utils.subprocess_env import external_process_env
+from apmx.utils.subprocess_env import popen_external, run_external
 
 # Module-level cached git executable path (successful resolutions only).
 _git_executable: str | None = None
 _gh_executable: str | None = None
-_git_init_run = subprocess.run
+_git_init_run = run_external
 
 # Variables that represent ambient git state -- strip these to avoid
 # biasing APM's git operations when invoked from within another repo
@@ -174,7 +174,7 @@ def _run_git_config(
 ) -> subprocess.CompletedProcess[bytes]:
     """Run config inspection independently from mocked network subprocesses."""
     del capture_output, check
-    process = subprocess.Popen(
+    process = popen_external(
         command,
         cwd=cwd,
         env=env,
@@ -300,23 +300,23 @@ def get_gh_executable() -> str:
 def git_subprocess_env(overrides: dict[str, object] | None = None) -> dict[str, str]:
     """Return a sanitized environment dict for git subprocesses.
 
-    Restores PyInstaller-managed dynamic-library variables first, then
-    strips ambient git state variables while preserving user-controlled
+    Strips ambient git state variables while preserving user-controlled
     configuration (proxy, auth, SSH settings). Optional overrides are
-    applied through the same state-variable filter.
+    applied through the same state-variable filter. Frozen loader restoration
+    happens exactly once at the external process spawning boundary.
 
     Returns:
-        An external-process-safe copy of ``os.environ`` with problematic
+        A copy of ``os.environ`` with problematic
         git variables removed.
     """
     base = (
-        None
+        os.environ
         if overrides is None
         else {key: value for key, value in overrides.items() if isinstance(value, str)}
     )
     env = {
         key: value
-        for key, value in external_process_env(base).items()
+        for key, value in base.items()
         if key not in _STRIP_GIT_VARS
     }
     env["GIT_TRACE_REDACT"] = "1"
@@ -1271,7 +1271,7 @@ def git_remote_refs(
     git_executable = get_git_executable()
     command = [git_executable, *git_args, "ls-remote", *options, remote_url, *patterns]
     try:
-        result = subprocess.run(
+        result = run_external(
             command,
             capture_output=True,
             cwd=str(Path(git_executable).resolve().parent),
@@ -1300,7 +1300,7 @@ def init_git_remote_worktree(
     remote_url: str,
     env: dict[str, object],
     *,
-    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    run: Callable[..., subprocess.CompletedProcess] = run_external,
 ) -> dict[str, str]:
     """Initialize a worktree and add one validated network remote."""
     git_executable = get_git_executable()
@@ -1374,7 +1374,7 @@ def clone_git_worktree(
     clone_env = git_clone_env(url, env, target)
     if progress is None:
         try:
-            subprocess.run(
+            run_external(
                 args,
                 check=True,
                 capture_output=True,
@@ -1388,7 +1388,7 @@ def clone_git_worktree(
 
     from git.cmd import handle_process_output
 
-    process = subprocess.Popen(
+    process = popen_external(
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1432,7 +1432,7 @@ def checkout_git_worktree(
     env: dict[str, object] | None = None,
 ) -> None:
     """Check out a ref in an explicitly located worktree."""
-    subprocess.run(
+    run_external(
         [
             get_git_executable(),
             *git_no_hooks_args(),
@@ -1465,7 +1465,7 @@ def git_resolve_commit(
     env: dict[str, object] | None = None,
 ) -> str:
     """Resolve a ref to a commit in an explicitly located worktree."""
-    result = subprocess.run(
+    result = run_external(
         [
             get_git_executable(),
             "-C",
@@ -1489,7 +1489,7 @@ def git_current_branch(
     env: dict[str, object] | None = None,
 ) -> str:
     """Return the current branch name for an explicitly located worktree."""
-    result = subprocess.run(
+    result = run_external(
         [get_git_executable(), "-C", str(worktree), "symbolic-ref", "--short", "HEAD"],
         check=True,
         capture_output=True,
