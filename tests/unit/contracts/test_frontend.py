@@ -81,8 +81,10 @@ def test_path_timestamp_drift_does_not_change_source_identity(
 def test_path_replacement_still_changes_source_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from apmx.utils import file_capture
+
     path = source(tmp_path)
-    real_stat = Path.stat
+    real_stat = file_capture.capture_path_stat
 
     def stat_with_replaced_identity(
         candidate: Path, *args, **kwargs
@@ -95,7 +97,7 @@ def test_path_replacement_still_changes_source_identity(
             st_ino=result.st_ino + 1,
         )
 
-    monkeypatch.setattr(Path, "stat", stat_with_replaced_identity)
+    monkeypatch.setattr(file_capture, "capture_path_stat", stat_with_replaced_identity)
 
     with pytest.raises(ContractError) as error:
         parse_contract(path)
@@ -278,5 +280,4 @@ def test_source_traversal_is_rejected_even_when_it_lands_inside_root(project: Pa
     (project / "sub").mkdir()
     with pytest.raises(ContractError):
         plan_contract(project / "sub" / ".." / path.name, project, harness="copilot")
-
 

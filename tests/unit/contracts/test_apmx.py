@@ -354,6 +354,7 @@ def test_remote_relative_import_uses_parent_revision(
     package = _package(tmp_path / "download", imports=True)
     manifest = (package / "apm.yml").read_text().replace("../style", declaration)
     (package / "apm.yml").write_text(manifest)
+    original_manifest = (package / "apm.yml").read_bytes()
     skill = tmp_path / "style"
     _skill(skill)
     calls = []
@@ -386,7 +387,7 @@ def test_remote_relative_import_uses_parent_revision(
         assert calls[1].repo_url == "org/repo"
         assert calls[1].virtual_path == "jobs/style"
         assert calls[1].reference == "a" * 40
-        assert source.original_manifest == manifest.encode()
+        assert source.original_manifest == original_manifest
         assert source.package_hash == compute_package_hash(package)
         assert source.prepared_hash == compute_package_hash(source.root)
     assert len(calls) == 2

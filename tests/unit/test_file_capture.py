@@ -122,3 +122,25 @@ def test_windows_junction_is_never_followed(tmp_path):
             open_readonly_nofollow(junction / "secret")
     finally:
         os.rmdir(junction)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows file identity and sharing lease")
+def test_windows_handles_distinguish_same_byte_files_and_prevent_replacement(tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    for path in (first, second):
+        path.write_bytes(b"identical bytes")
+        os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    with os.fdopen(open_readonly_nofollow(first), "rb") as one:
+        with os.fdopen(open_readonly_nofollow(second), "rb") as two:
+            first_info, second_info = os.fstat(one.fileno()), os.fstat(two.fileno())
+            first_identity = (first_info.st_dev, first_info.st_ino)
+            second_identity = (second_info.st_dev, second_info.st_ino)
+            assert first_info.st_ino != 0 and second_info.st_ino != 0
+            assert first_identity != second_identity
+            named = file_capture.capture_path_stat(first)
+            assert (named.st_dev, named.st_ino) == first_identity
+            named = file_capture.capture_path_stat(second)
+            assert (named.st_dev, named.st_ino) == second_identity
+            with pytest.raises(OSError):
+                os.replace(second, first)
+    assert first.read_bytes() == second.read_bytes() == b"identical bytes"

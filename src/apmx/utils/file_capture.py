@@ -19,7 +19,10 @@ def capture_path_stat(path: Path) -> os.stat_result:
     if os.name != "nt":
         return path.stat(follow_symlinks=False)
     with os.fdopen(open_readonly_nofollow(path), "rb") as named:
-        return os.fstat(named.fileno())
+        info = os.fstat(named.fileno())
+        if not info.st_ino:
+            raise OSError("Windows capture could not establish file identity.")
+        return info
 
 
 def _windows_open(path: Path) -> int:
