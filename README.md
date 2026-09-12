@@ -21,8 +21,8 @@ archive="apmx-$version-$target.tar.gz"
 mkdir -p "$install_dir" &&
 gh release download "v$version" --repo danielmeppiel/apmx \
   --pattern "$archive" --pattern "$archive.sha256" --dir "$install_dir" &&
-(cd "$install_dir" && shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive")
-export PATH="$install_dir/apmx-$target:$PATH"
+(cd "$install_dir" && shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive") &&
+export PATH="$install_dir/apmx-$target:$PATH" &&
 apmx --version
 ```
 
@@ -41,11 +41,10 @@ Windows' `sh.exe` for the same shell check language used on Linux/macOS.
 
 ```sh
 # Start in this repository's source checkout; execute in a fresh external caller.
-package="$PWD/examples/contracts/packaged-job"
+package="$(pwd -P)/examples/contracts/packaged-job"
 caller="$(mktemp -d "${TMPDIR:-/tmp}/apmx-caller.XXXXXX")"
 cp "$package/caller/notes.md" "$caller/notes.md" &&
 cd "$caller" &&
-apmx --from "$package" contracts/handoff.contract.md --on copilot --plan
 apmx --from "$package" contracts/handoff.contract.md \
   --on copilot --allow-host-access
 ```
@@ -62,6 +61,10 @@ fetches packages nor probes/launches Copilot. Remote execution also accepts an
 explicit HTTPS/SSH Git package reference with a literal revision. An existing
 direct caller lock is replayed exactly; drift is refused rather than repaired.
 One self-contained root `SKILL.md` dependency may be imported as context.
+For an optional offline preview, add `--plan` and omit `--allow-host-access`.
+A fresh package whose imported skill is not yet prepared returns **UNPROVEN / 21**
+with "Imported skill is unresolved offline"; this is not a failed check.
+Executing the explicit contract prepares its direct dependency privately.
 
 **Run only contracts you trust.** `--allow-host-access` permits the native producer
 and checks to use host files, network and available login details. Native tool
