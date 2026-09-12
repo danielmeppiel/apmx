@@ -613,7 +613,7 @@ def loads_frontmatter_document(raw: bytes, *, max_bytes: int = 256 * 1024) -> Fr
 
 def load_frontmatter_document(path: Path, *, max_bytes: int = 256 * 1024) -> FrontmatterDocument:
     """Read at most the bounded source size and parse strict frontmatter."""
-    from .file_capture import open_readonly_nofollow
+    from .file_capture import capture_path_stat, open_readonly_nofollow
 
     with os.fdopen(open_readonly_nofollow(path), "rb") as source:
         before = os.fstat(source.fileno())
@@ -621,7 +621,7 @@ def load_frontmatter_document(path: Path, *, max_bytes: int = 256 * 1024) -> Fro
             raise FrontmatterSourceError("Source must be a regular file.", code="invalid_file")
         raw = source.read(max_bytes + 1)
         after = os.fstat(source.fileno())
-    current = path.stat()
+        current = capture_path_stat(path)
 
     def read_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
         return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns

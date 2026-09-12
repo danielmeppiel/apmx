@@ -7,6 +7,31 @@ This private standalone project does not require APM or experimental activation.
 It is derived from Microsoft's MIT-licensed APM contract engine; see
 [source origin and migration boundaries](docs/source-origin.md).
 
+## Install a private release
+
+Use an authenticated GitHub CLI account with access to this private repository.
+Choose a published version from [Releases](https://github.com/danielmeppiel/apmx/releases).
+For `v0.1.0`, once published, on Apple Silicon macOS:
+
+```sh
+version=0.1.0
+target=macos-arm64
+install_dir="$HOME/.local/share/apmx/$version"
+archive="apmx-$version-$target.tar.gz"
+mkdir -p "$install_dir" &&
+gh release download "v$version" --repo danielmeppiel/apmx \
+  --pattern "$archive" --pattern "$archive.sha256" --dir "$install_dir" &&
+(cd "$install_dir" && shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive")
+export PATH="$install_dir/apmx-$target:$PATH"
+apmx --version
+```
+
+Keep the **entire extracted folder**, including `_internal`; do not copy only
+the executable. Available target names are `linux-x86_64`, `linux-arm64`,
+`macos-x86_64`, `macos-arm64`, and `windows-x86_64` (ZIP rather than tar.gz).
+Checksums detect changed download bytes; they are not publisher signatures.
+These releases have **no publisher signing or macOS notarization**.
+
 ## Run
 
 Install native GitHub Copilot CLI and Git. Authenticate with Copilot itself.
@@ -15,10 +40,22 @@ Windows requires native `copilot.exe`, not an npm `.cmd` shim, and Git for
 Windows' `sh.exe` for the same shell check language used on Linux/macOS.
 
 ```sh
-apmx job.contract.md --on copilot --plan
-apmx job.contract.md --on copilot --model YOUR_MODEL --allow-host-access
-apmx --from ./trusted-package contracts/handoff.contract.md --on copilot --allow-host-access
+# Start in this repository's source checkout; execute in a fresh external caller.
+package="$PWD/examples/contracts/packaged-job"
+caller="$(mktemp -d "${TMPDIR:-/tmp}/apmx-caller.XXXXXX")"
+cp "$package/caller/notes.md" "$caller/notes.md" &&
+cd "$caller" &&
+apmx --from "$package" contracts/handoff.contract.md --on copilot --plan
+apmx --from "$package" contracts/handoff.contract.md \
+  --on copilot --allow-host-access
 ```
+
+The example requires Python 3 for its independent checker. Alternatively, place
+your trusted contract and required inputs in a fresh caller outside any Git
+repository and run `apmx job.contract.md --on copilot --allow-host-access`.
+Add `--model MODEL` to explicitly select a supported native model.
+Do not remove remotes or policy configuration from an existing project to make
+it eligible.
 
 `--plan` only inspects local inputs and installed package/lock state. It neither
 fetches packages nor probes/launches Copilot. Remote execution also accepts an
@@ -59,7 +96,8 @@ Read notes.md and create handoff.json.
 
 Inputs are caller-relative; packaged contracts/checks are package-relative.
 Select an explicit `.contract.md` file; no default job or script fallback exists.
-`examples/contracts/packaged-job` includes a caller, package and imported skill.
+[The packaged-job example](examples/contracts/packaged-job/README.md) includes
+a caller, package and imported skill.
 On Windows use a native checker executable with POSIX-style quoting and
 forward slashes, for example
 `'"C:/Program Files/Python312/python.exe" -I checks/check_handoff.py'`.
@@ -81,4 +119,3 @@ Dependencies resolve from public PyPI. Protocol fixtures need no AI credentials
 and are not live model inference. The release pipeline independently checks
 downloaded archive bytes on matching platforms; fixture results do not establish
 publisher signing or a sandbox.
-Run one contract with native Copilot; retain the output and independent check results.

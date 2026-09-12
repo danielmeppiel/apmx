@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from ..utils.file_capture import open_readonly_nofollow
+from ..utils.file_capture import capture_path_stat, open_readonly_nofollow
 
 from ..deps.lockfile import LockFile, resolve_lockfile_path_for_read
 from ..models.apm_package import APMPackage
@@ -30,7 +30,7 @@ def _read_bytes(path: Path, *, maximum: int, root: Path) -> bytes:
         ensure_path_within(path, root)
         if has_symlink_component(root, path):
             raise ValueError("Nested symlinks are unsupported.")
-        before = path.stat()
+        before = capture_path_stat(path)
         if not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
             raise ValueError("Expected a bounded regular file.")
         with os.fdopen(open_readonly_nofollow(path), "rb") as stream:
@@ -41,7 +41,7 @@ def _read_bytes(path: Path, *, maximum: int, root: Path) -> bytes:
             ):
                 raise ValueError("Selected file changed before capture.")
             raw = stream.read(maximum + 1)
-        after = path.stat()
+            after = capture_path_stat(path)
         if (
             len(raw) > maximum
             or len(raw) != before.st_size

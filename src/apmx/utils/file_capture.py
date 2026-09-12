@@ -10,6 +10,18 @@ def open_readonly_nofollow(path: Path) -> int:
     return _windows_open(path)
 
 
+def capture_path_stat(path: Path) -> os.stat_result:
+    """Compare Windows capture identities through the same handle-based API.
+
+    Keep the original capture descriptor open while calling this helper so its
+    no-write/no-delete share lease also protects the named-path observation.
+    """
+    if os.name != "nt":
+        return path.stat(follow_symlinks=False)
+    with os.fdopen(open_readonly_nofollow(path), "rb") as named:
+        return os.fstat(named.fileno())
+
+
 def _windows_open(path: Path) -> int:
     import ctypes
     import msvcrt

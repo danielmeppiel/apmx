@@ -41,17 +41,19 @@ def test_external_auth_probe_uses_loader_helper(monkeypatch):
 
 def test_repeated_git_env_preparation_restores_loader_once(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess_env.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(subprocess_env.sys, "_MEIPASS", str(tmp_path), raising=False)
     monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle")
     monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/user-libs")
     env = git_subprocess_env(git_subprocess_env())
     output = bytearray()
-    result = supervise_process(
-        ProcessRequest(
-            (sys.executable, "-c", "import os; print(os.environ['LD_LIBRARY_PATH'])"),
-            tmp_path, 10, env,
-        ),
-        on_bytes=lambda stream, chunk: output.extend(chunk) if stream == "stdout" else None,
-    )
+    with subprocess_env.external_dll_search():
+        result = supervise_process(
+            ProcessRequest(
+                (sys.executable, "-c", "import os; print(os.environ['LD_LIBRARY_PATH'])"),
+                tmp_path, 10, env,
+            ),
+            on_bytes=lambda stream, chunk: output.extend(chunk) if stream == "stdout" else None,
+        )
     assert result.returncode == 0
     assert result.cleanup_confirmed
     assert bytes(output).strip() == b"/user-libs"

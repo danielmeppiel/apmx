@@ -162,7 +162,9 @@ def test_package_plan_maps_caller_and_resources(caller: Path, tmp_path: Path) ->
         entries = {item.relative_path: item for item in workspace.inspect_workspace(plan)}
         assert plan.project_root == caller
         assert plan.evidence_root == caller / ".apm" / "runs"
-        assert entries["notes.md"].sha256 == hashlib.sha256(b"CALLER INPUT\n").hexdigest()
+        assert entries["notes.md"].sha256 == hashlib.sha256(
+            (caller / "notes.md").read_bytes()
+        ).hexdigest()
         assert "_apmx_source/contract.contract.md" in entries
         assert "checks/check.py" in entries
         assert "apm.yml" not in entries

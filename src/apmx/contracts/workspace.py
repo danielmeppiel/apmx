@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 import stat
-from ..utils.file_capture import open_readonly_nofollow
+from ..utils.file_capture import capture_path_stat, open_readonly_nofollow
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
@@ -55,6 +55,7 @@ def _read(root: Path, name: str, maximum: int) -> tuple[bytes, FileEntry]:
             )
         data = source.read(maximum + 1)
         after = os.fstat(source.fileno())
+        named = capture_path_stat(path)
 
     def identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
         return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
@@ -62,7 +63,7 @@ def _read(root: Path, name: str, maximum: int) -> tuple[bytes, FileEntry]:
     if (
         len(data) > maximum
         or identity(before) != identity(after)
-        or identity(after) != identity(path.stat(follow_symlinks=False))
+        or identity(after) != identity(named)
     ):
         raise ContractError(f"File changed during capture: {name}", code="source_changed")
     entry = FileEntry(

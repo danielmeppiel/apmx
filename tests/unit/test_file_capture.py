@@ -8,6 +8,7 @@ import pytest
 from apmx.contracts.models import ContractError
 from apmx.contracts.workspace import _read
 from apmx.utils.file_capture import open_readonly_nofollow
+from apmx.utils import file_capture
 from apmx.utils.path_security import (
     PathTraversalError, has_symlink_component, is_link_or_reparse, validate_windows_segments,
 )
@@ -28,6 +29,61 @@ def test_capture_remains_bounded(tmp_path):
     (tmp_path / "large").write_bytes(b"x" * 20)
     with pytest.raises(ContractError):
         _read(tmp_path, "large", 19)
+
+
+def test_windows_named_identity_uses_a_second_nofollow_handle(tmp_path, monkeypatch):
+    path = tmp_path / "selected"
+    path.write_bytes(b"selected bytes")
+    expected = path.stat()
+    monkeypatch.setattr(file_capture, "os", SimpleNamespace(
+        name="nt", fstat=os.fstat, fdopen=os.fdopen,
+    ))
+    monkeypatch.setattr(file_capture, "open_readonly_nofollow", lambda selected: os.open(
+        selected, os.O_RDONLY | getattr(os, "O_BINARY", 0),
+    ))
+    monkeypatch.setattr(
+        Path, "stat",
+        lambda *args, **kwargs: pytest.fail("Do not mix path-stat and descriptor-stat APIs"),
+    )
+    actual = file_capture.capture_path_stat(path)
+    assert (actual.st_dev, actual.st_ino, actual.st_size) == (
+        expected.st_dev, expected.st_ino, expected.st_size,
+    )
+
+
+def test_capture_preserves_identity_and_bytes_across_timestamp_updates(tmp_path):
+    path = tmp_path / "selected"
+    for version in range(12):
+        data = f"version {version}\r\n".encode()
+        path.write_bytes(data)
+        timestamp = 1_700_000_000_123_456_700 + version * 100
+        os.utime(path, ns=(timestamp, timestamp))
+        captured, entry = _read(tmp_path, path.name, 128)
+        assert captured == data
+        assert entry.size == len(data)
+
+
+@pytest.mark.parametrize("field", [
+    "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns",
+])
+def test_every_named_identity_component_still_blocks_drift(tmp_path, monkeypatch, field):
+    path = tmp_path / "selected"
+    path.write_bytes(b"same bytes")
+    original = file_capture.capture_path_stat
+
+    def changed(selected):
+        info = original(selected)
+        identity = {
+            key: getattr(info, key)
+            for key in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        }
+        identity[field] += 1
+        return SimpleNamespace(**identity)
+
+    monkeypatch.setattr("apmx.contracts.workspace.capture_path_stat", changed)
+    with pytest.raises(ContractError) as error:
+        _read(tmp_path, path.name, 128)
+    assert error.value.code == "source_changed"
 
 
 @pytest.mark.parametrize("path", ["con", "NUL.txt", "dir/com1", "out:stream", "out.", "out "])
