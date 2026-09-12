@@ -14,7 +14,7 @@ def test_wheel_runs_without_checkout_or_apm(tmp_path):
     wheels.mkdir()
     built = subprocess.run(
         [
-            sys.executable, "-c",
+            sys.executable, "-B", "-c",
             "from setuptools.build_meta import build_wheel; "
             "import sys; build_wheel(sys.argv[1])",
             str(wheels),
@@ -69,7 +69,7 @@ runpy.run_module("apmx", run_name="__main__")
 """
     result = subprocess.run(
         [
-            sys.executable, "-I", "-S", "-c", script, str(installed),
+            sys.executable, "-B", "-I", "-S", "-c", script, str(installed),
             json.dumps(site.getsitepackages()),
         ],
         cwd=tmp_path, capture_output=True, text=True, timeout=30,
