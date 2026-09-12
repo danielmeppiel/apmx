@@ -12,6 +12,7 @@ import pytest
 from apmx.contracts.imports import read_lock
 from apmx.contracts.models import ContractError, ContractLimits
 from apmx.contracts.native_integrity import verify_inventory_package
+from apmx.deps.lockfile import LockedDependency, LockFile
 from apmx.contracts.workspace import local_git
 from apmx.install.apm_backend import install
 from apmx.install.contract_source import _selected_source
@@ -125,3 +126,39 @@ def test_native_marker_projection_requires_child_inventory_entry(inventory):
     del lock.dependencies[child.get_unique_key()]
     with pytest.raises(ContractError):
         verify_inventory_package(stage, parent, lock, LIMITS)
+
+
+def test_nested_metadata_projection_captures_payload_once(tmp_path, monkeypatch):
+    import apmx.contracts.native_integrity as integrity
+
+    lock = LockFile()
+    packages = []
+    for depth in range(12):
+        dependency = LockedDependency(
+            repo_url="fixtures/nested", host="localhost",
+            virtual_path="/".join(["package"] * (depth + 1)), is_virtual=True,
+            resolved_commit="a" * 40,
+        )
+        root = dependency.to_dependency_ref().get_install_path(tmp_path / "apm_modules")
+        root.mkdir(parents=True)
+        packages.append((dependency, root))
+    (packages[-1][1] / "payload.bin").write_bytes(b"x" * (1024 * 1024))
+    for dependency, root in packages:
+        dependency.content_hash = compute_package_hash(root)
+        lock.dependencies[dependency.get_unique_key()] = dependency
+    for dependency, root in packages:
+        (root / ".apm-pin").write_text(json.dumps({
+            "schema_version": 1, "resolved_commit": dependency.resolved_commit,
+        }))
+
+    captured = []
+    reader = integrity._read_bytes
+    def read(path, **kwargs):
+        raw = reader(path, **kwargs)
+        captured.append((path, len(raw)))
+        return raw
+    monkeypatch.setattr(integrity, "_read_bytes", read)
+    managed = verify_inventory_package(tmp_path, packages[0][0], lock, LIMITS)
+    assert len(managed) == 11
+    assert len(captured) == len({path for path, _ in captured})
+    assert sum(size for _, size in captured) < 1024 * 1024 + 4096

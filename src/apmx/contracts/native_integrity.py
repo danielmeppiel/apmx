@@ -40,6 +40,22 @@ def verify_inventory_package(
         for entry in inventory.dependencies.values()
     ]
     checked: dict[str, tuple[str, ...]] = {}
+    selected_root = selected.to_dependency_ref().get_install_path(modules)
+    if has_symlink_component(project_root, selected_root):
+        reject()
+    files: dict[str, bytes] = {}
+    total = 0
+    for relative in bounded_tree(selected_root, limits):
+        path = Path(relative)
+        if any(part in _EXCLUDED_DIRS for part in path.parts):
+            continue
+        if len(path.parts) == 1 and path.name in _EXCLUDED_ROOT_FILES:
+            continue
+        raw = _read_bytes(selected_root / path, maximum=limits.file_bytes, root=selected_root)
+        total += len(raw)
+        if total > limits.baseline_bytes:
+            reject()
+        files[relative] = raw
 
     def verify(entry: LockedDependency, root: Path) -> tuple[str, ...]:
         key = entry.get_unique_key()
@@ -47,20 +63,16 @@ def verify_inventory_package(
             return checked[key]
         if not entry.content_hash or has_symlink_component(project_root, root):
             reject()
-        files: dict[str, bytes] = {}
-        total = 0
-        for relative in bounded_tree(root, limits):
-            path = Path(relative)
-            if any(part in _EXCLUDED_DIRS for part in path.parts):
-                continue
-            if len(path.parts) == 1 and path.name in _EXCLUDED_ROOT_FILES:
-                continue
-            raw = _read_bytes(root / path, maximum=limits.file_bytes, root=root)
-            total += len(raw)
-            if total > limits.baseline_bytes:
-                reject()
-            files[relative] = raw
-        if _hash_package_entries(files.items()) == entry.content_hash:
+        prefix = "" if root == selected_root else root.relative_to(selected_root).as_posix() + "/"
+
+        def entries():
+            for relative, raw in files.items():
+                if relative.startswith(prefix):
+                    local = relative[len(prefix):]
+                    if local not in _EXCLUDED_ROOT_FILES:
+                        yield local, raw
+
+        if _hash_package_entries(entries()) == entry.content_hash:
             checked[key] = ()
             return ()
 
@@ -76,20 +88,20 @@ def verify_inventory_package(
             seen_roots.add(child_root)
             verify(child, child_root)
             relative = (child_root / ".apm-pin").relative_to(root).as_posix()
-            if relative not in files:
+            captured_path = prefix + relative
+            if captured_path not in files:
                 continue
             expected_marker = json.dumps({
                 "schema_version": 1, "resolved_commit": child.resolved_commit,
             }).encode("utf-8")
-            if files[relative] != expected_marker:
+            if files[captured_path] != expected_marker:
                 reject()
             managed.add(relative)
         if not managed or _hash_package_entries(
-            (relative, raw) for relative, raw in files.items() if relative not in managed
+            (relative, raw) for relative, raw in entries() if relative not in managed
         ) != entry.content_hash:
             reject()
         checked[key] = tuple(sorted(managed))
         return checked[key]
 
-    root = selected.to_dependency_ref().get_install_path(modules)
-    return verify(selected, root)
+    return verify(selected, selected_root)
