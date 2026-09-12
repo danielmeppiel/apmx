@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -44,9 +45,10 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def require_local_identity(identity: str, source: Path) -> None:
-    require(identity.startswith("local:"), "Local import lacks canonical APM identity")
-    path = Path(identity.removeprefix("local:"))
+def require_local_identity(identity: str, source: Path, *, consumer_lock: bool = False) -> None:
+    if not consumer_lock:
+        require(identity.startswith("local:"), "Local import lacks canonical APM identity")
+    path = Path(identity if consumer_lock else identity.removeprefix("local:"))
     require(
         path.is_absolute() and path.resolve() == source.resolve(),
         "Wrong original local import source identity",
@@ -287,6 +289,96 @@ def add_mixed_context(package: Path, env: dict[str, str]) -> dict[str, Path]:
     return {relative: skill / relative for relative in resources}
 
 
+def require_consumer_lock(lock: Path, revision: str) -> str:
+    # Check the pinned native lock's Git entry, not a synthetic replacement lock.
+    entries = re.split(r"(?m)^- repo_url: ", lock.read_text(encoding="utf-8"))[1:]
+    matches = [entry for entry in entries if entry.splitlines()[0] == "fixtures/release-style"]
+    require(len(matches) == 1, "Native lock lacks exactly one consumer Git dependency")
+    entry = matches[0].split("\ndeployments:", 1)[0]
+    for key, value in {
+        "name": "release-style", "host": "localhost", "resolved_commit": revision,
+        "resolved_ref": "v9", "version": "9.0.0",
+    }.items():
+        require(
+            re.search(rf"(?m)^  {key}: {re.escape(value)}$", entry) is not None,
+            f"Native lock did not preserve consumer {key}",
+        )
+    content_hash = re.search(r"(?m)^  content_hash: (sha256:[0-9a-f]{64})$", entry)
+    if content_hash is None:
+        raise AssertionError("Missing native content hash")
+    return content_hash.group(1)
+
+
+def prepare_consumer_lock(
+    backend: Path, root: Path, caller: Path, package: Path, env: dict[str, str],
+) -> dict:
+    origin = root / "consumer-git-origin"
+    original_skill = package / "skills/release-style"
+    shutil.copytree(original_skill, origin)
+    (origin / "apm.yml").write_text("name: release-style\nversion: 9.0.0\n", encoding="utf-8")
+    git = shutil.which("git", path=env["PATH"])
+    require(git is not None, "Real Git is required for consumer lock precedence proof")
+    for args in (["init", "--quiet"], ["add", "."], ["commit", "--quiet", "-m", "Native consumer pin fixture"], ["tag", "v9"]):
+        subprocess.run([git, *args], cwd=origin, env=env, capture_output=True, check=True, timeout=30)
+    revision = subprocess.check_output(
+        [git, "rev-parse", "HEAD"], cwd=origin, env=env, text=True, timeout=10,
+    ).strip()
+    require(re.fullmatch(r"[0-9a-f]{40}", revision) is not None, "Invalid genuine Git revision")
+    transport = root / "git_transport.py"
+    transport.write_text(
+        "import subprocess, sys\n"
+        "if '-G' in sys.argv: raise SystemExit(0)\n"
+        f"raise SystemExit(subprocess.call([{git!r}, 'upload-pack', {str(origin)!r}]))\n",
+        encoding="utf-8",
+    )
+    env["GIT_SSH_COMMAND"] = (
+        f"{shlex.quote(Path(sys.executable).as_posix())} -B {shlex.quote(transport.as_posix())}"
+    )
+    env["GIT_SSH_VARIANT"] = "ssh"
+    url = "ssh://git@localhost/fixtures/release-style.git"
+    advertised = subprocess.run(
+        [git, "ls-remote", url, "refs/tags/v9"], cwd=root, env=env,
+        capture_output=True, text=True, timeout=30,
+    )
+    require(
+        advertised.returncode == 0 and advertised.stdout.strip() == f"{revision}\trefs/tags/v9",
+        f"Genuine Git transport preflight failed:\n{advertised.stdout}\n{advertised.stderr}",
+    )
+    (caller / "apm.yml").write_text(
+        "name: release-consumer\nversion: 1.0.0\ndependencies:\n  apm:\n"
+        f"    - git: {url}\n      ref: v9\n"
+        f"    - path: {json.dumps(str(package / 'contexts/release-context-package'))}\n",
+        encoding="utf-8",
+    )
+    result = run_binary(
+        backend,
+        ["install", "--root", str(caller), "--only", "apm", "--target", "agent-skills", "--no-trust-bin"],
+        caller, {**env, "APM_NO_SCRIPTS": "1", "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+    )
+    require(result.returncode == 0, f"Genuine consumer lock generation failed:\n{result.stdout}\n{result.stderr}")
+    lock = caller / "apm.lock.yaml"
+    require(lock.is_file(), "Real APM did not generate the consumer lock")
+    content_hash = require_consumer_lock(lock, revision)
+    manifest = package / "apm.yml"
+    text = manifest.read_text(encoding="utf-8")
+    require(text.count("    - path: ./skills/release-style\n") == 1, "Missing publisher fixture dependency")
+    manifest.write_text(
+        text.replace(
+            "    - path: ./skills/release-style\n",
+            f"    - git: {url}\n      ref: publisher-version-does-not-exist\n",
+        ),
+        encoding="utf-8",
+    )
+    shutil.rmtree(original_skill)
+    return {
+        "origin": str(origin), "git_url": url, "resolved_commit": revision,
+        "resolved_ref": "v9", "version": "9.0.0", "lock_sha256": digest(lock),
+        "content_hash": content_hash,
+        "manifest_sha256": digest(caller / "apm.yml"),
+        "transport": "hermetic SSH transport serving genuine Git objects; native APM resolution and lock writer",
+    }
+
+
 def run_binary(binary: Path, args: list[str], caller: Path, env: dict[str, str], timeout: float = 90):
     process = subprocess.Popen(
         [str(binary), *args],
@@ -460,6 +552,12 @@ def run_case(
         "Read notes.md and write its JSON object to handoff.json without changing any values.\n",
         encoding="utf-8",
     )
+    consumer_pin = None
+    skill_source = package / "skills/release-style"
+    if mixed_imports:
+        consumer_pin = prepare_consumer_lock(backend, root, caller, package, env)
+        skill_source = Path(consumer_pin["origin"])
+        resources = {relative: skill_source / relative for relative in resources}
     caller_before = snapshot(caller)
     package_before = snapshot(package)
     profiles_before = profile_snapshot(root)
@@ -581,14 +679,22 @@ def run_case(
         require(len(record["imports"]) == (3 if mixed_imports else 1), "Unexpected selected import count")
         imported = record["imports"][0]
         require(imported["name"] == "release-style", "Wrong packaged skill")
-        require_local_identity(imported["lock_identity"], package / "skills/release-style")
-        require(imported["sha256"] == digest(package / "skills/release-style/SKILL.md"), "Skill digest")
+        if consumer_pin:
+            require(imported["lock_identity"] == "localhost/fixtures/release-style", "Consumer Git identity changed")
+            require(imported["resolved_commit"] == consumer_pin["resolved_commit"], "Consumer commit was overridden")
+            require(imported["resolved_ref"] == consumer_pin["resolved_ref"], "Consumer ref was overridden")
+            require(imported["version"] == consumer_pin["version"], "Consumer version was overridden")
+            require(imported["verified_package_hash"] == consumer_pin["content_hash"], "Consumer package hash changed")
+        else:
+            require_local_identity(imported["lock_identity"], skill_source)
+        require(imported["sha256"] == digest(skill_source / "SKILL.md"), "Skill digest")
         if mixed_imports:
             instruction = package / "contexts/release-context-package/.apm/instructions/release-guidance.instructions.md"
             selected_instruction = record["imports"][1]
             require(selected_instruction["name"] == "release-context-package", "Instruction lost package linkage")
             require_local_identity(
                 selected_instruction["lock_identity"], package / "contexts/release-context-package",
+                consumer_lock=bool(consumer_pin),
             )
             require(selected_instruction["kind"] == "instruction", "Instruction context kind was lost")
             require(selected_instruction["context_name"] == "release-guidance", "Wrong instruction selected")
@@ -609,6 +715,7 @@ def run_case(
             require(selected_skill["name"] == "release-context-package", "Contained skill lost package linkage")
             require_local_identity(
                 selected_skill["lock_identity"], package / "contexts/release-context-package",
+                consumer_lock=bool(consumer_pin),
             )
             require(selected_skill["kind"] == "skill", "Contained skill context kind was lost")
             require(selected_skill["context_name"] == "contained-style", "Contained skill name mismatch")
@@ -630,6 +737,19 @@ def run_case(
         retained = record["source"]["retained"]
         require(digest(Path(retained["contract.contract.md"])) == digest(contract), "Retained contract identity")
         require(digest(Path(retained["apm.lock.yaml"])) == record["lock_sha256"], "Retained package lock identity")
+        if consumer_pin:
+            require(record["consumer_lock_sha256"] == consumer_pin["lock_sha256"], "Consumer lock record identity")
+            require(record["consumer_manifest_sha256"] == consumer_pin["manifest_sha256"], "Consumer manifest record identity")
+            require(
+                digest(Path(retained["consumer-apm.lock.yaml"])) == consumer_pin["lock_sha256"],
+                "Original consumer lock was not retained byte-for-byte",
+            )
+            for lock_name in ("consumer-apm.lock.yaml", "apm.lock.yaml"):
+                require(
+                    require_consumer_lock(Path(retained[lock_name]), consumer_pin["resolved_commit"])
+                    == consumer_pin["content_hash"],
+                    f"{lock_name} changed the consumer's native package hash",
+                )
     transcript_path = run / "transcript.log"
     require(record["transcript"]["relative_path"] == "transcript.log", "Transcript identity")
     require(record["transcript"]["sha256"] == digest(transcript_path), "Transcript digest")
@@ -644,6 +764,7 @@ def run_case(
         "backend_installation": installation,
         "fresh_home": fresh_home, "profile_changes": profile_changes,
         "mixed_imports": mixed_imports,
+        "consumer_pin": consumer_pin,
         "record": record,
     }
 

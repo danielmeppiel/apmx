@@ -111,6 +111,16 @@ must match the original sources. An unselected dependency's skill and an unsuppo
 must be absent from the prompt and the entire producer workspace; the supporting script must
 never execute. The original single-skill gates remain separate.
 
+That same tenth case also generates a real consumer lock with native APM against
+a genuine Git repository tagged `v9` with package version `9.0.0`. A hermetic SSH
+transport serves actual Git objects; it does not replace APM, its resolver,
+checkout, or lock writer. The packaged contract names the same Git dependency
+with a deliberately nonexistent publisher ref. The run must still use the
+consumer's exact commit, version, and context bytes, retain its original lock
+byte-for-byte, preserve that entry in the effective native lock, and leave both
+caller and package snapshots unchanged. This is package identity precedence,
+not a same-basename local-directory approximation.
+
 Short deadline/timeout behavior is covered separately by native-platform source
 tests using the existing `ProcessRequest` API. The frozen gate does **not** claim
 end-to-end default-duration timeout coverage. No public timeout flags, startup

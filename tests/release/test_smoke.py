@@ -22,6 +22,9 @@ class SmokeFixtureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             original = Path(temporary).resolve() / "original-source"
             smoke.require_local_identity(f"local:{original}", original)
+            smoke.require_local_identity(str(original), original, consumer_lock=True)
+            with self.assertRaises(AssertionError):
+                smoke.require_local_identity(str(original) + "-decoy", original, consumer_lock=True)
             for identity in ("./original-source", "local:original-source", f"local:{original}-decoy"):
                 with self.assertRaises(AssertionError):
                     smoke.require_local_identity(identity, original)
@@ -356,6 +359,9 @@ class SmokeFixtureTests(unittest.TestCase):
                 patch.object(smoke, "poison_host_apm"),
                 patch.object(smoke.release, "check_backend_metadata", return_value=smoke.release.read_backend_pin()),
                 patch.object(smoke, "install_backend_fixture", return_value={}),
+                patch.object(smoke, "prepare_consumer_lock", return_value={
+                    "origin": str(root / "package/skills/release-style"),
+                }),
                 patch.object(smoke, "run_binary", side_effect=RuntimeError("stop before binary")) as run,
             ):
                 with self.assertRaisesRegex(RuntimeError, "stop before binary"):
@@ -369,6 +375,29 @@ class SmokeFixtureTests(unittest.TestCase):
             resources = json.loads(env["APMX_CONTEXT_RESOURCE_DIGESTS"])
             self.assertEqual(set(resources), {"references/detail.txt", "assets/example.json", "scripts/data_only.py"})
             self.assertFalse(Path(env["APMX_RESOURCE_EXECUTED"]).exists())
+
+    def test_native_consumer_lock_assertion_rejects_changed_ref_version_or_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "apm.lock.yaml"
+            revision = "a" * 40
+            content = (
+                "lockfile_version: '1'\ndependencies:\n"
+                "- repo_url: fixtures/release-style\n"
+                "  name: release-style\n  host: localhost\n"
+                f"  resolved_commit: {revision}\n"
+                "  resolved_ref: v9\n  version: 9.0.0\n"
+                f"  content_hash: sha256:{'b' * 64}\n"
+            )
+            lock.write_text(content)
+            smoke.require_consumer_lock(lock, revision)
+            for before, after in (
+                ("v9", "publisher-version-does-not-exist"), ("9.0.0", "1.0.0"),
+                ("localhost", "otherhost"), (revision, "c" * 40),
+                ("fixtures/release-style", "different/release-style"),
+            ):
+                lock.write_text(content.replace(before, after))
+                with self.assertRaises(AssertionError):
+                    smoke.require_consumer_lock(lock, revision)
 
     def test_mixed_actor_rejects_unselected_prompt_and_changed_supporting_resource(self):
         for failure in (None, "unselected", "resource"):
