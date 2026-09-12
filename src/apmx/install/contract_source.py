@@ -186,9 +186,7 @@ def prepare_contract_source(
                 managed_metadata=managed_metadata,
             )
             return
-        with _private_root(caller_root, original) as private:
-            stage = private / "install"
-            stage.mkdir(mode=0o700)
+        with _private_root(caller_root, original) as stage:
             if caller_manifest_digest is not None:
                 frozen = apm_backend.snapshot_manifest(caller_root, stage, limits)
                 established, _ = read_lock(stage, limits)
@@ -270,9 +268,7 @@ def prepare_imports(
     if manifest_digest is None:
         raise ContractError("Consumer lock requires its manifest.", code="invalid_manifest")
     before = _original_bytes(caller_root, limits)
-    with _private_root(caller_root, None) as private:
-        stage = private / "consumer"
-        stage.mkdir(mode=0o700)
+    with _private_root(caller_root, None) as stage:
         frozen = apm_backend.snapshot_manifest(caller_root, stage, limits)
         identity = apm_backend.install(stage, frozen=frozen, limits=limits)
         if _original_bytes(caller_root, limits) != before:

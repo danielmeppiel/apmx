@@ -310,10 +310,12 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
     ) as source:
         assert not source.imports_root.is_relative_to(caller)
+        assert source.imports_root.name.startswith("apmx-")
         with prepare_imports(
             caller, source.root / _contract(package), source=source, planning=False, limits=LIMITS
         ) as (root, identity):
             assert not root.is_relative_to(caller)
+            assert root.name.startswith("apmx-")
             plan = plan_contract(
                 Path(_contract(package)), caller, harness="copilot", source=source,
                 imports_root=root, apm_backend=identity,
@@ -326,17 +328,29 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
     assert all((caller / name).read_bytes() == data for name, data in before.items())
 
 
-def test_native_source_bootstrap_accepts_null_consumer_dependencies(fixture):
+def test_native_source_bootstrap_accepts_null_consumer_dependencies(fixture, monkeypatch):
+    from contextlib import contextmanager
+    import apmx.install.contract_source as preparation
+
     caller, package = fixture
     manifest = caller / "apm.yml"
     manifest.write_text("name: consumer\nversion: 1.0.0\ndependencies: null\n")
     before = manifest.read_bytes()
     source_before = source_hash(package, LIMITS)
+    stages = []
+    private_root = preparation._private_root
+    @contextmanager
+    def observe_root(*args):
+        with private_root(*args) as root:
+            stages.append(root)
+            yield root
+    monkeypatch.setattr(preparation, "_private_root", observe_root)
     with prepare_contract_source(
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
     ) as source:
         assert source.root.is_dir()
         assert source.apm_backend["version"] == "0.30.0"
+        assert source.imports_root == stages[0]
         assert (source.imports_root / "apm.lock.yaml").is_file()
     assert manifest.read_bytes() == before
     assert not (caller / "apm.lock.yaml").exists()

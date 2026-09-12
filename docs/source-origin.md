@@ -48,6 +48,9 @@ Staging uses a compact, private system-temporary directory rather than extending
 the caller's path: native APM's transactional Git paths can exceed Windows Git
 limits under a deep checkout. The temporary parent must be outside the caller and
 source; all staged files are removed through the existing guarded cleanup path.
+The fresh temporary root itself is the source/deploy directory, without another
+staging layer: Git for Windows also bounds explicit Git-directory paths separately
+from its filesystem long-path support.
 On Windows, only the APM child receives a process-scoped `core.longpaths=true`
 Git setting, matching the pinned backend's own Git-cache convention. Existing
 indexed Git configuration and authentication entries are preserved; malformed
