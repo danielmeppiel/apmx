@@ -1,0 +1,282 @@
+"""Dependency identity helpers -- key derivation, canonical strings, semver guards.
+
+Extracted from ``reference.py`` to keep that module within the source
+file-length guardrail. These are pure, stateless helpers with no dependency on
+``DependencyReference`` internals; both ``DependencyReference`` and
+``LockedDependency`` reuse them so the two identity models share one body shape
+without collapsing their distinct local-detection semantics.
+
+``normalize_package_repo_url`` is the single casing-normalization boundary for
+comparison identity. It must never be used as a display or filesystem path.
+"""
+
+import re
+from enum import Enum
+from functools import lru_cache
+
+from ...utils.github_host import default_host, is_github_hostname
+
+# Allowed character set for a single repository path segment.
+#
+# ADO accepts spaces (project / repo names can contain them) but NOT tilde --
+# tilde has no meaning on Azure DevOps URLs and keeping it out preserves the
+# asymmetry that protects the ADO surface from inadvertent regressions.
+#
+# Non-ADO hosts accept tilde because Bitbucket Data Center / Server (and
+# Sourcehut) use ``~username`` path segments for personal repositories
+# (e.g. ``/scm/~jdoe/repo.git``). ``~`` is RFC 3986 unreserved, has no
+# POSIX path-traversal meaning, and all subprocess calls in APM use
+# list-form ``argv`` so there is no shell-expansion vector.
+_ADO_PATH_SEGMENT_RE = r"^[a-zA-Z0-9._\- ]+$"
+_NON_ADO_PATH_SEGMENT_RE = r"^[a-zA-Z0-9._~-]+$"
+_PERCENT_ENCODED_NON_ADO_PATH_SEGMENT_RE = r"^(?:[a-zA-Z0-9._~-]|%[0-9A-Fa-f]{2})+$"
+
+_RANGE_PREFIX_RE = re.compile(r"^(>=|<=|>|<|\^|~|=)")
+_DEFAULT_SCHEME_PORTS: dict[str, int] = {"https": 443, "http": 80, "ssh": 22}
+_ASCII_LOWER_TRANSLATION = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "abcdefghijklmnopqrstuvwxyz",
+)
+
+
+class PackageIdentityCase(Enum):
+    """Case-normalization extent for one package identity."""
+
+    SENSITIVE = "sensitive"
+    REPOSITORY = "repository"
+    # ALL covers every repo_url segment; virtual_path remains a package boundary.
+    ALL = "all"
+
+
+def _split_shorthand_host_port(host_segment: str) -> tuple[str, int | None]:
+    """Split and validate the host segment used by DependencyReference shorthand."""
+    if ":" not in host_segment:
+        return host_segment, None
+    host, _, raw_port = host_segment.rpartition(":")
+    error = "Invalid shorthand port. Expected an integer from 1 to 65535"
+    if not host or not re.fullmatch(r"[0-9]{1,5}", raw_port):
+        raise ValueError(error)
+    port = int(raw_port)
+    if not 1 <= port <= 65535:
+        raise ValueError(error)
+    return host, None if port == _DEFAULT_SCHEME_PORTS["https"] else port
+
+
+def normalize_package_repo_url(
+    repo_url: str,
+    *,
+    host: str | None = None,
+    source: str | None = None,
+    registry_prefix: str | None = None,
+    is_local: bool = False,
+    is_marketplace: bool = False,
+) -> str:
+    """Return the canonical repository path for package identity.
+
+    GitHub and package-registry identifiers are case-insensitive, so their
+    owner/repository path is lowercase at the model boundary. Unknown git
+    hosts retain their path casing because their repository semantics may be
+    case-sensitive.
+    """
+    identity_case = classify_package_identity_case(
+        host=host,
+        source=source,
+        registry_prefix=registry_prefix,
+        is_local=is_local,
+        is_marketplace=is_marketplace,
+    )
+    if identity_case is PackageIdentityCase.SENSITIVE:
+        return repo_url
+    return repo_url.lower()
+
+
+def classify_package_identity_case(
+    *,
+    host: str | None = None,
+    source: str | None = None,
+    registry_prefix: str | None = None,
+    is_local: bool = False,
+    is_marketplace: bool = False,
+) -> PackageIdentityCase:
+    """Return the canonical case-normalization extent for a package identity."""
+    if is_local or source == "local" or is_marketplace:
+        return PackageIdentityCase.SENSITIVE
+    if source == "registry" or registry_prefix:
+        return PackageIdentityCase.ALL
+    effective_host = host or default_host()
+    if is_github_hostname(effective_host):
+        return PackageIdentityCase.REPOSITORY
+    return PackageIdentityCase.SENSITIVE
+
+
+def is_case_insensitive_package_identity(
+    *,
+    host: str | None = None,
+    source: str | None = None,
+    registry_prefix: str | None = None,
+    is_local: bool = False,
+    is_marketplace: bool = False,
+) -> bool:
+    """Return whether repository casing is excluded from package identity."""
+    return (
+        classify_package_identity_case(
+            host=host,
+            source=source,
+            registry_prefix=registry_prefix,
+            is_local=is_local,
+            is_marketplace=is_marketplace,
+        )
+        is not PackageIdentityCase.SENSITIVE
+    )
+
+
+def case_insensitive_identity_prefix_segments(
+    repo_url: str,
+    *,
+    host: str | None = None,
+    source: str | None = None,
+    registry_prefix: str | None = None,
+    is_local: bool = False,
+    is_marketplace: bool = False,
+) -> int:
+    """Return how many leading repository path segments exclude casing."""
+    identity_case = classify_package_identity_case(
+        host=host,
+        source=source,
+        registry_prefix=registry_prefix,
+        is_local=is_local,
+        is_marketplace=is_marketplace,
+    )
+    if identity_case is PackageIdentityCase.SENSITIVE:
+        return 0
+    return len(repo_url.split("/"))
+
+
+@lru_cache(maxsize=512)
+def normalize_package_policy_identity(
+    value: str,
+    *,
+    case_insensitive_prefix_segments: int,
+) -> str:
+    """Normalize only the repository prefix of a dependency-policy operand.
+
+    The caller must source ``case_insensitive_prefix_segments`` from
+    ``case_insensitive_identity_prefix_segments``. Recursive globs end a
+    positional repository prefix; virtual paths and ``#ref`` suffixes stay
+    case-sensitive.
+    """
+    if case_insensitive_prefix_segments <= 0:
+        return value
+
+    name, separator, reference = value.partition("#")
+    segments = name.split("/")
+    normalized: list[str] = []
+    for index, segment in enumerate(segments):
+        if index >= case_insensitive_prefix_segments or "**" in segment:
+            normalized.extend(segments[index:])
+            break
+        normalized.append(segment.translate(_ASCII_LOWER_TRANSLATION))
+
+    normalized_name = "/".join(normalized)
+    return f"{normalized_name}{separator}{reference}"
+
+
+def build_dependency_unique_key(
+    repo_url: str,
+    *,
+    host: str | None = None,
+    source: str | None = None,
+    local_path: str | None = None,
+    is_virtual: bool = False,
+    virtual_path: str | None = None,
+    registry_prefix: str | None = None,
+    declaring_parent: str | None = None,
+    anchored_local_path: str | None = None,
+    is_marketplace: bool = False,
+) -> str:
+    """Return the lockfile/dedup key for a dependency identity.
+
+    github.com remains the implicit default so existing lockfiles keep bare
+    ``owner/repo`` keys. Non-default hosts include the host segment to avoid
+    collisions between the same ``owner/repo`` on different servers.
+    This deliberately uses the literal ``github.com`` default rather than
+    environment-specific host overrides, so lockfile keys stay portable across
+    machines with different GitHub Enterprise defaults.
+
+    Registry-proxy deps (``registry_prefix`` set, e.g. an Artifactory mirror)
+    keep the bare logical key: the proxy host is a transport detail, not the
+    package identity, and the manifest side always declares the upstream
+    ``owner/repo`` shorthand. Host-qualifying them would break the manifest /
+    lockfile key correspondence used by re-install and orphan detection.
+    """
+    if source == "local" and local_path:
+        if anchored_local_path:
+            return f"local:{anchored_local_path}"
+        return local_path
+
+    key = normalize_package_repo_url(
+        repo_url,
+        host=host,
+        source=source,
+        registry_prefix=registry_prefix,
+        is_local=source == "local",
+        is_marketplace=is_marketplace,
+    )
+    if is_virtual and virtual_path:
+        key = f"{key}/{virtual_path}"
+
+    if registry_prefix:
+        return key
+
+    host_value = (host or "").strip()
+    normalized_host = host_value.lower()
+    if normalized_host and normalized_host != "github.com":
+        return f"{normalized_host}/{key}"
+    return key
+
+
+def build_canonical_dependency_string(
+    repo_url: str,
+    *,
+    is_local: bool = False,
+    local_path: str | None = None,
+    is_virtual: bool = False,
+    virtual_path: str | None = None,
+) -> str:
+    """Return the host-blind canonical string for filesystem / orphan matching.
+
+    Host-blind by construction: it never prefixes the host, so it matches the
+    host-blind ``apm_modules/`` layout. Use :func:`build_dependency_unique_key`
+    for the host-qualified lockfile dedup key.
+
+    Callers pass their own ``is_local`` signal -- ``DependencyReference``
+    derives it from its ``is_local`` property while ``LockedDependency`` derives
+    it from ``source == "local"`` -- so single-sourcing the body shape does not
+    collapse the two identity models' distinct local-detection semantics.
+    """
+    if is_local and local_path:
+        return local_path
+    if is_virtual and virtual_path:
+        return f"{repo_url}/{virtual_path}"
+    return repo_url
+
+
+def _path_segment_pattern(is_ado_host: bool) -> str:
+    """Return the allowed-character regex for a single repo path segment."""
+    return _ADO_PATH_SEGMENT_RE if is_ado_host else _NON_ADO_PATH_SEGMENT_RE
+
+
+def _is_valid_registry_semver_range(spec: str) -> bool:
+    """Defer importing ``deps.registry`` until call time (avoids import cycles)."""
+    from ...deps.registry.semver import is_semver_range
+
+    return is_semver_range(spec)
+
+
+class InvalidSemverRangeError(ValueError):
+    """Raised when a ref starts like a semver range but is invalid."""
+
+
+def _looks_like_invalid_semver_range(spec: str) -> bool:
+    """Return whether *spec* starts like a semver range but is invalid."""
+    return bool(_RANGE_PREFIX_RE.match(spec.strip()))

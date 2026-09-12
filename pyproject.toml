@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apmx"
+version = "0.1.0"
+description = "Run one packaged contract through native Copilot with independent checks"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+  "click>=8.1",
+  "rich>=13",
+  "colorama>=0.4.6",
+  "PyYAML>=6",
+  "python-frontmatter>=1",
+  "ruamel.yaml>=0.18",
+  "requests>=2.31",
+  "truststore>=0.10",
+  "certifi>=2024.7.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.12"]
+build = ["pyinstaller==6.16.0", "build>=1.2"]
+
+[project.scripts]
+apmx = "apmx.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+apmx = ["core/*.js", "core/_child_tls/*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "unit: isolated unit regressions",
+  "component: canonical component regressions",
+  "integration: lifecycle integration",
+  "windows_compat: cross-platform parser and filesystem tests",
+  "slow: bounded subprocess or terminal lifecycle tests",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.uv]
+default-groups = []
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true

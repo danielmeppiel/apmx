@@ -1,0 +1,70 @@
+# First local contracts
+
+These are authored, secret-free fixtures, not copies of a governed project.
+Copy this directory to a fresh disposable directory outside another Git
+repository. Use standalone apmx, Python 3,
+and an authenticated native Copilot CLI with access to your selected model.
+Do not remove a project's remotes or policy to make it eligible.
+
+## Produce and assess a handoff
+
+From the copied `first-contract/` directory:
+
+```sh
+apmx ./handoff.contract.md --on copilot --model gpt-6-astra --plan
+apmx ./handoff.contract.md --on copilot --model gpt-6-astra --allow-host-access
+```
+
+The model is an explicit demonstration selection, not an apmx default.
+Planning does not call a model, install packages or execute checks.
+`--allow-host-access` is required in terminals and pipes, with no prompt or
+remembered consent. Native processes use your host identity: this is not
+filesystem/network isolation or a hard spending cap.
+
+Inspect the artifact and record paths printed by apmx. The captured handoff
+lives under `.apm/runs/<run-id>/`, not over an existing `handoff.json` in your
+project. The standard-library-only checker assesses JSON shape and source-ID
+coverage, not the complete factual correctness or quality of the prose.
+
+## Reuse one skill
+
+The second fixture shares the first fixture's source notes and parameterized
+checker. From the copied examples directory, prepare its explicit resources:
+
+```sh
+mkdir -p reuse-contract/checks
+cp first-contract/notes.md reuse-contract/notes.md
+cp first-contract/checks/check_handoff.py reuse-contract/checks/check_handoff.py
+cd reuse-contract
+apmx --from . ./handoff.contract.md --on copilot --model gpt-6-astra --allow-host-access
+```
+
+apmx prepares the skill privately. The contract names the declared
+`handoff-style` skill, not an `apm_modules/` path. apmx supplies its selected
+content without invoking another agent or granting tools. The extra check
+assesses its caution format. Local lock identity plus observed source bytes
+does not establish a cryptographic pin or protected provenance.
+
+## Read outcomes literally
+
+| Outcome | Meaning in this slice |
+| --- | --- |
+| VERIFIED / 0 | Reserved; the current native runner cannot establish this result. |
+| REJECTED / 20 | A check returned a failed condition, even if another check was incomplete. |
+| UNPROVEN / 21 | Includes passing checks: this native run was not sandboxed. Also covers missing output, incomplete checks, or unavailable consent. |
+| HALTED / 22 | Execution, cancellation, watchdog, capture or recording stopped the invocation. |
+
+Raw check exits are retained: 0 passes, 1 fails, 2 is incomplete; unknown exits,
+missing tools and signals are incomplete. No output does not mean `no_change`.
+Every check gets a fresh baseline and the captured file. Patch checks apply
+their own patch; apmx does not apply it first.
+Expect exit `21` for the completed examples with passing checks. The output
+and record are still saved; the host-isolation limit is not a check failure.
+
+The profile requires positively established no-policy
+projects. Governed/unresolved-policy projects, command
+leaves, `budget`, `sandbox`, captures, output alternatives and composed jobs
+refuse before inference. Passing checks never authorizes merge or delivery.
+
+On Windows replace `python3` check commands with a native Python executable,
+using quoted forward-slash paths. Check shells and `.cmd` shims are unsupported.
