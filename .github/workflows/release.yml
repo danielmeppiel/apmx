@@ -91,8 +91,10 @@ jobs:
       matrix: ${{ fromJSON(needs.candidate.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    # GitHub requires write access to inspect/download private draft releases.
+    # Expose GH_TOKEN only in the download step, never in frozen smoke execution.
     permissions:
-      contents: read
+      contents: write
     defaults:
       run:
         shell: bash

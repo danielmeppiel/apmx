@@ -80,7 +80,13 @@ Ordinary CI builds and tests all five native targets. Release runs only for a
 `vMAJOR.MINOR.PATCH` tag or an explicit manual request naming an existing tag.
 The tag must match `pyproject.toml`, and jobs use its resolved commit throughout.
 All Actions are official and SHA-pinned; dependency installation uses the frozen
-public-index lock. Only the draft and publication jobs receive `contents: write`.
+public-index lock. Candidate, build/test, and workflow-default permissions remain
+`contents: read`. Draft creation, downloaded-asset verification, and publication
+jobs explicitly receive `contents: write`: GitHub's private draft APIs reject
+read-only integration tokens even for inspection/download requests. Verification
+uses `GH_TOKEN` only in the download step, never in frozen smoke execution, and
+checkout does not persist credentials. No PAT, new secret, or global permission
+change is required; exact asset/hash checks and publication gates are unchanged.
 
 The release workflow reuses native CI, collects exactly five archives plus their
 sidecars, and uploads them with a commit/version/hash manifest to a private draft.
