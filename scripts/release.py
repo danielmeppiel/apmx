@@ -52,15 +52,15 @@ def read_backend_pin(path: Path = BACKEND_PIN) -> dict:
     for target, asset in pin["assets"].items():
         root = "apm-" + target.replace("macos-", "darwin-")
         windows = target.startswith("windows-")
+        expected_output = f"Agent Package Manager (APM) CLI version {pin['version']}"
+        if not windows:
+            expected_output += f" ({pin['source_commit'][:7]})"
         if (
             asset.get("root") != root
             or asset.get("archive") != root + (".zip" if windows else ".tar.gz")
             or asset.get("executable") != ("apm.exe" if windows else "apm")
             or not re.fullmatch(r"[0-9a-f]{64}", asset.get("sha256", ""))
-            or not isinstance(asset.get("version_output"), str)
-            or not asset["version_output"]
-            or asset["version_output"] != asset["version_output"].strip()
-            or any(ord(character) < 32 for character in asset["version_output"])
+            or asset.get("version_output") != expected_output
         ):
             raise ValueError(f"Invalid APM backend asset pin: {target}")
     return pin
@@ -105,7 +105,7 @@ def probe_backend(executable: Path, pin: dict, target: str) -> str:
             [str(executable.resolve()), "--version"], cwd=temporary, env=env,
             capture_output=True, text=True, encoding="utf-8", timeout=30, check=True,
         )
-    output = result.stdout.strip()
+    output = result.stdout.removesuffix("\n").removesuffix("\r")
     if output != pin["assets"][target]["version_output"]:
         raise ValueError(f"APM backend version/source mismatch: {output!r}")
     return output

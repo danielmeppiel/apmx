@@ -72,6 +72,11 @@ class BackendTests(unittest.TestCase):
             path.write_text(json.dumps(pin))
             with self.assertRaisesRegex(ValueError, "asset pin"):
                 release.read_backend_pin(path)
+        for field, value in (("version", "0.31.0"), ("source_commit", "f" * 40)):
+            path = self.root / "pin.json"
+            path.write_text(json.dumps({**self.pin, field: value}))
+            with self.assertRaisesRegex(ValueError, "asset pin"):
+                release.read_backend_pin(path)
 
     def test_bundle_pin_and_provenance_are_verified_for_every_target(self):
         for target in release.TARGETS:
@@ -189,6 +194,7 @@ class BackendTests(unittest.TestCase):
                 expected.replace(self.pin["version"], "99.99.99"),
                 "arbitrary prefix " + expected,
                 expected + " trailing text",
+                " " + expected, expected + " ", "\n" + expected,
             }
             if target.startswith("windows-"):
                 wrong.add(expected + f" ({self.pin['source_commit'][:7]})")
