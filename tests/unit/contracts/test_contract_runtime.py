@@ -211,6 +211,7 @@ def test_runtime_capability_is_owned_by_registry() -> None:
         b'{"mcpServers":' + b"[" * 1000 + b"0" + b"]" * 1000 + b"}",
         json.dumps({"mcpServers": {f"fixture-{index}": {} for index in range(129)}}).encode(),
     ],
+    ids=lambda raw: f"invalid-{len(raw)}-bytes",
 )
 def test_unobservable_inventory_refuses_without_retaining_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw: bytes, capsys

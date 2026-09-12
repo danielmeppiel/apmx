@@ -31,7 +31,10 @@ def safe_text(text: str, *, limit: int = _DISPLAY_CHARS) -> str:
     retrievable Unicode identity in the private diagnostic transcript.
     """
     redacted = redact_git_diagnostic(text)
-    escaped = redacted.encode("unicode_escape", errors="backslashreplace").decode("ascii")
+    escaped = (
+        redacted.encode("unicode_escape", errors="backslashreplace").decode("ascii")
+        .replace("\\\\", "\\")
+    )
     # unicode_escape leaves a few ASCII controls (notably DEL) literal.
     escaped = "".join(
         character if " " <= character <= "~" else f"\\x{ord(character):02x}"

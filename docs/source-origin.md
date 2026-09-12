@@ -66,6 +66,11 @@ interpolation is unsupported. Checks preserve `sh -c` semantics on all platforms
 Windows requires Git for Windows' native `sh.exe`. Use POSIX-style quoting
 and forward-slash paths for Windows checker executables. Frozen
 children restore external loader paths rather than inheriting bundled libraries.
+Restoration happens once at the spawning boundary, preserving the user's original
+library paths through repeated credential/environment preparation. Windows Git's
+empty configuration file is invocation-private temporary state, not a shared APM
+configuration path. Terminal rendering preserves copyable Windows backslashes
+while continuing to visibly escape control characters and Unicode.
 
 No sandbox, cryptographic evidence signature, notarization, publisher signature,
 or production/live-inference claim follows from a green fixture test.

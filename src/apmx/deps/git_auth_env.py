@@ -26,7 +26,12 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
+import threading
 from typing import Any
+
+_EMPTY_CONFIG_LOCK = threading.Lock()
+_EMPTY_CONFIG_DIRECTORY: tempfile.TemporaryDirectory[str] | None = None
 
 
 class GitAuthEnvBuilder:
@@ -85,15 +90,15 @@ class GitAuthEnvBuilder:
     def isolated_global_config_path() -> str:
         """Return a cross-platform empty Git config path."""
         if sys.platform == "win32":
-            import tempfile
-
-            from ..config import get_apm_temp_dir
-
-            temp_base = get_apm_temp_dir() or tempfile.gettempdir()
-            empty_cfg = os.path.join(temp_base, ".apm_empty_gitconfig")
-            with open(empty_cfg, "w", encoding="ascii"):
-                pass
-            return empty_cfg
+            global _EMPTY_CONFIG_DIRECTORY
+            with _EMPTY_CONFIG_LOCK:
+                if _EMPTY_CONFIG_DIRECTORY is None:
+                    directory = tempfile.TemporaryDirectory(prefix="apmx-git-config-")
+                    empty_cfg = os.path.join(directory.name, "empty.gitconfig")
+                    with open(empty_cfg, "x", encoding="ascii"):
+                        pass
+                    _EMPTY_CONFIG_DIRECTORY = directory
+                return os.path.join(_EMPTY_CONFIG_DIRECTORY.name, "empty.gitconfig")
         return os.devnull
 
     # -- noninteractive (fallback) env ----------------------------------

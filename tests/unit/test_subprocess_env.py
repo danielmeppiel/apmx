@@ -1,5 +1,7 @@
 from unittest.mock import Mock
 import sys
+from types import SimpleNamespace
+import ctypes
 
 from apmx.contracts.models import ProcessRequest
 from apmx.contracts.process import supervise_process
@@ -48,3 +50,19 @@ def test_repeated_git_env_preparation_restores_loader_once(monkeypatch, tmp_path
     assert result.returncode == 0
     assert result.cleanup_confirmed
     assert bytes(output).strip() == b"/user-libs"
+
+
+def test_empty_windows_dll_directory_is_not_a_failed_query(monkeypatch):
+    monkeypatch.setattr(subprocess_env, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(subprocess_env.sys, "frozen", True, raising=False)
+    kernel = SimpleNamespace(
+        GetDllDirectoryW=Mock(side_effect=[1, 0]),
+        SetDllDirectoryW=Mock(return_value=True),
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", Mock(return_value=kernel), raising=False)
+    monkeypatch.setattr(ctypes, "set_last_error", Mock(), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", Mock(return_value=0), raising=False)
+    with subprocess_env.external_dll_search():
+        pass
+    assert kernel.SetDllDirectoryW.call_count == 2
+    assert all(call.args == (None,) for call in kernel.SetDllDirectoryW.call_args_list)

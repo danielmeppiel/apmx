@@ -71,8 +71,11 @@ def external_dll_search():
         if not size and ctypes.get_last_error():
             raise ctypes.WinError(ctypes.get_last_error())
         previous = ctypes.create_unicode_buffer(size + 1)
-        if size and not kernel.GetDllDirectoryW(len(previous), previous):
-            raise ctypes.WinError(ctypes.get_last_error())
+        if size:
+            ctypes.set_last_error(0)
+            copied = kernel.GetDllDirectoryW(len(previous), previous)
+            if not copied and ctypes.get_last_error():
+                raise ctypes.WinError(ctypes.get_last_error())
         if not kernel.SetDllDirectoryW(None):
             raise ctypes.WinError(ctypes.get_last_error())
         try:
