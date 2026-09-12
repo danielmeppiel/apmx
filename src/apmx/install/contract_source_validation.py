@@ -4,10 +4,8 @@ import os
 import stat
 from pathlib import Path
 
-from apmx.contracts.imports import read_project_manifest
 from apmx.contracts.models import ContractError, ContractLimits, ContractSource, LeafContract
 from apmx.models.dependency.reference import DependencyReference
-from apmx.models.dependency.selection import parse_dependency_entry
 from apmx.utils.content_hash import compute_package_hash, verify_package_hash
 from apmx.utils.path_security import ensure_path_within, has_symlink_component, is_link_or_reparse
 
@@ -66,66 +64,6 @@ def validate_reference(dependency: DependencyReference) -> None:
             "parent inheritance and single-file sources are unsupported.",
             code="unsupported_source",
         )
-
-
-def package_dependency(
-    root: Path,
-    contract: LeafContract,
-    limits: ContractLimits,
-    *,
-    allow_missing_manifest: bool = False,
-) -> DependencyReference | None:
-    """Admit only the selected direct dependency and no automatic activation."""
-    package, data, _ = read_project_manifest(root, limits, allow_missing=allow_missing_manifest)
-    for key in (
-        "scripts",
-        "hooks",
-        "mcp",
-        "plugins",
-        "plugin",
-        "executables",
-        "bin",
-        "mcpServers",
-        "lspServers",
-        "execute",
-        "registries",
-    ):
-        if data.get(key):
-            raise ContractError(
-                f"Package {key} activation is unsupported. Use a self-contained contract package.",
-                code="unsupported_package",
-            )
-    if any(
-        (root / name).exists() for name in ("hooks", "plugin.json", ".claude-plugin", ".mcp.json")
-    ):
-        raise ContractError(
-            "Package activation resources are unsupported.", code="unsupported_package"
-        )
-    if package.canonical_targets and not {"all", "copilot"}.intersection(package.canonical_targets):
-        raise ContractError("Package targets exclude Copilot.", code="unsupported_package")
-    declarations = []
-    for dependencies in (package.dependencies, package.dev_dependencies):
-        for kind, values in (dependencies or {}).items():
-            if values and kind != "apm":
-                raise ContractError(
-                    "Only one direct APM skill dependency is supported.", code="unsupported_import"
-                )
-            declarations.extend(values or [])
-    if len(declarations) != len(contract.imports):
-        raise ContractError(
-            "Package dependencies must be exactly the one imported skill, or empty without imports.",
-            code="unsupported_import",
-        )
-    if not declarations:
-        return None
-    dependency = parse_dependency_entry(declarations[0])
-    if not dependency.is_parent_repo_inheritance:
-        validate_reference(dependency)
-    if dependency.target_subset and not {"all", "copilot"}.intersection(dependency.target_subset):
-        raise ContractError(
-            "Imported dependency targets exclude Copilot.", code="unsupported_import"
-        )
-    return dependency
 
 
 def validate_source(

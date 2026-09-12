@@ -3,7 +3,8 @@
 Run **one explicit contract** through native GitHub Copilot, retain its output,
 and assess that exact output using independently captured checks.
 
-This private standalone project does not require APM or experimental activation.
+This private standalone project bundles official APM for package management;
+no separate APM installation or experimental activation is required.
 It is derived from Microsoft's MIT-licensed APM contract engine; see
 [source origin and migration boundaries](docs/source-origin.md).
 
@@ -11,10 +12,10 @@ It is derived from Microsoft's MIT-licensed APM contract engine; see
 
 Use an authenticated GitHub CLI account with access to this private repository.
 Choose a published version from [Releases](https://github.com/danielmeppiel/apmx/releases).
-For `v0.1.0`, once published, on Apple Silicon macOS:
+For `v0.2.0`, once published, on Apple Silicon macOS:
 
 ```sh
-version=0.1.0
+version=0.2.0
 target=macos-arm64
 install_dir="$HOME/.local/share/apmx/$version"
 archive="apmx-$version-$target.tar.gz"
@@ -26,8 +27,10 @@ export PATH="$install_dir/apmx-$target:$PATH" &&
 apmx --version
 ```
 
-Keep the **entire extracted folder**, including `_internal`; do not copy only
-the executable. Available target names are `linux-x86_64`, `linux-arm64`,
+Keep the **entire extracted folder**, including `_internal` and `libexec/apm/`
+with the backend's separate `_internal`; do not copy only the executable.
+APM 0.30.0 is pinned inside the archive; apmx never selects a host APM from PATH.
+Available target names are `linux-x86_64`, `linux-arm64`,
 `macos-x86_64`, `macos-arm64`, and `windows-x86_64` (ZIP rather than tar.gz).
 Checksums detect changed download bytes; they are not publisher signatures.
 These releases have **no publisher signing or macOS notarization**.
@@ -60,14 +63,24 @@ it eligible.
 fetches packages nor probes/launches Copilot. Remote execution also accepts an
 explicit HTTPS/SSH Git package reference with a literal revision. An existing
 direct caller lock is replayed exactly; drift is refused rather than repaired.
-One self-contained root `SKILL.md` dependency may be imported as context.
+`imports` names one or more APM packages, without version selectors. Versions
+belong in `apm.yml` and the consumer's lock, including when the contract itself
+comes from a package. The body can refer to skills supplied by those packages
+by their own names; importing a skill symbol is not a separate API.
+Selected global instructions, root/collection skills, and bounded companion
+resources become explicit context. Other installed dependencies, hooks, agents
+and service configurations do not become producer context.
 For an optional offline preview, add `--plan` and omit `--allow-host-access`.
 A fresh package whose imported skill is not yet prepared returns **UNPROVEN / 21**
-with "Imported skill is unresolved offline"; this is not a failed check.
-Executing the explicit contract prepares its direct dependency privately.
+with "Imported context is unresolved offline"; this is not a failed check.
+Execution uses genuine bundled APM to prepare the dependency graph privately,
+without rewriting caller/package manifests or locks. With no consumer manifest,
+this is an ephemeral resolution, not a durable caller lock.
 
 **Run only contracts you trust.** `--allow-host-access` permits the native producer
-and checks to use host files, network and available login details. Native tool
+and checks, plus APM package preparation, to use host files, network and available
+login details. Unchanged APM may bootstrap its user configuration and version
+cache. apmx does not rewrite HOME or copy credential profiles. Native tool
 restrictions are not a sandbox. Policy admission remains fail-closed: configured,
 disabled or unresolved remote governance is unsupported.
 
@@ -100,7 +113,12 @@ Read notes.md and create handoff.json.
 Inputs are caller-relative; packaged contracts/checks are package-relative.
 Select an explicit `.contract.md` file; no default job or script fallback exists.
 [The packaged-job example](examples/contracts/packaged-job/README.md) includes
-a caller, package and imported skill.
+a caller, package and imported context. Supported selected context is global
+`.apm/instructions/**/*.instructions.md`, root `SKILL.md`, and collections in
+`.apm/skills/` or `skills/`. Skill `references/`, `assets/`, and `scripts/`
+resources are copied beneath `_apmx_context/import-N/`; scripts remain data,
+not importer-executed commands. Unsupported scoped/native activation refuses.
+The record retains exact package/version, document and resource digests.
 On Windows use a native checker executable with POSIX-style quoting and
 forward slashes, for example
 `'"C:/Program Files/Python312/python.exe" -I checks/check_handoff.py'`.
@@ -114,11 +132,17 @@ runtime, but not Copilot, Git, or contract-specific check tools.
 
 ```sh
 uv sync --extra dev --extra build
+# Select the matching native target from the list above.
+uv run python scripts/release.py provision-apm --target macos-arm64 --output dist/apm-backend
 uv run pytest
 uv run apmx --help
 ```
 
 Dependencies resolve from public PyPI. Protocol fixtures need no AI credentials
-and are not live model inference. The release pipeline independently checks
+and are not live model inference; package tests use the genuine released APM
+binary, not a fake installer. Source checkouts default to `dist/apm-backend/`;
+`APMX_APM_BACKEND` may point to an explicitly provisioned absolute executable
+path for source/wheel development. Frozen releases ignore that override.
+The release pipeline independently checks
 downloaded archive bytes on matching platforms; fixture results do not establish
 publisher signing or a sandbox.

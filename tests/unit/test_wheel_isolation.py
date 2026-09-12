@@ -27,6 +27,8 @@ def test_wheel_runs_without_checkout_or_apm(tmp_path):
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         assert any(name == "apmx/__main__.py" for name in names)
+        assert "apmx/apm-backend.json" in names
+        assert archive.read("apmx/apm-backend.json") == (root / "src/apmx/apm-backend.json").read_bytes()
         assert not any(name.startswith("apm_cli/") for name in names)
         assert any(name.endswith("/LICENSE") for name in names)
         assert any(name.endswith("/NOTICE") for name in names)
@@ -36,6 +38,7 @@ def test_wheel_runs_without_checkout_or_apm(tmp_path):
 import importlib.metadata
 import importlib.util
 import json
+import os
 from pathlib import Path
 import runpy
 import sys
@@ -47,6 +50,20 @@ dist = importlib.metadata.distribution("apmx")
 assert any(ep.name == "apmx" and ep.value == "apmx.cli:main" for ep in dist.entry_points)
 assert not any("apm-cli" in req.lower() or "apm_cli" in req.lower() for req in dist.requires or ())
 assert (Path(apmx.__file__).parent / "core/_child_tls/_apm_tls_bootstrap.py").is_file()
+from apmx.install.apm_backend import PIN_PATH, locate_backend
+from apmx.contracts.models import ContractError
+pin = json.loads(PIN_PATH.read_text())
+assert pin["schema"] == "apmx-apm-backend/1"
+assert pin["version"] == "0.30.0"
+assert pin["source_commit"] == "8c2e0d9c352e2ed0e8c56b40063a63e1dd4a1937"
+os.environ.pop("APMX_APM_BACKEND", None)
+os.environ["PATH"] = str(Path.cwd())
+try:
+    locate_backend()
+except ContractError as exc:
+    assert exc.code == "apm_backend_missing"
+else:
+    raise AssertionError("Source-free wheel found an unprovisioned backend")
 sys.argv = ["apmx", "--version"]
 runpy.run_module("apmx", run_name="__main__")
 """
@@ -58,4 +75,4 @@ runpy.run_module("apmx", run_name="__main__")
         cwd=tmp_path, capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "apmx, version 0.1.0"
+    assert result.stdout.strip() == "apmx, version 0.2.0"

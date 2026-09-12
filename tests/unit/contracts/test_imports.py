@@ -102,9 +102,7 @@ def test_git_import_requires_current_hash_and_ref(tmp_path: Path) -> None:
         "missing_lock",
         "malformed_lock",
         "missing_install",
-        "extra_resource",
         "nested_symlink",
-        "closure",
     ],
 )
 def test_import_refusals_never_install(
@@ -119,15 +117,8 @@ def test_import_refusals_never_install(
         (tmp_path / "apm.lock.yaml").write_text("not: [yaml", encoding="utf-8")
     elif failure == "missing_install":
         (installed / "SKILL.md").unlink()
-    elif failure == "extra_resource":
-        (installed / "helper.py").write_text("print('not imported')", encoding="utf-8")
     elif failure == "nested_symlink":
         (installed / "helper").symlink_to(installed / "SKILL.md")
-    elif failure == "closure":
-        (installed / "apm.yml").write_text(
-            "name: handoff-style\nversion: 1.0.0\ndependencies:\n  apm: [fixtures/another]\n",
-            encoding="utf-8",
-        )
     with pytest.raises(ContractError):
         resolve(source)
     forbidden.assert_not_called()
@@ -173,6 +164,7 @@ def test_duplicate_skill_name_refuses_ambiguity(tmp_path: Path) -> None:
     )
     other.mkdir(parents=True)
     (other / "SKILL.md").write_bytes(SKILL)
+    (other / "apm.yml").write_text("name: handoff-style\nversion: 1.0.0\n")
     lock.add_dependency(
         LockedDependency(repo_url="_local/another", source="local", local_path="../another")
     )

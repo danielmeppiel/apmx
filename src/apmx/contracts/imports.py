@@ -133,6 +133,16 @@ def _context_files(root: Path, limits: ContractLimits) -> tuple[tuple[Path, str,
             raise ContractError("Invalid selected context frontmatter.", code="invalid_import") from exc
         if not document.body.strip():
             raise ContractError("Selected context body is empty.", code="invalid_import")
+        if kind == "instruction" and document.metadata.get("applyTo") not in (
+            None, "*", "**", "**/*"
+        ):
+            raise ContractError("Scoped instruction activation is unsupported.",
+                                code="unsupported_import")
+        if any(document.metadata.get(key) for key in (
+            "hooks", "mcp", "mcpServers", "lspServers", "agent", "model", "allowed-tools",
+        )):
+            raise ContractError("Selected context requires unsupported activation.",
+                                code="unsupported_import")
         context_name = document.metadata.get("name") or (
             path.parent.name if kind == "skill" else path.name.removesuffix(".instructions.md")
         )
@@ -175,34 +185,46 @@ def resolve_installed_skills(
         if (root / "apm.yml").exists():
             installed, _, _ = read_project_manifest(root, limits)
             manifest_name = installed.name
-        contexts = _context_files(root, limits)
+        if locked.name and manifest_name and locked.name != manifest_name:
+            raise ContractError("Installed package name differs from its lock.", code="import_drift")
         aliases = {
             locked.repo_url,
             locked.get_unique_key(),
-            locked.repo_url.split("/")[-1],
             manifest_name,
+            locked.name,
         }
         if locked.virtual_path:
             aliases.add(f"{locked.repo_url}/{locked.virtual_path}")
-        inventory.append((locked, root, aliases, contexts))
+        inventory.append((locked, root, aliases, manifest_name))
     result = []
     seen_paths: set[Path] = set()
-    seen_names: set[tuple[str, str]] = set()
-    total = 0
+    seen_names: set[str] = set()
+    total = resource_count = 0
     for name in contract.imports:
-        matches = [
-            (item, item[3] if name in item[2] else tuple(
-                context for context in item[3] if context[2] == name
-            ))
-            for item in inventory
-            if name in item[2] or any(context[2] == name for context in item[3])
-        ]
+        matches = [item for item in inventory if name in item[2]]
         if len(matches) != 1:
             raise ContractError(
-                "Import must identify exactly one installed package or context.",
+                "Import must identify exactly one installed APM package.",
                 code="ambiguous_import" if matches else "missing_import",
             )
-        (locked, root, _, _), contexts = matches[0]
+        locked, root, _, package_name = matches[0]
+        contexts = _context_files(root, limits)
+        if locked.target_subset and not {"all", "copilot", "agent-skills"}.intersection(
+            locked.target_subset
+        ):
+            raise ContractError("Selected package targets exclude this context adapter.",
+                                code="unsupported_import")
+        if locked.skill_subset and "*" not in locked.skill_subset:
+            available = {
+                path.parent.name for path, kind, _ in contexts if kind == "skill"
+            }
+            if not set(locked.skill_subset).issubset(available):
+                raise ContractError("Locked skill selection is not installed.",
+                                    code="missing_import")
+            contexts = tuple(
+                item for item in contexts
+                if item[1] != "skill" or item[0].parent.name in locked.skill_subset
+            )
         if locked.depth == 1:
             from ..drift import detect_ref_change
 
@@ -226,6 +248,14 @@ def resolve_installed_skills(
         if locked.source == "local":
             from ..install.contract_source_validation import bounded_tree
 
+            declared_origin = Path(locked.local_path or "")
+            if locked.declaring_parent and not declared_origin.is_absolute():
+                declared_origin = Path(locked.declaring_parent) / declared_origin
+            if declared_origin.is_absolute():
+                declared_origin = Path(os.path.abspath(declared_origin))
+                if has_symlink_component(Path(declared_origin.anchor), declared_origin):
+                    raise ContractError("Selected local package contains a symlink.",
+                                        code="import_source")
             origin = Path(locked.anchored_local_path or locked.local_path or "")
             if origin.is_absolute() and origin.exists():
                 bounded_tree(origin, limits)
@@ -239,13 +269,14 @@ def resolve_installed_skills(
         for path, kind, context_name in contexts:
             if path in seen_paths:
                 continue
-            key = (kind, context_name.casefold())
+            key = context_name.casefold()
             if key in seen_names:
                 raise ContractError("Selected context names collide.", code="ambiguous_import")
             seen_paths.add(path)
             seen_names.add(key)
             raw = _read_bytes(path, maximum=limits.source_bytes, root=root)
             total += len(raw)
+            resource_count += 1
             resources = []
             if kind == "skill":
                 from ..install.contract_source_validation import bounded_tree
@@ -256,12 +287,13 @@ def resolve_installed_skills(
                     resource_path = path.parent / relative
                     data = _read_bytes(resource_path, maximum=limits.file_bytes, root=root)
                     total += len(data)
+                    resource_count += 1
                     resources.append(ImportedResource(
                         resource_path, relative, hashlib.sha256(data).hexdigest(), len(data)
                     ))
                 if len(resources) > limits.resource_files:
                     raise ContractError("Skill resources exceed their limit.", code="import_limit")
-            if len(seen_paths) > limits.resource_files or total > limits.resource_bytes:
+            if resource_count > limits.resource_files or total > limits.resource_bytes:
                 raise ContractError("Selected context exceeds its limit.", code="import_limit")
             result.append(ImportedSkill(
                 name=name,
@@ -277,5 +309,7 @@ def resolve_installed_skills(
                 context_name=context_name,
                 source_relative_path=path.relative_to(root).as_posix(),
                 resources=tuple(resources),
+                resolved_ref=locked.resolved_ref or locked.resolved_tag,
+                package_name=locked.name or package_name,
             ))
     return tuple(result), lock_digest

@@ -27,4 +27,4 @@ def test_no_experimental_activation_or_global_apm_state(tmp_path, monkeypatch):
 
 def test_namespace_entrypoints():
     assert importlib.util.find_spec("apmx") is not None
-    assert CliRunner().invoke(main, ["--version"]).output.strip() == "apmx, version 0.1.0"
+    assert CliRunner().invoke(main, ["--version"]).output.strip() == "apmx, version 0.2.0"

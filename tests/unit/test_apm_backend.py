@@ -95,3 +95,105 @@ def test_real_backend_replays_anchored_consumer_lock(tmp_path):
     install(stage, frozen=True, limits=limits)
     assert list((stage / "apm_modules").rglob("SKILL.md"))
     assert all((caller / name).read_bytes() == raw for name, raw in before.items())
+
+
+def test_frozen_backend_cannot_escape_through_symlink(tmp_path, monkeypatch):
+    from apmx.install.apm_backend import locate_backend
+
+    (tmp_path / "libexec").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "libexec/apm").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "apmx"))
+    with pytest.raises(ContractError, match="symlink"):
+        locate_backend()
+
+
+def _unit_backend(tmp_path, monkeypatch, *, install_observation=None, version=b""):
+    """Unit invocation seam only; native proof lives in the real-backend tests."""
+    from apmx.contracts.models import ProcessObservation
+    from apmx.install import apm_backend
+
+    binary = tmp_path / "apm"
+    binary.write_bytes(b"unit executable identity")
+    binary.chmod(0o755)
+    monkeypatch.setenv("APMX_APM_BACKEND", str(binary))
+    requests = []
+
+    def supervise(request, *, on_bytes, limits):
+        requests.append(request)
+        if request.argv[1] == "--version":
+            on_bytes("stdout", version or b"Agent Package Manager (APM) CLI version 0.30.0 (8c2e0d9)\n")
+            return ProcessObservation(0)
+        on_bytes("stderr", b"PRIVATE_AUTH_OUTPUT_MUST_NOT_ESCAPE")
+        return install_observation or ProcessObservation(0)
+
+    monkeypatch.setattr(apm_backend, "supervise_process", supervise)
+    return requests
+
+
+def test_native_invocation_preserves_auth_and_suppresses_activation_child_only(tmp_path, monkeypatch):
+    import os
+    from apmx.install.apm_backend import install
+    from apmx.contracts.models import ContractLimits
+
+    requests = _unit_backend(tmp_path, monkeypatch)
+    monkeypatch.setenv("APM_NO_SCRIPTS", "original-value")
+    monkeypatch.setenv("APM_GIT_PROTOCOL", "ssh")
+    monkeypatch.setenv("APM_ALLOW_PROTOCOL_FALLBACK", "0")
+    monkeypatch.setenv("GITHUB_TOKEN", "fixture-token-not-real")
+    before = dict(os.environ)
+    install(tmp_path, package_ref="org/repo/jobs#v1", limits=ContractLimits())
+    assert dict(os.environ) == before
+    request = requests[-1]
+    assert request.cwd == tmp_path
+    assert request.argv[1:] == (
+        "install", "org/repo/jobs#v1", "--root", str(tmp_path),
+        "--only", "apm", "--target", "agent-skills", "--no-trust-bin",
+    )
+    assert request.env["APM_NO_SCRIPTS"] == "1"
+    for name in ("HOME", "GITHUB_TOKEN", "APM_GIT_PROTOCOL", "APM_ALLOW_PROTOCOL_FALLBACK"):
+        assert request.env.get(name) == before.get(name)
+    assert "--no-policy" not in request.argv
+    assert "--trust-transitive-mcp" not in request.argv
+
+
+def test_frozen_native_replay_never_adds_positional_packages(tmp_path, monkeypatch):
+    from apmx.install.apm_backend import install
+    from apmx.contracts.models import ContractLimits
+
+    requests = _unit_backend(tmp_path, monkeypatch)
+    install(tmp_path, frozen=True, limits=ContractLimits())
+    assert requests[-1].argv[-1] == "--frozen"
+    with pytest.raises(ContractError, match="cannot add"):
+        install(tmp_path, frozen=True, package_ref="org/repo", limits=ContractLimits())
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "cleanup", "spawn"])
+def test_native_failures_halt_without_leaking_output(tmp_path, monkeypatch, failure):
+    from apmx.install.apm_backend import install
+    from apmx.contracts.models import ContractLimits, ProcessObservation
+
+    observation = {
+        "exit": ProcessObservation(1),
+        "timeout": ProcessObservation(None, stop_reason="deadline"),
+        "cleanup": ProcessObservation(0, cleanup_confirmed=False),
+        "spawn": ProcessObservation(None, error="private host error"),
+    }[failure]
+    _unit_backend(tmp_path, monkeypatch, install_observation=observation)
+    with pytest.raises(ContractError) as error:
+        install(tmp_path, limits=ContractLimits())
+    assert error.value.code == "apm_install_failed"
+    assert "PRIVATE_AUTH_OUTPUT" not in str(error.value)
+    assert "private host" not in str(error.value)
+
+
+def test_wrong_backend_version_refuses_before_install(tmp_path, monkeypatch):
+    from apmx.install.apm_backend import install
+    from apmx.contracts.models import ContractLimits
+
+    requests = _unit_backend(tmp_path, monkeypatch, version=b"APM wrong version\n")
+    with pytest.raises(ContractError, match="does not match"):
+        install(tmp_path, limits=ContractLimits())
+    assert len(requests) == 1

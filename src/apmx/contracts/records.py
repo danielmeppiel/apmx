@@ -160,6 +160,9 @@ class AttemptStore:
                              "size": resource.size}
                             for resource in skill.resources
                         ],
+                        "package_name": skill.package_name,
+                        "resolved_ref": skill.resolved_ref,
+                        "verified_package_hash": skill.verified_package_hash,
                     }
                     for skill in plan.imported_skills
                 ],

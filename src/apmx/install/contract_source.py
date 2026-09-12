@@ -125,6 +125,9 @@ def prepare_contract_source(
                 raise ContractError("Caller source is missing from its lock.", code="invalid_lock")
             _validate_source_pin(requested, locked)
             _validate_source_pin(declared, locked)
+            installed = locked.to_dependency_ref().get_install_path(caller_root / "apm_modules")
+            if not requested.is_local and (installed.exists() or installed.is_symlink()):
+                _selected_source(caller_root, requested, limits)
         original = None
         original_hash = None
         manifest = lock_bytes = None

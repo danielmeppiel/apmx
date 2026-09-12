@@ -127,7 +127,7 @@ def test_path_replacement_still_changes_source_identity(
         "produces: 'one|two'\nverify: {ok: 'true'}",
         "produces: out\nimports: [apm_modules/_local/pkg]\nverify: {ok: 'true'}",
         "produces: out\nimports: [owner/pkg#v1]\nverify: {ok: 'true'}",
-        "produces: out\nimports: [a, b]\nverify: {ok: 'true'}",
+        "produces: out\nimports: [a, a]\nverify: {ok: 'true'}",
     ],
 )
 def test_invalid_subset_is_source_located(tmp_path: Path, header: str) -> None:
@@ -280,4 +280,3 @@ def test_source_traversal_is_rejected_even_when_it_lands_inside_root(project: Pa
     (project / "sub").mkdir()
     with pytest.raises(ContractError):
         plan_contract(project / "sub" / ".." / path.name, project, harness="copilot")
-

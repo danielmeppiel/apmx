@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from apmx.contracts.frontend import parse_contract, plan_contract
 from apmx.contracts.models import ContractError, ContractLimits
 from apmx.contracts.records import AttemptStore
 from apmx.contracts.workspace import capture_workspace
+from apmx.contracts.workspace import local_git
 from apmx.install.apm_backend import install
 from apmx.install.contract_source import prepare_contract_source, prepare_imports
 from apmx.install.contract_source_validation import source_hash
@@ -139,3 +141,75 @@ def test_malformed_consumer_lock_never_invokes_backend(fixture, monkeypatch):
             str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
         ):
             pytest.fail("invalid lock admitted")
+
+
+def test_package_name_not_skill_symbol_is_the_import_binding(fixture):
+    caller, package = fixture
+    skill = package / "skills/handoff-style/SKILL.md"
+    skill.write_text(skill.read_text().replace("name: handoff-style", "name: separate-skill-name"))
+    with prepare_contract_source(
+        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        plan = plan_contract(Path(_contract(package)), caller, harness="copilot", source=source)
+        assert plan.imported_skills[0].name == "handoff-style"
+        assert plan.imported_skills[0].context_name == "separate-skill-name"
+        contract = source.root / _contract(package)
+        contract.write_text(contract.read_text().replace("  - handoff-style", "  - separate-skill-name"))
+        updated = replace(source, prepared_hash=source_hash(source.root, LIMITS))
+        with pytest.raises(ContractError, match="one installed APM package"):
+            plan_contract(Path(_contract(package)), caller, harness="copilot", source=updated)
+
+
+def test_unselected_local_packages_are_not_copied_from_tracked_caller(fixture):
+    caller, package = fixture
+    selected = caller / "packages/selected"
+    unselected = caller / "packages/unselected"
+    shutil.copytree(package / "skills/handoff-style", selected)
+    shutil.copytree(package / "skills/handoff-style", unselected)
+    (unselected / "apm.yml").write_text("name: unselected-package\nversion: 1.0.0\n")
+    (unselected / "SKILL.md").write_text(
+        (unselected / "SKILL.md").read_text() + "\nUNSELECTED_PACKAGE_SENTINEL\n"
+    )
+    (caller / "apm.yml").write_text(
+        "name: caller\nversion: 1.0.0\ndependencies:\n  apm:\n"
+        "    - ./packages/selected\n    - ./packages/unselected\n"
+    )
+    contract = caller / "work.contract.md"
+    contract.write_bytes((package / _contract(package)).read_bytes())
+    local_git(caller, "init", "--quiet")
+    local_git(caller, "add", ".")
+    with prepare_imports(caller, contract, source=None, planning=False, limits=LIMITS) as (root, backend):
+        plan = plan_contract(contract, caller, harness="copilot", imports_root=root, apm_backend=backend)
+        store = AttemptStore.create(plan)
+        snapshot = capture_workspace(plan, store.directory)
+        assert not (snapshot.producer / "packages").exists()
+        for path in snapshot.producer.rglob("*"):
+            if path.is_file() and ".git" not in path.parts:
+                assert b"UNSELECTED_PACKAGE_SENTINEL" not in path.read_bytes()
+
+
+def test_aggregate_resources_are_bounded(fixture):
+    caller, package = fixture
+    references = package / "skills/handoff-style/references"
+    references.mkdir()
+    for name in ("one.txt", "two.txt"):
+        (references / name).write_text("data")
+    with prepare_contract_source(
+        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        with pytest.raises(ContractError, match="limit"):
+            plan_contract(
+                Path(_contract(package)), caller, harness="copilot", source=source,
+                limits=replace(LIMITS, resource_files=2),
+            )
+
+
+def test_selected_unsupported_activation_refuses(fixture):
+    caller, package = fixture
+    skill = package / "skills/handoff-style/SKILL.md"
+    skill.write_text(skill.read_text().replace("name: handoff-style", "name: handoff-style\nmodel: other"))
+    with prepare_contract_source(
+        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        with pytest.raises(ContractError, match="unsupported activation"):
+            plan_contract(Path(_contract(package)), caller, harness="copilot", source=source)

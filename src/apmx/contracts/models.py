@@ -111,6 +111,8 @@ class ImportedSkill:
     context_name: str | None = None
     source_relative_path: str | None = None
     resources: tuple[ImportedResource, ...] = ()
+    resolved_ref: str | None = None
+    package_name: str | None = None
 
 
 @dataclass(frozen=True)

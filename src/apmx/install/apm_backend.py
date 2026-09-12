@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -15,6 +16,7 @@ from apmx.contracts.process import supervise_process
 from apmx.core.tls_trust import build_child_tls_env
 from apmx.deps.lockfile import LockFile, resolve_lockfile_path_for_read
 from apmx.models.dependency.selection import parse_dependency_entry
+from apmx.utils.path_security import has_symlink_component
 from apmx.utils.yaml_io import dump_yaml, load_yaml_str
 
 PIN_PATH = Path(__file__).resolve().parents[1] / "apm-backend.json"
@@ -24,7 +26,11 @@ def locate_backend() -> Path:
     """Never consult PATH or source overrides in a frozen release."""
     name = "apm.exe" if os.name == "nt" else "apm"
     if getattr(sys, "frozen", False):
-        candidate = Path(sys.executable).parent / "libexec" / "apm" / name
+        root = Path(sys.executable).resolve().parent
+        candidate = root / "libexec" / "apm" / name
+        if has_symlink_component(root, candidate):
+            raise ContractError("The bundled APM path contains a symlink.",
+                                code="apm_backend_missing")
     elif override := os.environ.get("APMX_APM_BACKEND"):
         candidate = Path(override)
         if not candidate.is_absolute():
@@ -98,6 +104,37 @@ def install(
     env = build_child_tls_env(os.environ)
     env["APM_NO_SCRIPTS"] = "1"
     env["APM_PROGRESS"] = "never"
+    version_output = bytearray()
+    oversized = False
+
+    def receive_version(stream: str, chunk: bytes) -> None:
+        nonlocal oversized
+        if stream != "stdout" or oversized:
+            return
+        if len(version_output) + len(chunk) > 1024:
+            oversized = True
+            version_output.clear()
+        else:
+            version_output.extend(chunk)
+
+    version = supervise_process(
+        ProcessRequest((str(executable), "--version"), stage, 15, env=env),
+        on_bytes=receive_version,
+        limits=limits,
+    )
+    expected = (
+        rf"Agent Package Manager \(APM\) CLI version {re.escape(identity['version'])} "
+        rf"\({re.escape(identity['source_commit'][:7])}\)"
+    )
+    if (
+        version.returncode != 0 or version.stop_reason or version.error
+        or not version.cleanup_confirmed or oversized
+        or re.fullmatch(expected, version_output.decode("utf-8", errors="replace").strip()) is None
+    ):
+        raise ContractError(
+            "The provisioned APM version/source does not match the bundled pin.",
+            code="apm_backend_identity",
+        )
     observed = supervise_process(
         ProcessRequest(tuple(argv), stage, limits.attempt_seconds, env=env),
         on_bytes=lambda _stream, _chunk: None,

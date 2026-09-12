@@ -28,33 +28,46 @@ here are an independent standalone extraction, not an official Microsoft release
 
 ## Deliberate standalone seams
 
-The `apm experimental enable contracts` prerequisite is removed. No APM package,
-global configuration, experimental flags, activation, installers, plugin graph,
-policy-fetch service, registry, or deployment ledger is required to run `apmx`.
-Manifests are projected into a bounded read-only contract profile; lock dependency
-rows retain their original codec, while unrelated deployment state is not emitted.
+The `apm experimental enable contracts` prerequisite is removed. Starting with
+0.2.0, release archives bundle the official APM 0.30.0 native distribution,
+source commit `8c2e0d9c352e2ed0e8c56b40063a63e1dd4a1937`, beneath
+`libexec/apm/` with its own intact `_internal`. The outer executable never looks
+for APM on PATH. No separate APM installation or experimental activation is
+required. Manifests and public lock inventory retain their APM formats.
 Offline no-policy admission remains fail-closed: callers with configured policy,
 disabled policy discovery, or unresolved Git remote governance are refused.
 
-Package acquisition is a direct, bounded Git operation using the retained
-AuthResolver rather than the APM installer/downloader graph. Local directories,
-HTTPS/SSH Git repositories, literal revisions, exact caller lock replay, and
-same-repository imported skills are supported. Registry/proxy sources, insecure
-HTTP and semantic-version ranges are refused explicitly. There is no automatic
-model retry. Native Copilot login/profile ownership remains with Copilot; `apmx`
-does not copy profiles or inspect native credential values.
+Official APM now owns package acquisition, transitive resolution, frozen lock
+replay and authentication/provider policy. The former copied Git downloader and
+single-dependency resolver have been removed. The apmx adapter runs APM from an
+owned manifest snapshot with `--root` pointing to that same owned directory,
+`--only apm --target agent-skills --no-trust-bin`, and child-only
+`APM_NO_SCRIPTS=1`. Relative local declarations and corresponding lock coordinates
+are anchored before native replay; original caller/package files remain unchanged.
+There is no copied credential policy, HOME rewriting, profile copying, installer
+access from the producer, or automatic model retry.
 
-Public GitHub HTTPS acquisition starts anonymously and consults credentials only
-after an owner-classified authentication failure. TLS, connectivity, throttling,
-output-limit and process failures do not trigger credential retries. Actual
-network operations retain the canonical Git URL-rewrite and credential-origin
-fences. SSH preserves native user/port/key selection without HTTP token lookup.
-Detached checkout and hashing use a separate credential-free local Git boundary.
-Network acquisition has a 120-second cooperative deadline, at most 60 seconds per
-supervised fetch, and a 512 KiB combined output limit; credential probes retain
-their own bounded owner timeouts. None of these is the later engine watchdog or a
-hard overall wall-clock guarantee. Unsupported registry/proxy/range sources and
-cross-protocol retries are not reintroduced by this extraction.
+Unmodified APM may initialize `~/.apm/config.json` and its normal version-check
+cache. This is native host access, not a zero-host-write or sandbox guarantee.
+MCP/LSP integration, hooks, commands, agents, native plugin registration, bin
+deployment and lifecycle scripts are not enabled by this invocation. The native
+backend is supervised with the existing process cleanup/watchdog boundary;
+backend output and credentials are not copied into records or public commentary.
+
+Imports name APM packages, not arbitrary skill symbols or repository basenames.
+The consumer's manifest and lock govern even a packaged contract. Without a
+consumer environment, execution can resolve an ephemeral one; a package-owned
+lock is provenance, not a competing consumer lock. Read-only planning never
+installs, fetches, repairs or migrates missing dependencies.
+
+Only selected package instructions and skills enter `_apmx_context/import-N/`.
+Supported sources are global `.apm/instructions/**/*.instructions.md`, root
+`SKILL.md`, and collections in `.apm/skills/` or `skills/`. Selected skill
+`references/`, `assets/`, and `scripts/` companions are bounded data; scripts are
+never executed by the importer. Scoped instruction activation and context
+metadata requiring additional tools, models, agents or services refuse. Native
+custom-instruction discovery remains disabled; the adapter supplies selected
+text and resource paths explicitly rather than claiming native autoload semantics.
 
 ## State and format compatibility
 
@@ -63,11 +76,15 @@ resources keep their original spellings. Renaming them would break input format
 and resource discovery compatibility.
 
 Runs deliberately remain under the **caller's** `.apm/runs/<fresh-run-id>/`.
-This is local evidence compatibility, not access to global `~/.apm/config.json`.
+This is local evidence compatibility, distinct from APM's normal user configuration.
 The existing `apm-contract-run/0.1` record schema and `native-advisory` profile
 remain readable by existing consumers. Temporary package preparation uses
 exclusive `.apmx-source-*` directories and is removed after use. Run IDs prevent
 overwriting prior evidence. Producer and checker workspaces are separate.
+Additive record fields include actual backend identity, consumer and effective
+lock digests, package identities/versions, resolved references and commits,
+verified package hashes where available, and exact selected document/resource
+digests. A local manifest version remains self-declared, not a verified release.
 
 ## Platform adapter
 

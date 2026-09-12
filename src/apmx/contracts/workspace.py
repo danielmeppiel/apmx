@@ -90,6 +90,21 @@ def _git_marker(root: Path) -> Path | None:
 
 def _selected_names(plan: LeafPlan) -> tuple[str, ...]:
     root = plan.project_root
+    from .imports import read_lock
+
+    excluded_roots = []
+    lock, _ = read_lock(plan.imports_root or root, plan.limits)
+    if lock:
+        for dependency in lock.dependencies.values():
+            if dependency.source == "local":
+                origin = Path(dependency.anchored_local_path or dependency.local_path or "")
+                if not origin.is_absolute():
+                    origin = root / origin
+                origin = origin.resolve()
+                if origin.is_relative_to(root) and origin != root:
+                    excluded_roots.append(origin)
+    if plan.source and plan.source.original_root:
+        excluded_roots.append(plan.source.original_root)
     names = set(plan.contract.needs)
     if plan.source is None:
         names.add(plan.contract.path.relative_to(root).as_posix())
@@ -109,6 +124,8 @@ def _selected_names(plan: LeafPlan) -> tuple[str, ...]:
             if name.split("/")[0] in {".apm", "apm_modules"}:
                 continue
             path = _path(root, name)
+            if any(path.is_relative_to(excluded) for excluded in excluded_roots):
+                continue
             if path.exists():
                 names.add(name)
             if len(names) > plan.limits.baseline_files:
