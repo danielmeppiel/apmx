@@ -300,6 +300,13 @@ def capture_provenance(
         selected.append((
             plan.project_root, lock.name, "consumer-apm.lock.yaml", plan.consumer_lock_digest,
         ))
+    if plan.source and plan.source.imports_root and plan.source.imports_root != plan.imports_root:
+        lock = resolve_lockfile_path_for_read(plan.source.imports_root, read_only=True)
+        if lock.is_file():
+            _, entry = _read(plan.source.imports_root, lock.name, plan.limits.file_bytes)
+            selected.append((
+                plan.source.imports_root, lock.name, "package-resolution-apm.lock.yaml", entry.sha256,
+            ))
     destination = run_directory / "source"
     destination.mkdir(mode=0o700)
     retained = {}

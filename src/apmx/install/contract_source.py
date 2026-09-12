@@ -109,8 +109,10 @@ def prepare_contract_source(
         requested = DependencyReference.parse(package_ref)
         validate_reference(requested)
         package_contract_path(caller_root, contract_relative_path)
-        caller_package, _, _ = read_project_manifest(caller_root, limits, allow_missing=True)
-        caller_lock, _ = read_lock(caller_root, limits)
+        caller_package, _, caller_manifest_digest = read_project_manifest(
+            caller_root, limits, allow_missing=True
+        )
+        caller_lock, caller_lock_digest = read_lock(caller_root, limits)
         declarations = list((caller_package.dependencies or {}).get("apm", []))
         declarations.extend((caller_package.dev_dependencies or {}).get("apm", []))
         selection = select_manifest_dependency(package_ref, declarations, caller_lock)
@@ -180,13 +182,37 @@ def prepare_contract_source(
         with _private_root(caller_root, original) as private:
             stage = private / "install"
             stage.mkdir(mode=0o700)
-            if selection.status == DependencySelectionStatus.MATCHED:
+            if caller_manifest_digest is not None:
                 frozen = apm_backend.snapshot_manifest(caller_root, stage, limits)
+                established, _ = read_lock(stage, limits)
+                staged_package, _, _ = read_project_manifest(stage, limits)
+                staged_declarations = list((staged_package.dependencies or {}).get("apm", []))
+                staged_declarations.extend((staged_package.dev_dependencies or {}).get("apm", []))
+                request = str(original) if original else package_ref
+                staged_selection = select_manifest_dependency(
+                    request, staged_declarations, established
+                )
+                if staged_selection.status == DependencySelectionStatus.AMBIGUOUS:
+                    raise ContractError("Caller package declaration is ambiguous.",
+                                        code="unresolved_source")
+                if staged_selection.status != DependencySelectionStatus.MATCHED:
+                    apm_backend.add_package_request(stage, request, limits)
+                    frozen = False
                 identity = apm_backend.install(stage, frozen=frozen, limits=limits)
+                installed_lock, _ = read_lock(stage, limits)
+                apm_backend.require_preserved_pins(established, installed_lock)
             else:
+                if caller_lock is not None:
+                    raise ContractError("Consumer lock requires its manifest.",
+                                        code="invalid_manifest")
                 identity = apm_backend.install(
                     stage, package_ref=str(original) if original else package_ref, limits=limits
                 )
+            _, _, current_manifest = read_project_manifest(caller_root, limits, allow_missing=True)
+            _, current_lock = read_lock(caller_root, limits)
+            if (current_manifest, current_lock) != (caller_manifest_digest, caller_lock_digest):
+                raise ContractError("Consumer declarations changed during preparation.",
+                                    code="plan_changed")
             root, locked = _selected_source(stage, requested, limits)
             parse_contract(package_contract_path(root, contract_relative_path), limits=limits)
             if original and source_hash(original, limits) != original_hash:

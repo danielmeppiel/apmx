@@ -44,6 +44,11 @@ owned manifest snapshot with `--root` pointing to that same owned directory,
 `--only apm --target agent-skills --no-trust-bin`, and child-only
 `APM_NO_SCRIPTS=1`. Relative local declarations and corresponding lock coordinates
 are anchored before native replay; original caller/package files remain unchanged.
+When adding a not-yet-declared contract, its declaration is appended to that
+owned consumer manifest before full native resolution. Existing pins are retained
+and compared after installation; the publisher's graph is never first resolved
+as an independent consumer. This also lets APM choose a locked consumer version
+when the publisher's requested version is unavailable.
 There is no copied credential policy, HOME rewriting, profile copying, installer
 access from the producer, or automatic model retry.
 
@@ -85,6 +90,9 @@ Additive record fields include actual backend identity, consumer and effective
 lock digests, package identities/versions, resolved references and commits,
 verified package hashes where available, and exact selected document/resource
 digests. A local manifest version remains self-declared, not a verified release.
+Runtime version output is compared with the exact pinned platform output.
+The official Windows binary does not print a source commit; its source identity
+comes from the pinned official release/archive, not a fabricated reported SHA.
 
 ## Platform adapter
 

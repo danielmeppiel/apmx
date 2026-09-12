@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
+import platform
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -76,6 +76,30 @@ def backend_identity(executable: Path) -> dict[str, str]:
         ) from exc
 
 
+def expected_version_output(target: str | None = None) -> str:
+    """Use the pinned platform's actual output, not a cross-platform prefix match."""
+    if target is None:
+        system = {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}.get(platform.system())
+        machine = platform.machine().lower()
+        architecture = {"arm64": "arm64", "aarch64": "arm64",
+                        "x86_64": "x86_64", "amd64": "x86_64"}.get(machine)
+        target = f"{system}-{architecture}"
+    try:
+        pin = json.loads(PIN_PATH.read_bytes())
+        output = pin["assets"][target]["version_output"]
+        consistent = f"Agent Package Manager (APM) CLI version {pin['version']}"
+        if target != "windows-x86_64":
+            consistent += f" ({pin['source_commit'][:7]})"
+        if output != consistent:
+            raise ValueError("Platform version output disagrees with backend identity.")
+        return output
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ContractError(
+            "The native platform has no pinned APM version identity.",
+            code="apm_backend_identity",
+        ) from exc
+
+
 def install(
     stage: Path,
     *,
@@ -122,14 +146,12 @@ def install(
         on_bytes=receive_version,
         limits=limits,
     )
-    expected = (
-        rf"Agent Package Manager \(APM\) CLI version {re.escape(identity['version'])} "
-        rf"\({re.escape(identity['source_commit'][:7])}\)"
-    )
+    expected = expected_version_output()
     if (
         version.returncode != 0 or version.stop_reason or version.error
         or not version.cleanup_confirmed or oversized
-        or re.fullmatch(expected, version_output.decode("utf-8", errors="replace").strip()) is None
+        or version_output.decode("utf-8", errors="replace").removesuffix("\n").removesuffix("\r")
+        != expected
     ):
         raise ContractError(
             "The provisioned APM version/source does not match the bundled pin.",
@@ -173,7 +195,11 @@ def snapshot_manifest(original: Path, stage: Path, limits: ContractLimits) -> bo
             if not dependency.is_local:
                 continue
             path = Path(dependency.local_path or "").expanduser()
-            absolute = str(path if path.is_absolute() else original / path)
+            anchored = path if path.is_absolute() else original / path
+            lexical = Path(os.path.abspath(anchored))
+            if has_symlink_component(Path(lexical.anchor), lexical):
+                raise ContractError("Local dependency contains a symlink.", code="import_source")
+            absolute = str(anchored.resolve())
             substitutions[dependency.local_path] = absolute
             if isinstance(entry, dict):
                 entries[index] = {**entry, "path": absolute}
@@ -199,3 +225,33 @@ def snapshot_manifest(original: Path, stage: Path, limits: ContractLimits) -> bo
     except (ValueError, TypeError, KeyError) as exc:
         raise ContractError("Existing lockfile is malformed.", code="invalid_lock") from exc
     return True
+
+
+def add_package_request(stage: Path, package_ref: str, limits: ContractLimits) -> None:
+    """Add a declaration, not a resolved lock entry; native APM resolves the graph."""
+    _, data, _ = read_project_manifest(stage, limits)
+    dependencies = data.setdefault("dependencies", {})
+    dependencies.setdefault("apm", []).append(package_ref)
+    dump_yaml(data, stage / "apm.yml")
+
+
+def require_preserved_pins(before: LockFile | None, after: LockFile | None) -> None:
+    """Adding a contract may extend a graph, never silently replace consumer pins."""
+    if before is None:
+        return
+    fields = (
+        "repo_url", "host", "host_type", "port", "registry_prefix", "source",
+        "virtual_path", "is_virtual", "resolved_commit", "resolved_ref",
+        "version", "name", "content_hash", "constraint", "resolved_tag",
+        "resolved_url", "resolved_hash", "local_path", "anchored_local_path",
+        "skill_subset", "target_subset",
+    )
+    for key, established in before.dependencies.items():
+        observed = after.get_dependency(key) if after else None
+        if observed is None or any(
+            getattr(established, name) != getattr(observed, name) for name in fields
+        ):
+            raise ContractError(
+                "Official APM could not preserve an established consumer lock identity.",
+                code="import_drift",
+            )

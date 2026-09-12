@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import shlex
 import shutil
 import sys
 from dataclasses import replace
@@ -213,3 +214,75 @@ def test_selected_unsupported_activation_refuses(fixture):
     ) as source:
         with pytest.raises(ContractError, match="unsupported activation"):
             plan_contract(Path(_contract(package)), caller, harness="copilot", source=source)
+
+
+def test_declared_relative_contract_source_has_one_native_identity(fixture):
+    caller, package = fixture
+    (caller / "apm.yml").write_text(
+        "name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n    - ../package\n"
+    )
+    install(caller, limits=LIMITS)
+    before = {name: (caller / name).read_bytes() for name in ("apm.yml", "apm.lock.yaml")}
+    with prepare_contract_source(
+        "../package", _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        assert source.original_root == package
+        assert source.root.is_dir()
+        plan = plan_contract(Path(_contract(package)), caller, harness="copilot", source=source)
+        assert plan.imported_skills
+    assert all((caller / name).read_bytes() == data for name, data in before.items())
+
+
+def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, monkeypatch):
+    caller, package = fixture
+    repo = tmp_path / "native-git-context"
+    shutil.copytree(package / "skills/handoff-style", repo)
+    (repo / "apm.yml").write_text("name: handoff-style\nversion: 9.0.0\n")
+    local_git(repo, "init", "--quiet")
+    local_git(repo, "add", ".")
+    local_git(repo, "commit", "--quiet", "-m", "Native Git context fixture")
+    local_git(repo, "tag", "v9")
+    revision = local_git(repo, "rev-parse", "HEAD").decode().strip()
+    git = shutil.which("git")
+    assert git
+    wrapper = tmp_path / "git_transport.py"
+    wrapper.write_text(
+        "import os, sys\n"
+        "if '-G' in sys.argv: raise SystemExit(0)\n"
+        f"os.execv({git!r}, [{git!r}, 'upload-pack', {str(repo)!r}])\n"
+    )
+    # A hermetic SSH transport serves real Git objects. Neither APM nor its
+    # resolver, lockfile, checkout, or installed context is mocked.
+    monkeypatch.setenv(
+        "GIT_SSH_COMMAND",
+        f"{shlex.quote(Path(sys.executable).as_posix())} -B {shlex.quote(wrapper.as_posix())}",
+    )
+    monkeypatch.setenv("GIT_SSH_VARIANT", "ssh")
+    url = "ssh://git@localhost/fixtures/handoff-style.git"
+    (caller / "apm.yml").write_text(
+        "name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n"
+        f"    - git: {url}\n      ref: v9\n"
+    )
+    install(caller, limits=LIMITS)
+    (package / "apm.yml").write_text(
+        "name: packaged-handoff\nversion: 0.1.0\ndependencies:\n  apm:\n"
+        f"    - git: {url}\n      ref: publisher-version-does-not-exist\n"
+    )
+    before = {name: (caller / name).read_bytes() for name in ("apm.yml", "apm.lock.yaml")}
+    source_before = source_hash(package, LIMITS)
+    with prepare_contract_source(
+        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        with prepare_imports(
+            caller, source.root / _contract(package), source=source, planning=False, limits=LIMITS
+        ) as (root, identity):
+            plan = plan_contract(
+                Path(_contract(package)), caller, harness="copilot", source=source,
+                imports_root=root, apm_backend=identity,
+            )
+            assert len(plan.imported_skills) == 1
+            assert plan.imported_skills[0].resolved_commit == revision
+            assert plan.imported_skills[0].version == "9.0.0"
+            assert plan.imported_skills[0].verified_package_hash
+    assert source_hash(package, LIMITS) == source_before
+    assert all((caller / name).read_bytes() == data for name, data in before.items())

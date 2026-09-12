@@ -123,7 +123,7 @@ def _unit_backend(tmp_path, monkeypatch, *, install_observation=None, version=b"
     def supervise(request, *, on_bytes, limits):
         requests.append(request)
         if request.argv[1] == "--version":
-            on_bytes("stdout", version or b"Agent Package Manager (APM) CLI version 0.30.0 (8c2e0d9)\n")
+            on_bytes("stdout", version or (apm_backend.expected_version_output() + "\n").encode())
             return ProcessObservation(0)
         on_bytes("stderr", b"PRIVATE_AUTH_OUTPUT_MUST_NOT_ESCAPE")
         return install_observation or ProcessObservation(0)
@@ -197,3 +197,74 @@ def test_wrong_backend_version_refuses_before_install(tmp_path, monkeypatch):
     with pytest.raises(ContractError, match="does not match"):
         install(tmp_path, limits=ContractLimits())
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize("target", [
+    "linux-x86_64", "linux-arm64", "macos-x86_64", "macos-arm64", "windows-x86_64",
+])
+def test_version_output_is_exact_platform_pin(target):
+    from apmx.install.apm_backend import expected_version_output
+
+    expected = "Agent Package Manager (APM) CLI version 0.30.0"
+    if target != "windows-x86_64":
+        expected += " (8c2e0d9)"
+    assert expected_version_output(target) == expected
+
+
+@pytest.mark.parametrize("target", ["macos-arm64", "windows-x86_64"])
+def test_other_platform_version_shape_does_not_satisfy_pin(tmp_path, monkeypatch, target):
+    from apmx.install import apm_backend
+    from apmx.contracts.models import ContractLimits
+
+    expected = apm_backend.expected_version_output(target)
+    wrong = (
+        apm_backend.expected_version_output("windows-x86_64")
+        if target == "macos-arm64" else apm_backend.expected_version_output("macos-arm64")
+    )
+    requests = _unit_backend(tmp_path, monkeypatch, version=wrong.encode())
+    monkeypatch.setattr(apm_backend, "expected_version_output", lambda: expected)
+    with pytest.raises(ContractError, match="does not match"):
+        apm_backend.install(tmp_path, limits=ContractLimits())
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("field", ["resolved_commit", "resolved_ref", "version", "content_hash"])
+def test_adding_root_cannot_replace_existing_consumer_pin(field):
+    from dataclasses import replace
+    from apmx.deps.lockfile import LockFile, LockedDependency
+    from apmx.install.apm_backend import require_preserved_pins
+
+    locked = LockedDependency(
+        repo_url="fixture/context", resolved_commit="a" * 40, resolved_ref="v1",
+        version="1.0.0", content_hash="sha256:" + "a" * 64,
+    )
+    before = LockFile()
+    before.add_dependency(locked)
+    after = LockFile()
+    after.add_dependency(replace(locked, **{field: "changed"}))
+    with pytest.raises(ContractError, match="preserve"):
+        require_preserved_pins(before, after)
+
+
+@pytest.mark.parametrize("padding", [" ", "\n", "arbitrary-prefix"])
+def test_version_probe_rejects_padded_output(tmp_path, monkeypatch, padding):
+    from apmx.install import apm_backend
+    from apmx.contracts.models import ContractLimits
+
+    output = (padding + apm_backend.expected_version_output() + "\n").encode()
+    requests = _unit_backend(tmp_path, monkeypatch, version=output)
+    with pytest.raises(ContractError, match="does not match"):
+        apm_backend.install(tmp_path, limits=ContractLimits())
+    assert len(requests) == 1
+
+
+def test_version_output_cannot_disagree_with_record_identity(tmp_path, monkeypatch):
+    from apmx.install import apm_backend
+
+    pin = json.loads(apm_backend.PIN_PATH.read_bytes())
+    pin["version"] = "0.31.0"
+    path = tmp_path / "pin.json"
+    path.write_text(json.dumps(pin))
+    monkeypatch.setattr(apm_backend, "PIN_PATH", path)
+    with pytest.raises(ContractError, match="no pinned"):
+        apm_backend.expected_version_output("windows-x86_64")
