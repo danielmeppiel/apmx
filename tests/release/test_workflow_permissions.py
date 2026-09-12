@@ -67,6 +67,18 @@ class WorkflowPermissionTests(unittest.TestCase):
         self.assertIn("python scripts/smoke.py --binary \"$BUNDLE/$executable\"", verification)
         self.assertNotIn("continue-on-error:", verification)
 
+    def test_native_tests_use_provisioned_real_backend_before_source_free_wheel_proof(self):
+        steps = re.split(r"(?m)^      - ", self.ci)
+        provision = next(step for step in steps if "\n        id: backend\n" in step)
+        tests = next(step for step in steps if "python -m pytest tests/unit tests/release -q" in step)
+        self.assertIn('scripts/release.py provision-apm --target "$TARGET" --output dist/apm-backend', provision)
+        self.assertIn("uv run --frozen --extra dev --extra build", provision)
+        self.assertLess(self.ci.index(provision), self.ci.index(tests))
+        self.assertIn("source-free built-wheel", tests)
+        self.assertIn("APMX_APM_BACKEND: ${{ steps.backend.outputs.backend }}", tests)
+        self.assertNotIn("continue-on-error:", tests)
+        self.assertEqual(self.ci.count("APMX_APM_BACKEND:"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

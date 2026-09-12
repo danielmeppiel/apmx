@@ -67,7 +67,12 @@ jobs:
         run: python -m pip --isolated --disable-pip-version-check install --index-url https://pypi.org/simple "uv==$UV_VERSION"
       - name: Install the frozen public lock
         run: uv sync --frozen --extra dev --extra build
-      - name: Run application and infrastructure unit tests
+      - name: Provision the genuine pinned native APM backend for source tests
+        id: backend
+        run: uv run --frozen --extra dev --extra build python scripts/release.py provision-apm --target "$TARGET" --output dist/apm-backend
+      - name: Run unit, source-free built-wheel and infrastructure tests
+        env:
+          APMX_APM_BACKEND: ${{ steps.backend.outputs.backend }}
         run: uv run --frozen --extra dev --extra build python -m pytest tests/unit tests/release -q
       - name: Build native Windows hermetic protocol actor
         if: runner.os == 'Windows'

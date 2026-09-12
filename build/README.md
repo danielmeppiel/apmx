@@ -164,6 +164,16 @@ request; no AI credentials, corporate signing keys, or native auth profiles are
 copied into CI. A separate operator-run downloaded-binary test against genuine
 authenticated Copilot is required before claiming live model execution.
 
+Each native job provisions the real pinned backend before running source tests,
+passing only its explicit path to that test step. The existing non-skippable
+`tests/unit/test_wheel_isolation.py::test_wheel_runs_without_checkout_or_apm`
+builds a genuine setuptools wheel and launches it from an extracted temporary
+location with Python `-I -S`, without checkout/editable or `apm_cli` fallback.
+It covers the console entrypoint, TLS resources, license/NOTICE files and
+packaged pin JSON. This runs inside the existing all-five-platform unit step,
+not a second matrix. A pure Python wheel is not claimed to contain native
+backends; complete native backend distribution is proven by the frozen archives.
+
 Infrastructure-only checks, before the source package exists:
 
 ```sh
