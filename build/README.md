@@ -121,6 +121,18 @@ byte-for-byte, preserve that entry in the effective native lock, and leave both
 caller and package snapshots unchanged. This is package identity precedence,
 not a same-basename local-directory approximation.
 
+Every frozen case gets a separate compact, owned system-temporary directory for
+`TMPDIR`/`TMP`/`TEMP`; its contents must be unchanged after execution, and the
+unused case-local temporary directory must remain empty. This avoids introducing
+Git-for-Windows path amplification through the fixture's own environment.
+The consumer-lock case deliberately retains a long caller path. It generates
+the initial manifest, native lock and modules in a compact owned stage, then
+copies those exact bytes to the long caller without copying activation
+directories or rewriting the lock. Absolute local anchors must remain portable.
+The app itself must resolve in its own compact temporary stage outside that
+caller and clean it afterward. No Git long-path configuration, HOME rewriting,
+backend patch, or test skip is used.
+
 Short deadline/timeout behavior is covered separately by native-platform source
 tests using the existing `ProcessRequest` API. The frozen gate does **not** claim
 end-to-end default-duration timeout coverage. No public timeout flags, startup

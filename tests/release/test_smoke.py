@@ -399,6 +399,74 @@ class SmokeFixtureTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     smoke.require_consumer_lock(lock, revision)
 
+    def test_each_frozen_case_gets_compact_owned_temporary_storage(self):
+        for mixed in (False, True):
+            with self.subTest(mixed=mixed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve() / ("long-caller-" + "x" * 100)
+
+                def observe(*args, **kwargs):
+                    path = kwargs["temporary_root"]
+                    self.assertTrue(path.is_dir())
+                    self.assertFalse(path.is_relative_to(root))
+                    self.assertLess(len(str(path)), len(str(root)))
+                    return {"temporary_root": path}
+
+                with patch.object(smoke, "_run_case", side_effect=observe):
+                    result = smoke.run_case(Path("unrun-app"), root, None, "package", "pass", mixed_imports=mixed)
+                self.assertFalse(result["temporary_root"].exists())
+
+    def test_consumer_fixture_relocates_native_outputs_but_not_activation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            package = root / "package"
+            skill = package / "skills/release-style"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text("structural unit fixture")
+            (package / "apm.yml").write_text(
+                "dependencies:\n  apm:\n    - path: ./skills/release-style\n",
+            )
+            caller = root / ("long-caller-" + "x" * 100)
+            caller.mkdir()
+            revision = "a" * 40
+            stages = []
+            native_locks = []
+
+            def native_output(binary, args, stage, env):
+                self.assertEqual(args[args.index("--root") + 1], str(stage))
+                self.assertFalse(stage.is_relative_to(caller))
+                self.assertLess(len(str(stage)), len(str(caller)))
+                stages.append(stage)
+                lock = (
+                    "dependencies:\n- repo_url: fixtures/release-style\n"
+                    "  name: release-style\n  host: localhost\n"
+                    f"  resolved_commit: {revision}\n"
+                    "  resolved_ref: v9\n  version: 9.0.0\n"
+                    f"  content_hash: sha256:{'b' * 64}\n"
+                )
+                native_locks.append(lock)
+                (stage / "apm.lock.yaml").write_text(lock)
+                (stage / "apm_modules").mkdir()
+                (stage / "apm_modules/bytes").write_bytes(b"native output unit fixture")
+                (stage / ".agents").mkdir()
+                (stage / ".agents/activation").write_text("must not relocate")
+                return subprocess.CompletedProcess([], 0, "", "")
+
+            with (
+                patch.object(smoke.shutil, "which", return_value="git"),
+                patch.object(smoke.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 0, f"{revision}\trefs/tags/v9\n", "",
+                )),
+                patch.object(smoke.subprocess, "check_output", return_value=revision + "\n"),
+                patch.object(smoke, "run_binary", side_effect=native_output),
+            ):
+                proof = smoke.prepare_consumer_lock(Path("unrun-backend"), root, caller, package, {"PATH": ""})
+            self.assertEqual((caller / "apm.lock.yaml").read_text(), native_locks[0])
+            self.assertEqual((caller / "apm_modules/bytes").read_bytes(), b"native output unit fixture")
+            self.assertFalse((caller / ".agents").exists())
+            self.assertTrue(proof["native_lock_relocated_unchanged"])
+            self.assertFalse(stages[0].exists())
+            self.assertIn("publisher-version-does-not-exist", (package / "apm.yml").read_text())
+
     def test_mixed_actor_rejects_unselected_prompt_and_changed_supporting_resource(self):
         for failure in (None, "unselected", "resource"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:

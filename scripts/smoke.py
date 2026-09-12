@@ -344,18 +344,35 @@ def prepare_consumer_lock(
         advertised.returncode == 0 and advertised.stdout.strip() == f"{revision}\trefs/tags/v9",
         f"Genuine Git transport preflight failed:\n{advertised.stdout}\n{advertised.stderr}",
     )
-    (caller / "apm.yml").write_text(
+    manifest_text = (
         "name: release-consumer\nversion: 1.0.0\ndependencies:\n  apm:\n"
         f"    - git: {url}\n      ref: v9\n"
-        f"    - path: {json.dumps(str(package / 'contexts/release-context-package'))}\n",
-        encoding="utf-8",
+        f"    - path: {json.dumps(str(package / 'contexts/release-context-package'))}\n"
     )
-    result = run_binary(
-        backend,
-        ["install", "--root", str(caller), "--only", "apm", "--target", "agent-skills", "--no-trust-bin"],
-        caller, {**env, "APM_NO_SCRIPTS": "1", "PYINSTALLER_RESET_ENVIRONMENT": "1"},
-    )
-    require(result.returncode == 0, f"Genuine consumer lock generation failed:\n{result.stdout}\n{result.stderr}")
+    with tempfile.TemporaryDirectory(prefix="ax-") as temporary:
+        stage = Path(temporary).resolve()
+        (stage / "apm.yml").write_text(manifest_text, encoding="utf-8")
+        result = run_binary(
+            backend,
+            ["install", "--root", str(stage), "--only", "apm", "--target", "agent-skills", "--no-trust-bin"],
+            stage, {**env, "APM_NO_SCRIPTS": "1", "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+        )
+        require(result.returncode == 0, f"Genuine consumer lock generation failed:\n{result.stdout}\n{result.stderr}")
+        for name in ("apm.yml", "apm.lock.yaml"):
+            original = stage / name
+            require(original.is_file(), f"Native consumer generation omitted {name}")
+            contents = original.read_text(encoding="utf-8")
+            require(
+                str(stage) not in contents and stage.as_posix() not in contents,
+                f"Native {name} retained a nonportable fixture staging anchor",
+            )
+            require(not (caller / name).exists(), f"Fixture would overwrite caller {name}")
+            shutil.copyfile(original, caller / name)
+            require(digest(caller / name) == digest(original), f"Native {name} changed during relocation")
+        modules = stage / "apm_modules"
+        require(modules.is_dir(), "Native consumer generation omitted installed modules")
+        shutil.copytree(modules, caller / "apm_modules")
+        require(snapshot(modules) == snapshot(caller / "apm_modules"), "Native modules changed during relocation")
     lock = caller / "apm.lock.yaml"
     require(lock.is_file(), "Real APM did not generate the consumer lock")
     content_hash = require_consumer_lock(lock, revision)
@@ -375,6 +392,8 @@ def prepare_consumer_lock(
         "resolved_ref": "v9", "version": "9.0.0", "lock_sha256": digest(lock),
         "content_hash": content_hash,
         "manifest_sha256": digest(caller / "apm.yml"),
+        "native_lock_relocated_unchanged": True,
+        "caller_path_length": len(str(caller)),
         "transport": "hermetic SSH transport serving genuine Git objects; native APM resolution and lock writer",
     }
 
@@ -491,10 +510,23 @@ def run_case(
     binary: Path, root: Path, actor: Path | None, selection: str, mode: str,
     *, fresh_home: bool = False, mixed_imports: bool = False,
 ) -> dict:
+    with tempfile.TemporaryDirectory(prefix="ax-") as temporary:
+        return _run_case(
+            binary, root, actor, selection, mode, fresh_home=fresh_home,
+            mixed_imports=mixed_imports, temporary_root=Path(temporary).resolve(),
+        )
+
+
+def _run_case(
+    binary: Path, root: Path, actor: Path | None, selection: str, mode: str,
+    *, fresh_home: bool = False, mixed_imports: bool = False, temporary_root: Path | None = None,
+) -> dict:
     root.mkdir()
     require(not root.resolve().is_relative_to(ROOT.resolve()), "Smoke caller must be outside checkout")
     tools = prepare_tools(root, actor)
     env = isolated_env(root, tools)
+    if temporary_root is not None:
+        env.update({key: str(temporary_root) for key in ("TMPDIR", "TMP", "TEMP")})
     poison_host_apm(tools, env)
     pin = release.check_backend_metadata(binary.parent, release.native_target())
     backend = binary.parent / "libexec/apm" / pin["assets"][release.native_target()]["executable"]
@@ -510,6 +542,8 @@ def run_case(
     if mode == "pass":
         env["APMX_STREAM_GATE"] = str(root / "actor-stream-observed")
     caller = root / "caller"
+    if mixed_imports:
+        caller = root / ("caller-long-" + "x" * max(1, 160 - len(str(root)) - 13))
     package = root / "package"
     caller.mkdir()
     package.mkdir()
@@ -561,7 +595,8 @@ def run_case(
     caller_before = snapshot(caller)
     package_before = snapshot(package)
     profiles_before = profile_snapshot(root)
-    temp_before = snapshot(root / "temp")
+    temp_directory = Path(env["TMPDIR"])
+    temp_before = snapshot(temp_directory)
     args = ["handoff.contract.md"]
     if selection == "package":
         args = ["--from", str(package), *args]
@@ -650,7 +685,7 @@ def run_case(
     require(snapshot(package) == package_before, "Source package was changed")
     profile_changes = check_profiles(root, profiles_before, fresh_home)
     require(not Path(env["APMX_DECOY_APM_LOG"]).exists(), "Host APM decoy was executed")
-    temp_after = snapshot(root / "temp")
+    temp_after = snapshot(temp_directory)
     changed_temp = sorted(
         path for path in temp_before.keys() | temp_after.keys()
         if temp_before.get(path) != temp_after.get(path)
@@ -660,6 +695,7 @@ def run_case(
         f"{selection}/{mode}: Temporary producer/package files were not cleaned; "
         f"changed paths ({len(changed_temp)}): {changed_temp[:12]}",
     )
+    require(not snapshot(root / "temp"), "Unused case-local temporary directory was written")
     for path, expected_digest in caller_before.items():
         require(digest(caller / path) == expected_digest, f"Caller file changed: {path}")
     for path in set(snapshot(caller)) - set(caller_before):
@@ -676,6 +712,13 @@ def run_case(
         prepared_root = Path(record["source"]["package"]["root"])
         if prepared_root.resolve() != package.resolve():
             require(not prepared_root.exists(), "Private package not cleaned")
+        if mixed_imports:
+            require(
+                temporary_root is not None
+                and prepared_root.resolve().is_relative_to(temporary_root.resolve())
+                and not prepared_root.resolve().is_relative_to(caller.resolve()),
+                "Long-caller acquisition did not use compact owned temporary staging",
+            )
         require(len(record["imports"]) == (3 if mixed_imports else 1), "Unexpected selected import count")
         imported = record["imports"][0]
         require(imported["name"] == "release-style", "Wrong packaged skill")
