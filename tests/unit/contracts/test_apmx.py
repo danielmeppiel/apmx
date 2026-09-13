@@ -18,7 +18,9 @@ from click.testing import CliRunner
 
 from apmx.cli import main
 from apmx.contracts import frontend, workspace
-from apmx.contracts.models import ContractError, ContractLimits, Outcome
+from apmx.contracts.models import (
+    ContractError, ContractLimits, Outcome, ProcessObservation, ProcessRequest,
+)
 from apmx.contracts.records import AttemptStore
 from apmx.deps.lockfile import LockedDependency, LockFile
 from apmx.install import contract_source
@@ -78,6 +80,204 @@ def _prepare(package, caller, *, planning=False):
         str(package), "job.contract.md", caller_root=caller,
         planning=planning, limits=ContractLimits(),
     )
+
+
+@pytest.fixture
+def producer(monkeypatch):
+    """Real local child and checks, never native model inference."""
+    def build_request(plan, snapshot, directory, *, timeout_seconds):
+        return ProcessRequest(
+            (sys.executable, "-c",
+             "from pathlib import Path; "
+             "Path('result.txt').write_bytes(Path('notes.md').read_bytes()); "
+             """print('{"type":"result","exitCode":0,"sessionId":"fixture","usage":{}}')"""),
+            snapshot.producer,
+            timeout_seconds,
+        )
+
+    adapter = Mock()
+    adapter.build_contract_request.side_effect = build_request
+    monkeypatch.setattr(
+        "apmx.contracts.engine.RuntimeFactory.get_runtime_by_name", lambda *args: adapter
+    )
+    return adapter.build_contract_request
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, producer, verbose):
+    package = _package(tmp_path / "job", imports=True)
+    _skill(tmp_path / "style")
+    result = CliRunner().invoke(main, [
+        "--from", str(package), "job.contract.md", "--on", "copilot", "--allow-host-access",
+        *(["--verbose"] if verbose else []),
+    ])
+    assert result.exit_code == Outcome.UNPROVEN, result.output
+    assert "content: passed" in result.output
+    producer.assert_called_once()
+    transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
+    for output in (result.output, transcript):
+        phases = [
+            "APM: installing package dependencies (resolution).",
+            "APM: package dependencies installed.",
+            "Selected imports: style (1 context document).",
+            "Preparing Copilot working copy",
+            "Running Copilot",
+        ]
+        assert [output.index(phase) for phase in phases] == sorted(
+            output.index(phase) for phase in phases
+        )
+        assert output.count(phases[0]) == 1
+        assert output.count(phases[1]) == 1
+    details = (
+        "APM version: 0.30.0 (validated against bundled pin).",
+        "APM command shape (placeholders): apm install <package-request> "
+        "--root <owned-stage> --only apm --target agent-skills --no-trust-bin",
+        "Context: style / skill style (SKILL.md)",
+    )
+    for detail in details:
+        assert (detail in result.output) is verbose
+        assert detail in transcript
+
+
+@pytest.mark.parametrize("packaged", [False, True])
+@pytest.mark.parametrize("frozen", [False, True])
+@pytest.mark.parametrize("verbose", [False, True])
+def test_consumer_preparation_is_separately_scoped_and_retained(
+    caller, tmp_path, producer, monkeypatch, packaged, frozen, verbose,
+):
+    from apmx.install import apm_backend
+
+    package = _package(tmp_path / "job", imports=True)
+    _skill(tmp_path / "style")
+    if not packaged:
+        shutil.copytree(package, caller, dirs_exist_ok=True)
+    (caller / "apm.yml").write_text(
+        "name: caller\nversion: 1.0.0\ndependencies:\n  apm: [../style]\n"
+    )
+    if frozen:
+        apm_backend.install(caller, limits=ContractLimits())
+    before = (caller / "apm.yml").read_bytes()
+    install = Mock(wraps=apm_backend.install)
+    monkeypatch.setattr(apm_backend, "install", install)
+    result = CliRunner().invoke(main, [
+        "job.contract.md", "--on", "copilot", "--allow-host-access",
+        *(["--from", str(package)] if packaged else []),
+        *(["--verbose"] if verbose else []),
+    ])
+    assert result.exit_code == Outcome.UNPROVEN, result.output
+    assert "content: passed" in result.output
+    producer.assert_called_once()
+    assert install.call_count == 1 + int(packaged)
+    assert install.call_args.kwargs["scope"] == "consumer"
+    assert install.call_args.kwargs["frozen"] is frozen
+    assert (caller / "apm.yml").read_bytes() == before
+    transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
+    mode = "frozen consumer-lock replay" if frozen else "resolution"
+    for output in (result.output, transcript):
+        started = f"APM: installing consumer imports ({mode})."
+        completed = "APM: consumer imports installed."
+        assert output.count(started) == output.count(completed) == 1
+        assert output.index(started) < output.index(completed) < output.index("Selected imports:")
+        assert output.count("APM: package dependencies installed.") == int(packaged)
+        if packaged:
+            assert output.index("APM: package dependencies installed.") < output.index(started)
+        assert output.count("Selected imports: style (1 context document).") == 1
+    shapes = [line for line in transcript.splitlines() if "command shape" in line]
+    assert len(shapes) == 1 + int(packaged)
+    assert shapes[-1].endswith("--frozen") is frozen
+    assert all("<package-request>" not in line for line in shapes)
+    assert result.output.count("APM command shape") == (1 + int(packaged)) * int(verbose)
+
+
+@pytest.mark.parametrize("selection", ["local", "package", "remote"])
+@pytest.mark.parametrize("verbose", [False, True])
+def test_offline_cli_never_reports_an_install(caller, tmp_path, monkeypatch, selection, verbose):
+    package = _package(tmp_path / "job")
+    if selection == "local":
+        shutil.copytree(package, caller, dirs_exist_ok=True)
+    install = Mock(side_effect=AssertionError("Offline planning invoked APM"))
+    monkeypatch.setattr("apmx.install.apm_backend.install", install)
+    ref = str(package) if selection == "package" else "org/job#v1"
+    result = CliRunner().invoke(main, [
+        "job.contract.md", "--on", "copilot", "--plan",
+        *(["--from", ref] if selection != "local" else []),
+        *(["--verbose"] if verbose else []),
+    ])
+    assert result.exit_code == (Outcome.UNPROVEN if selection == "remote" else 0), result.output
+    install.assert_not_called()
+    assert "APM: installing" not in result.output
+    assert "dependencies installed" not in result.output
+    assert "APM command shape" not in result.output
+    assert not (caller / ".apm/runs").exists()
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_local_run_without_imports_does_not_claim_apm_ran(
+    caller, tmp_path, producer, monkeypatch, verbose,
+):
+    shutil.copytree(_package(tmp_path / "job"), caller, dirs_exist_ok=True)
+    install = Mock(side_effect=AssertionError("No imports need APM"))
+    monkeypatch.setattr("apmx.install.apm_backend.install", install)
+    result = CliRunner().invoke(main, [
+        "job.contract.md", "--on", "copilot", "--allow-host-access",
+        *(["--verbose"] if verbose else []),
+    ])
+    assert result.exit_code == Outcome.UNPROVEN, result.output
+    assert "content: passed" in result.output
+    install.assert_not_called()
+    producer.assert_called_once()
+    transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
+    for output in (result.output, transcript):
+        assert "APM:" not in output
+        assert "APM command shape" not in output
+        assert "Selected imports:" not in output
+        assert "Preparing Copilot working copy" in output
+
+
+@pytest.mark.parametrize("packaged", [False, True])
+@pytest.mark.parametrize("failure", ["exit", "version", "cancelled", "interrupt"])
+@pytest.mark.parametrize("verbose", [False, True])
+def test_failed_preparation_never_launches_producer_or_claims_success(
+    caller, tmp_path, producer, monkeypatch, packaged, failure, verbose,
+):
+    from apmx.install import apm_backend
+
+    package = _package(tmp_path / "job", imports=True)
+    _skill(tmp_path / "style")
+    if not packaged:
+        shutil.copytree(package, caller, dirs_exist_ok=True)
+    monkeypatch.setenv("GITHUB_TOKEN", "PRIVATE_AUTH_SENTINEL")
+
+    def failed(request, *, on_bytes, **kwargs):
+        on_bytes("stderr", b"PRIVATE_STDERR_SENTINEL\x1b]52;c;injection\x07\n")
+        if request.argv[1] == "--version" and failure != "version":
+            on_bytes("stdout", apm_backend.expected_version_output().encode() + b"\n")
+            return ProcessObservation(0)
+        on_bytes("stdout", b"PRIVATE_STDOUT_SENTINEL\n")
+        if failure == "interrupt":
+            raise KeyboardInterrupt
+        if failure == "cancelled":
+            return ProcessObservation(None, stop_reason="cancelled")
+        return ProcessObservation(1)
+
+    supervisor = Mock(side_effect=failed)
+    monkeypatch.setattr(apm_backend, "supervise_process", supervisor)
+    result = CliRunner().invoke(main, [
+        "job.contract.md", "--on", "copilot", "--allow-host-access",
+        *(["--from", str(package)] if packaged else []),
+        *(["--verbose"] if verbose else []),
+    ])
+    assert result.exit_code == Outcome.HALTED, result.output
+    producer.assert_not_called()
+    assert supervisor.call_count == (1 if failure == "version" else 2)
+    assert ("APM: installing" in result.output) is (failure != "version")
+    assert "[+]" not in result.output
+    assert "installed." not in result.output
+    assert "Selected imports:" not in result.output
+    assert "Preparing Copilot working copy" not in result.output
+    assert "PRIVATE" not in result.output
+    assert "\x1b" not in result.output
+    assert not (caller / ".apm/runs").exists()
 
 
 @pytest.mark.parametrize("args,code", [

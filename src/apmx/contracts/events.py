@@ -1,11 +1,37 @@
 """One ordered event handoff for a local invocation."""
 
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
-from .models import EventSink, RunEvent
+from .models import EventSink, ImportedSkill, RunEvent
 
 HEARTBEAT_SECONDS = 5
+
+PreparationScope = Literal["package", "consumer"]
+
+
+@dataclass(frozen=True)
+class ApmInstallEvent:
+    """Observed backend lifecycle, without argv, paths, environment or child text."""
+
+    phase: Literal["started", "completed"]
+    scope: PreparationScope
+    version: str
+    frozen: bool
+    package_request: bool
+
+
+@dataclass(frozen=True)
+class ImportsSelectedEvent:
+    """Validated context selected by the frontend, not the installed graph."""
+
+    imports: tuple[ImportedSkill, ...]
+
+
+PreparationEvent = ApmInstallEvent | ImportsSelectedEvent
+PreparationSink = Callable[[PreparationEvent], None]
 
 
 class EventEmitter:

@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import tempfile
 
+from apmx.contracts.events import PreparationSink
 from apmx.contracts.frontend import admit_caller_policy, package_contract_path, parse_contract
 from apmx.contracts.imports import (
     _read_bytes, read_lock, read_project_manifest, resolve_installed_skills,
@@ -108,6 +109,7 @@ def prepare_contract_source(
     caller_root: Path,
     planning: bool,
     limits: ContractLimits,
+    on_preparation: PreparationSink | None = None,
 ) -> Iterator[ContractSource]:
     """Never run APM from the real caller or package checkout."""
     admit_caller_policy(caller_root, limits=limits)
@@ -203,7 +205,9 @@ def prepare_contract_source(
                 if staged_selection.status != DependencySelectionStatus.MATCHED:
                     apm_backend.add_package_request(stage, request, limits)
                     frozen = False
-                identity = apm_backend.install(stage, frozen=frozen, limits=limits)
+                identity = apm_backend.install(
+                    stage, frozen=frozen, limits=limits, on_preparation=on_preparation,
+                )
                 installed_lock, _ = read_lock(stage, limits)
                 apm_backend.require_preserved_pins(established, installed_lock)
             else:
@@ -211,7 +215,8 @@ def prepare_contract_source(
                     raise ContractError("Consumer lock requires its manifest.",
                                         code="invalid_manifest")
                 identity = apm_backend.install(
-                    stage, package_ref=str(original) if original else package_ref, limits=limits
+                    stage, package_ref=str(original) if original else package_ref, limits=limits,
+                    on_preparation=on_preparation,
                 )
             _, _, current_manifest = read_project_manifest(caller_root, limits, allow_missing=True)
             _, current_lock = read_lock(caller_root, limits)
@@ -249,6 +254,7 @@ def prepare_imports(
     source: ContractSource | None,
     planning: bool,
     limits: ContractLimits,
+    on_preparation: PreparationSink | None = None,
 ) -> Iterator[tuple[Path, dict[str, str] | None]]:
     """The consumer manifest/lock wins over a packaged contract's dependencies."""
     admit_caller_policy(caller_root, limits=limits)
@@ -270,7 +276,9 @@ def prepare_imports(
     before = _original_bytes(caller_root, limits)
     with _private_root(caller_root, None) as stage:
         frozen = apm_backend.snapshot_manifest(caller_root, stage, limits)
-        identity = apm_backend.install(stage, frozen=frozen, limits=limits)
+        identity = apm_backend.install(
+            stage, frozen=frozen, limits=limits, on_preparation=on_preparation, scope="consumer",
+        )
         if _original_bytes(caller_root, limits) != before:
             raise ContractError("Consumer declarations changed during preparation.",
                                 code="plan_changed")

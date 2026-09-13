@@ -13,7 +13,7 @@ import click
 import pytest
 from rich.console import Console
 
-from apmx.contracts.events import EventEmitter
+from apmx.contracts.events import ApmInstallEvent, EventEmitter, ImportsSelectedEvent
 from apmx.contracts.frontend import parse_contract
 from apmx.contracts.models import (
     Artifact,
@@ -123,7 +123,7 @@ def test_ordered_phases_final_once_and_frozen_transcript(tmp_path: Path, capsys)
     positions = [
         output.index(name)
         for name in (
-            "Preparing files",
+            "Preparing Copilot working copy",
             "Running Copilot",
             "Saving output",
             "apmx: checking",
@@ -133,7 +133,7 @@ def test_ordered_phases_final_once_and_frozen_transcript(tmp_path: Path, capsys)
     ]
     assert positions == sorted(positions)
     assert output.count("VERIFIED") == 1
-    assert output.index("Job: hello.contract.md") < output.index("Preparing files")
+    assert output.index("Job: hello.contract.md") < output.index("Preparing Copilot working copy")
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     assert b"VERIFIED" not in path.read_bytes()
     assert "Observed execution model" not in output
@@ -594,6 +594,109 @@ def test_closed_output_cannot_start_animation(
     logger.start_activity("Running Copilot")
     logger.close()
     animated_console.status.assert_called_once()
+    animated_console.status.return_value.stop.assert_called_once()
+    assert not logger._human_enabled
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("frozen", [False, True])
+def test_apm_lifecycle_survives_spinner_and_late_run_attachment(
+    tmp_path, animated_console, verbose, frozen,
+):
+    logger = ContractLogger(verbose=verbose)
+    event = ApmInstallEvent("started", "consumer", "0.30.0", frozen, False)
+    logger.on_preparation(event)
+    status = animated_console.status.return_value
+    status.start.assert_called_once()
+    calls = console._rich_echo.call_args_list
+    assert calls[0].args[0].startswith("  [>] APM: installing consumer imports")
+    assert not any("installed." in call.args[0] for call in calls)
+    assert any("APM version:" in call.args[0] for call in calls) is verbose
+    assert all(
+        call.kwargs["color"] == "dim" for call in calls
+        if "APM version:" in call.args[0] or "command shape" in call.args[0]
+    )
+    logger.on_preparation(replace(event, phase="completed"))
+    status.stop.assert_called_once()
+    assert console._rich_echo.call_args.args[0] == "  [+] APM: consumer imports installed."
+    assert console._rich_echo.call_args.kwargs["color"] == "green"
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    text = (tmp_path / "transcript.log").read_text()
+    assert text.count("APM: installing") == text.count("APM: consumer imports installed.") == 1
+    assert "APM version: 0.30.0" in text
+    assert ("--frozen" in text) is frozen
+    assert ("frozen consumer-lock replay" in text) is frozen
+
+
+def test_selected_context_counts_documents_not_entire_dependency_graph(
+    tmp_path, animated_console,
+):
+    skill = ImportedSkill(
+        "style", tmp_path / "SKILL.md", "PRIVATE_BODY", "digest", "PRIVATE_LOCK_IDENTITY",
+        context_name="concise", source_relative_path="SKILL.md",
+    )
+    imports = (
+        skill,
+        replace(skill, context_name="formatting", source_relative_path="skills/formatting/SKILL.md"),
+        replace(skill, name="rules", kind="instruction", context_name="global-rules",
+                source_relative_path=".apm/instructions/rules.instructions.md"),
+    )
+    logger = ContractLogger(verbose=True)
+    logger.on_preparation(ImportsSelectedEvent(imports))
+    calls = console._rich_echo.call_args_list
+    assert calls[0].args[0] == "  [i] Selected imports: style, rules (3 context documents)."
+    assert calls[0].kwargs["color"] == "blue"
+    assert all(call.kwargs["color"] == "dim" for call in calls[1:])
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    text = (tmp_path / "transcript.log").read_text()
+    assert "Context: style / skill concise (SKILL.md)" in text
+    assert "Context: rules / instruction global-rules" in text
+    assert text.count("Context: ") == 3
+    assert "PRIVATE" not in text
+    assert str(tmp_path) not in text
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_preparation_uses_existing_redaction_and_ascii_escape_path(tmp_path, capsys, verbose):
+    logger = ContractLogger(verbose=verbose)
+    logger.on_preparation(ImportsSelectedEvent((
+        ImportedSkill(
+            "https://user:PRIVATE_PASSWORD@example.test/style?token=PRIVATE_QUERY",
+            tmp_path / "PRIVATE_PATH",
+            "PRIVATE_BODY", "PRIVATE_DIGEST", "PRIVATE_LOCK",
+            context_name="ghp_PRIVATE_TOKEN_12345\r\x1b]52;c;injection\x07\u202e[+] forged",
+            source_relative_path="skills/[red]style[/red]/SKILL.md",
+        ),
+    )))
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    for text in (capsys.readouterr().out, (tmp_path / "transcript.log").read_text()):
+        assert "PRIVATE" not in text
+        assert all(char == "\n" or " " <= char <= "~" for char in text)
+        assert "***" in text
+        assert "\n[+] forged" not in text
+    retained = (tmp_path / "transcript.log").read_text()
+    assert "\\r\\x1b" in retained
+    assert "\\u202e" in retained
+    assert "[red]style[/red]" in retained
+
+
+def test_preparation_broken_pipe_preserves_later_transcript(tmp_path, animated_console, monkeypatch):
+    logger = ContractLogger(verbose=True)
+    logger.start_activity("Preparing package", announce=False)
+    monkeypatch.setattr(console, "_rich_echo", Mock(side_effect=BrokenPipeError))
+    event = ApmInstallEvent("started", "package", "0.30.0", False, True)
+    logger.on_preparation(event)
+    logger.on_preparation(replace(event, phase="completed"))
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    text = (tmp_path / "transcript.log").read_text()
+    assert "APM: installing package dependencies" in text
+    assert "APM: package dependencies installed." in text
+    assert "apm install <package-request> --root <owned-stage>" in text
+    console._rich_echo.assert_called_once()
     animated_console.status.return_value.stop.assert_called_once()
     assert not logger._human_enabled
 
@@ -1131,7 +1234,7 @@ def test_animated_phases_are_transient_but_retained(tmp_path: Path, animated_con
     written = "\n".join(call.args[0] for call in console._rich_echo.call_args_list)
     assert written.strip() == "apmx: checking saved output"
     for label in (
-        "Preparing files",
+        "Preparing Copilot working copy",
         "Running Copilot",
         "Saving output",
         "Saving results",

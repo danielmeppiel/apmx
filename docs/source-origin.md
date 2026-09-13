@@ -73,6 +73,45 @@ deployment and lifecycle scripts are not enabled by this invocation. The native
 backend is supervised with the existing process cleanup/watchdog boundary;
 backend output and credentials are not copied into records or public commentary.
 
+Dependency preparation has its own durable, apmx-owned APM lifecycle messages,
+separate from `Preparing Copilot working copy` and `Running Copilot`. For example:
+
+```text
+  [>] APM: installing package dependencies (resolution).
+  [+] APM: package dependencies installed.
+  [i] Selected imports: handoff-style (1 context document).
+```
+
+`--verbose` also shows the observed, validated backend version and a sanitized
+command shape before installation:
+
+```text
+  APM version: 0.30.0 (validated against bundled pin).
+  APM command shape (placeholders): apm install <package-request> --root <owned-stage> --only apm --target agent-skills --no-trust-bin
+  Context: handoff-style / skill handoff-style (SKILL.md)
+```
+
+This is **not exact argv**: `apm` labels the validated bundled/provisioned backend,
+not a PATH lookup; `<package-request>` and `<owned-stage>` replace the actual
+request and temporary root. When the request is already in the owned manifest,
+there is no positional request placeholder. A separate consumer-import install
+is labeled `consumer imports`, and `frozen consumer-lock replay` plus `--frozen`
+appear only when that invocation replays a consumer lock. Each actual install
+has its own scoped start/completion; logging does not install again. Completion
+requires observed backend success and unchanged backend identity. It does not
+claim that later context validation, Copilot execution or checks have passed.
+Selected import packages and context documents are reported only after frontend
+selection and workspace inspection, not inferred from the installed graph.
+
+One logger retains these preparation facts, including verbose details, in the
+bounded `transcript.log` if an admitted run is subsequently created. Preparation
+failure before admission creates no run record and launches no producer. Output
+uses the existing redaction, ASCII escaping, TTY spinner and broken-pipe handling;
+APM lifecycle lines remain visible after the spinner stops and in captured text.
+Raw APM stdout/stderr, environment values and actual install argv are never
+forwarded. Offline `--plan` never runs or reports an install; local execution
+without imports does not claim APM ran.
+
 Imports name APM packages, not arbitrary skill symbols or repository basenames.
 The consumer's manifest and lock govern even a packaged contract. Without a
 consumer environment, execution can resolve an ephemeral one; a package-owned

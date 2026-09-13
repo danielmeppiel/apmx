@@ -258,6 +258,7 @@ def _unit_backend(tmp_path, monkeypatch, *, install_observation=None, version=b"
         if request.argv[1] == "--version":
             on_bytes("stdout", version or (apm_backend.expected_version_output() + "\n").encode())
             return ProcessObservation(0)
+        on_bytes("stdout", b"PRIVATE_INSTALL_OUTPUT_MUST_NOT_ESCAPE")
         on_bytes("stderr", b"PRIVATE_AUTH_OUTPUT_MUST_NOT_ESCAPE")
         return install_observation or ProcessObservation(0)
 
@@ -303,7 +304,7 @@ def test_frozen_native_replay_never_adds_positional_packages(tmp_path, monkeypat
     assert len(requests) == 2
 
 
-@pytest.mark.parametrize("failure", ["exit", "timeout", "cleanup", "spawn"])
+@pytest.mark.parametrize("failure", ["exit", "timeout", "cleanup", "spawn", "cancelled"])
 def test_native_failures_halt_without_leaking_output(tmp_path, monkeypatch, failure):
     from apmx.install.apm_backend import install
     from apmx.contracts.models import ContractLimits, ProcessObservation
@@ -313,10 +314,13 @@ def test_native_failures_halt_without_leaking_output(tmp_path, monkeypatch, fail
         "timeout": ProcessObservation(None, stop_reason="deadline"),
         "cleanup": ProcessObservation(0, cleanup_confirmed=False),
         "spawn": ProcessObservation(None, error="private host error"),
+        "cancelled": ProcessObservation(None, stop_reason="cancelled"),
     }[failure]
     _unit_backend(tmp_path, monkeypatch, install_observation=observation)
+    events = []
     with pytest.raises(ContractError) as error:
-        install(tmp_path, limits=ContractLimits())
+        install(tmp_path, limits=ContractLimits(), on_preparation=events.append)
+    assert [event.phase for event in events] == ["started"]
     assert error.value.code == "apm_install_failed"
     assert "PRIVATE_AUTH_OUTPUT" not in str(error.value)
     assert "private host" not in str(error.value)
@@ -327,9 +331,71 @@ def test_wrong_backend_version_refuses_before_install(tmp_path, monkeypatch):
     from apmx.contracts.models import ContractLimits
 
     requests = _unit_backend(tmp_path, monkeypatch, version=b"APM wrong version\n")
+    events = []
     with pytest.raises(ContractError, match="does not match"):
-        install(tmp_path, limits=ContractLimits())
+        install(tmp_path, limits=ContractLimits(), on_preparation=events.append)
     assert len(requests) == 1
+    assert not events
+
+
+@pytest.mark.parametrize("scope,frozen,package_ref", [
+    ("package", False, "https://user:PRIVATE_REQUEST@example.test/repo?token=PRIVATE_QUERY"),
+    ("package", False, None),
+    ("package", True, None),
+    ("consumer", False, None),
+    ("consumer", True, None),
+])
+def test_preparation_events_describe_only_validated_install_facts(
+    tmp_path, monkeypatch, scope, frozen, package_ref,
+):
+    from apmx.contracts.events import ApmInstallEvent
+    from apmx.contracts.models import ContractLimits
+    from apmx.install.apm_backend import install
+
+    requests = _unit_backend(tmp_path, monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "PRIVATE_AUTH_SENTINEL")
+    events = []
+    identity = install(
+        tmp_path, package_ref=package_ref, frozen=frozen, limits=ContractLimits(), scope=scope,
+        on_preparation=lambda event: events.append((event, len(requests))),
+    )
+    assert events == [
+        (ApmInstallEvent("started", scope, identity["version"], frozen, package_ref is not None), 1),
+        (ApmInstallEvent("completed", scope, identity["version"], frozen, package_ref is not None), 2),
+    ]
+    assert "PRIVATE" not in repr(events)
+    assert str(tmp_path) not in repr(events)
+    assert len(requests) == 2  # One version probe and one install, not a logging probe.
+
+
+@pytest.mark.parametrize("failure", ["changed", "interrupted"])
+def test_post_probe_failure_never_emits_install_completion(tmp_path, monkeypatch, failure):
+    from apmx.contracts.models import ContractLimits
+    from apmx.install import apm_backend
+
+    _unit_backend(tmp_path, monkeypatch)
+    if failure == "changed":
+        identity = apm_backend.backend_identity(apm_backend.locate_backend())
+        from unittest.mock import Mock
+
+        monkeypatch.setattr(apm_backend, "backend_identity", Mock(side_effect=[
+            identity, {**identity, "executable_sha256": "changed"},
+        ]))
+        exception = ContractError
+    else:
+        supervise = apm_backend.supervise_process
+
+        def interrupted(request, **kwargs):
+            if request.argv[1] == "install":
+                raise KeyboardInterrupt
+            return supervise(request, **kwargs)
+
+        monkeypatch.setattr(apm_backend, "supervise_process", interrupted)
+        exception = KeyboardInterrupt
+    events = []
+    with pytest.raises(exception):
+        apm_backend.install(tmp_path, limits=ContractLimits(), on_preparation=events.append)
+    assert [event.phase for event in events] == ["started"]
 
 
 @pytest.mark.parametrize("target", [

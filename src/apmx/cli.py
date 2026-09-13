@@ -72,6 +72,7 @@ def main(
                 verbose=verbose,
                 planning=planning,
                 allow_advisory=allow_advisory,
+                logger=logger,
             )
             return
         admit_caller_policy(caller_root, limits=limits)
@@ -84,9 +85,10 @@ def main(
                 code="advisory_consent_required",
                 outcome=Outcome.UNPROVEN,
             )
-        logger.start_activity("Preparing package")
+        logger.start_activity("Preparing package", announce=False)
         with prepare_contract_source(
-            package_ref, contract, caller_root=caller_root, planning=planning, limits=limits
+            package_ref, contract, caller_root=caller_root, planning=planning, limits=limits,
+            on_preparation=logger.on_preparation,
         ) as source:
             logger.stop_activity()
             invoke_contract(
@@ -98,6 +100,7 @@ def main(
                 planning=planning,
                 allow_advisory=allow_advisory,
                 source=source,
+                logger=logger,
             )
     except ContractError as exc:
         logger.render_error(exc)

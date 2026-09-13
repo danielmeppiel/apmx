@@ -10,6 +10,7 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+from apmx.contracts.events import ApmInstallEvent, PreparationScope, PreparationSink
 from apmx.contracts.imports import _read_bytes, read_project_manifest
 from apmx.contracts.models import ContractError, ContractLimits, ProcessRequest
 from apmx.contracts.process import supervise_process
@@ -131,6 +132,8 @@ def install(
     package_ref: str | None = None,
     frozen: bool = False,
     limits: ContractLimits,
+    on_preparation: PreparationSink | None = None,
+    scope: PreparationScope = "package",
 ) -> dict[str, str]:
     """Run in an owned source/deploy root with normal APM auth/config semantics.
 
@@ -180,6 +183,10 @@ def install(
             "The provisioned APM version/source does not match the bundled pin.",
             code="apm_backend_identity",
         )
+    if on_preparation is not None:
+        on_preparation(ApmInstallEvent(
+            "started", scope, identity["version"], frozen, package_ref is not None,
+        ))
     observed = supervise_process(
         ProcessRequest(tuple(argv), stage, limits.attempt_seconds, env=env),
         on_bytes=lambda _stream, _chunk: None,
@@ -198,6 +205,10 @@ def install(
         )
     if backend_identity(executable) != identity:
         raise ContractError("APM backend changed during preparation.", code="apm_backend_changed")
+    if on_preparation is not None:
+        on_preparation(ApmInstallEvent(
+            "completed", scope, identity["version"], frozen, package_ref is not None,
+        ))
     return identity
 
 

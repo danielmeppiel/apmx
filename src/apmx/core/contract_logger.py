@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
 
 from apmx.contracts import records
-from apmx.contracts.events import HEARTBEAT_SECONDS
+from apmx.contracts.events import HEARTBEAT_SECONDS, ApmInstallEvent, PreparationEvent
 from apmx.contracts.models import (
     CheckObservation,
     ContractError,
@@ -197,6 +197,7 @@ class ContractLogger:
         symbol, color = {
             "start": ("running", "cyan"),
             "info": ("", "default"),
+            "notice": ("info", "blue"),
             "heading": ("", "default"),
             "warning": ("warning", "yellow"),
             "error": ("error", "red"),
@@ -306,6 +307,50 @@ class ContractLogger:
             if event.kind != "heartbeat" and not hidden_detail:
                 self._last_activity = event.elapsed_seconds
 
+    def on_preparation(self, event: PreparationEvent) -> None:
+        """Retain pre-run facts in the same bounded transcript later attached by the engine."""
+        if isinstance(event, ApmInstallEvent):
+            subject = {"package": "package dependencies", "consumer": "consumer imports"}[
+                event.scope
+            ]
+            if event.phase == "completed":
+                self.stop_activity()
+                self._write(f"APM: {subject} installed.", severity="success")
+                return
+            mode = "frozen consumer-lock replay" if event.frozen else "resolution"
+            message = f"APM: installing {subject} ({mode})."
+            self._write(message, severity="start")
+            self.start_activity(message.removesuffix("."), announce=False)
+            self._write(
+                f"APM version: {event.version} (validated against bundled pin).",
+                severity="detail", detail=True,
+            )
+            command = "apm install"
+            if event.package_request:
+                command += " <package-request>"
+            command += " --root <owned-stage> --only apm --target agent-skills --no-trust-bin"
+            if event.frozen:
+                command += " --frozen"
+            self._write(
+                f"APM command shape (placeholders): {command}",
+                severity="detail", detail=True,
+            )
+            return
+        if not event.imports:
+            return
+        packages = ", ".join(dict.fromkeys(item.name for item in event.imports))
+        count = len(event.imports)
+        self._write(
+            f"Selected imports: {packages} ({count} context document{'s' if count != 1 else ''}).",
+            severity="notice",
+        )
+        for item in event.imports:
+            self._write(
+                f"Context: {item.name} / {item.kind} {item.context_name or item.name} "
+                f"({item.source_relative_path or item.source_path.name})",
+                severity="detail", detail=True,
+            )
+
     @staticmethod
     def _field(event: RunEvent, name: str, default: str = "unknown") -> str:
         value = event.data.get(name)
@@ -351,7 +396,7 @@ class ContractLogger:
         if phase == "checks":
             self._checks_heading()
         message = {
-            "preflight": "Preparing files",
+            "preflight": "Preparing Copilot working copy",
             "execution": "Running Copilot",
             "capture": "Saving output",
             "checks": f"Checking {self._produces}",
