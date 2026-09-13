@@ -424,6 +424,8 @@ class ContractLogger:
         package = self._field(event, "package_ref", "")
         identity = self._job_identity(source, relative)
         model = self._field(event, "model", "default model")
+        if self._preparation_notice_shown:
+            self._write("", indent=0)
         self._write(f"Job: {identity} -> {self._produces}", severity="heading", indent=0)
         self._write(f"Copilot / {model}", severity="detail")
         self._write("Running on your machine (not sandboxed).")

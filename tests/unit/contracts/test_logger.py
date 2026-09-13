@@ -13,7 +13,9 @@ import click
 import pytest
 from rich.console import Console
 
-from apmx.contracts.events import ApmInstallEvent, ApmOutputEvent, EventEmitter, ImportsSelectedEvent
+from apmx.contracts.events import (
+    ApmInstallEvent, ApmOutputEvent, EventEmitter, ImportsSelectedEvent, PreparationScope,
+)
 from apmx.contracts.frontend import parse_contract
 from apmx.contracts.models import (
     Artifact,
@@ -627,6 +629,38 @@ def test_apm_lifecycle_survives_spinner_and_late_run_attachment(
     assert "with APM 0.30.0" in text
     assert ("--frozen" in text) is frozen
     assert ("Using locked versions." in text) is frozen
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("scope", [None, "package", "consumer"])
+def test_job_heading_separates_preparation_without_leading_blank(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    verbose: bool,
+    scope: PreparationScope | None,
+) -> None:
+    """Keep one section break in output and records, only after APM preparation."""
+    logger = ContractLogger(verbose=verbose)
+    if scope is not None:
+        event = ApmInstallEvent("started", scope, "0.30.0", scope == "consumer", False)
+        logger.on_preparation(event)
+        logger.on_preparation(replace(event, phase="completed"))
+        logger.on_preparation(ImportsSelectedEvent((
+            ImportedSkill("style", tmp_path / "SKILL.md", "", "digest", "lock"),
+        )))
+    logger.attach_run("run", tmp_path)
+    EventEmitter("run", logger.on_event).emit(
+        "selected", contract="job.contract.md", produces="result.txt",
+    )
+    logger.close()
+    for text in (capsys.readouterr().out, (tmp_path / "transcript.log").read_text()):
+        lines = text.splitlines()
+        heading = next(index for index, line in enumerate(lines) if line.startswith("Job: "))
+        if scope is None:
+            assert heading == 0
+        else:
+            assert lines[heading - 1] == ""
+            assert lines[heading - 2].strip()
 
 
 def test_selected_context_counts_documents_not_entire_dependency_graph(

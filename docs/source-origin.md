@@ -129,6 +129,8 @@ soft-wrapping paths or credentials before framing. Injected controls are still
 escaped, not silently stripped.
 
 APM lifecycle lines remain visible after the spinner stops and in captured text.
+One blank line separates APM/import preparation from the `Job:` block; jobs
+without APM preparation do not gain a leading blank line.
 Backend diagnostics can contain sensitive data: redaction is best-effort, not
 protection against every unknown secret. Review logs before sharing them. No
 environment dump, raw stream spool or full argv is logged. Copilot protocol
