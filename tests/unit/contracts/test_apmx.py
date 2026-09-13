@@ -115,12 +115,14 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
     assert "content: passed" in result.output
     producer.assert_called_once()
     transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
+    assert "APM > [>] Resolving" in result.output
+    assert "APM (untrusted) > [*] Installed 2 APM dependencies" in transcript
     for output in (result.output, transcript):
         phases = [
-            "APM: installing package dependencies (resolution).",
-            "APM: package dependencies installed.",
-            "Selected imports: style (1 context document).",
-            "Preparing Copilot working copy",
+            "Installing packages with APM 0.30.0",
+            "Packages ready.",
+            "Using style",
+            "Preparing files for Copilot",
             "Running Copilot",
         ]
         assert [output.index(phase) for phase in phases] == sorted(
@@ -129,14 +131,16 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
         assert output.count(phases[0]) == 1
         assert output.count(phases[1]) == 1
     details = (
-        "APM version: 0.30.0 (validated against bundled pin).",
-        "APM command shape (placeholders): apm install <package-request> "
-        "--root <owned-stage> --only apm --target agent-skills --no-trust-bin",
-        "Context: style / skill style (SKILL.md)",
+        "Running: apm install (in a temporary workspace)",
+        "APM options: --only apm --target agent-skills --no-trust-bin",
+        "Skill: style (SKILL.md)",
     )
     for detail in details:
         assert (detail in result.output) is verbose
         assert detail in transcript
+    assert ("APM > Phase:" in result.output) is verbose
+    assert ("--no-trust-bin --verbose" in transcript) is verbose
+    assert "shape" not in result.output
 
 
 @pytest.mark.parametrize("packaged", [False, True])
@@ -172,21 +176,21 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
     assert install.call_args.kwargs["frozen"] is frozen
     assert (caller / "apm.yml").read_bytes() == before
     transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
-    mode = "frozen consumer-lock replay" if frozen else "resolution"
     for output in (result.output, transcript):
-        started = f"APM: installing consumer imports ({mode})."
-        completed = "APM: consumer imports installed."
+        started = "Installing project imports with APM 0.30.0"
+        completed = "Project imports ready."
         assert output.count(started) == output.count(completed) == 1
-        assert output.index(started) < output.index(completed) < output.index("Selected imports:")
-        assert output.count("APM: package dependencies installed.") == int(packaged)
+        assert output.index(started) < output.index(completed) < output.index("Using style")
+        assert output.count("Packages ready.") == int(packaged)
         if packaged:
-            assert output.index("APM: package dependencies installed.") < output.index(started)
-        assert output.count("Selected imports: style (1 context document).") == 1
-    shapes = [line for line in transcript.splitlines() if "command shape" in line]
-    assert len(shapes) == 1 + int(packaged)
-    assert shapes[-1].endswith("--frozen") is frozen
-    assert all("<package-request>" not in line for line in shapes)
-    assert result.output.count("APM command shape") == (1 + int(packaged)) * int(verbose)
+            assert output.index("Packages ready.") < output.index(started)
+        assert output.count("Using style") == 1
+        assert ("Using locked versions." in output) is frozen
+        assert output.count("Temporary workspace; your project files are unchanged.") == 1
+    options = [line for line in transcript.splitlines() if "APM options:" in line]
+    assert len(options) == 1 + int(packaged)
+    assert ("--frozen" in options[-1]) is frozen
+    assert result.output.count("Running: apm install") == (1 + int(packaged)) * int(verbose)
 
 
 @pytest.mark.parametrize("selection", ["local", "package", "remote"])
@@ -205,9 +209,9 @@ def test_offline_cli_never_reports_an_install(caller, tmp_path, monkeypatch, sel
     ])
     assert result.exit_code == (Outcome.UNPROVEN if selection == "remote" else 0), result.output
     install.assert_not_called()
-    assert "APM: installing" not in result.output
-    assert "dependencies installed" not in result.output
-    assert "APM command shape" not in result.output
+    assert "with APM" not in result.output
+    assert "Packages ready" not in result.output
+    assert "Running: apm install" not in result.output
     assert not (caller / ".apm/runs").exists()
 
 
@@ -228,10 +232,10 @@ def test_local_run_without_imports_does_not_claim_apm_ran(
     producer.assert_called_once()
     transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
     for output in (result.output, transcript):
-        assert "APM:" not in output
-        assert "APM command shape" not in output
-        assert "Selected imports:" not in output
-        assert "Preparing Copilot working copy" in output
+        assert "with APM" not in output
+        assert "Running: apm install" not in output
+        assert "APM >" not in output
+        assert "Preparing files for Copilot" in output
 
 
 @pytest.mark.parametrize("packaged", [False, True])
@@ -249,11 +253,11 @@ def test_failed_preparation_never_launches_producer_or_claims_success(
     monkeypatch.setenv("GITHUB_TOKEN", "PRIVATE_AUTH_SENTINEL")
 
     def failed(request, *, on_bytes, **kwargs):
-        on_bytes("stderr", b"PRIVATE_STDERR_SENTINEL\x1b]52;c;injection\x07\n")
+        on_bytes("stderr", b"Authorization: Bearer PRIVATE_STDERR_SENTINEL\x1b]52;c;injection\x07\n")
         if request.argv[1] == "--version" and failure != "version":
             on_bytes("stdout", apm_backend.expected_version_output().encode() + b"\n")
             return ProcessObservation(0)
-        on_bytes("stdout", b"PRIVATE_STDOUT_SENTINEL\n")
+        on_bytes("stdout", b"https://user:PRIVATE_STDOUT_SENTINEL@example.test/repo\n")
         if failure == "interrupt":
             raise KeyboardInterrupt
         if failure == "cancelled":
@@ -270,11 +274,11 @@ def test_failed_preparation_never_launches_producer_or_claims_success(
     assert result.exit_code == Outcome.HALTED, result.output
     producer.assert_not_called()
     assert supervisor.call_count == (1 if failure == "version" else 2)
-    assert ("APM: installing" in result.output) is (failure != "version")
+    assert ("with APM" in result.output) is (failure != "version")
     assert "[+]" not in result.output
-    assert "installed." not in result.output
-    assert "Selected imports:" not in result.output
-    assert "Preparing Copilot working copy" not in result.output
+    assert "ready." not in result.output
+    assert "Using style" not in result.output
+    assert "Preparing files for Copilot" not in result.output
     assert "PRIVATE" not in result.output
     assert "\x1b" not in result.output
     assert not (caller / ".apm/runs").exists()

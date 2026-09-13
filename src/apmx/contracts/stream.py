@@ -15,7 +15,7 @@ from typing import Literal
 
 from apmx.utils.git_env import redact_git_diagnostic
 
-from .events import EventEmitter
+from .events import ApmOutputEvent, EventEmitter, PreparationSink
 from .models import ContractLimits
 
 _TEXT_BYTES = 16 * 1024
@@ -86,6 +86,49 @@ class _Lines:
             self.line(bytes(self.pending))
         self.pending.clear()
         self.discarding = False
+
+
+class ApmStreamDecoder:
+    """Frame both APM pipes without parsing native text into execution outcomes."""
+
+    def __init__(self, sink: PreparationSink | None, *, limits: ContractLimits) -> None:
+        self.sink = sink
+        self.bytes_received = {"stdout": 0, "stderr": 0}
+        self.omitted_lines = 0
+        self._closed = False
+        self._streams = {
+            stream: _Lines(
+                min(_TEXT_BYTES, limits.frame_bytes),
+                lambda value, stream=stream: self._line(stream, value),
+                lambda stream=stream: self._overflow(stream),
+            )
+            for stream in ("stdout", "stderr")
+        }
+
+    def _line(self, stream: Literal["stdout", "stderr"], value: bytes) -> None:
+        if self.sink is not None and value.strip():
+            self.sink(ApmOutputEvent(stream, value.decode("utf-8", errors="backslashreplace")))
+
+    def _overflow(self, stream: Literal["stdout", "stderr"]) -> None:
+        self.omitted_lines += 1
+        if self.omitted_lines == 1 and self.sink is not None:
+            self.sink(ApmOutputEvent(
+                stream, "Some APM output lines were too long to display and were omitted. "
+                "Remaining output is still being read.", overflow=True,
+            ))
+
+    def feed(self, stream: str, chunk: bytes) -> None:
+        if stream not in self._streams:
+            raise ValueError("APM stream must be stdout or stderr.")
+        if not self._closed:
+            self.bytes_received[stream] += len(chunk)
+            self._streams[stream].feed(chunk)
+
+    def finish(self) -> None:
+        if not self._closed:
+            for stream in self._streams.values():
+                stream.finish()
+            self._closed = True
 
 
 @dataclass
@@ -267,7 +310,7 @@ class ContractStreamDecoder:
         if kind in {"assistant.idle", "session.idle", "session.shutdown"}:
             # The JSON CLI profile requires its final top-level result.
             # Assistant/session liveness cannot substitute for that envelope.
-            self._emit("metadata", text=f"Native {kind.replace('.', ' ')}")
+            self._emit("metadata", text=f"Native {kind.replace('.', ' ')}", retained_only=True)
         elif kind in handlers:
             handlers[kind](data)
         elif kind not in self._unknown:
@@ -276,7 +319,9 @@ class ContractStreamDecoder:
                 return
             self._unknown.add(kind)
             # No arbitrary data, keys, tool results, prompts or reasoning.
-            self._emit("metadata", text=f"Native event not interpreted: {kind}")
+            self._emit(
+                "metadata", text=f"Native event not interpreted: {kind}", retained_only=True,
+            )
 
     def _native_result(self, envelope: dict) -> None:
         """Accept the top-level result observed with Copilot 1.0.83-5.

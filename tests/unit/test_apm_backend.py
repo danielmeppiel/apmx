@@ -8,6 +8,7 @@ import shutil
 
 import pytest
 
+from apmx.contracts.events import ApmInstallEvent, ApmOutputEvent
 from apmx.contracts.models import ContractError
 
 
@@ -118,7 +119,17 @@ def test_real_backend_installs_transitive_context_without_source_writes(tmp_path
     before = source_hash(source, limits)
     stage = tmp_path / "stage"
     stage.mkdir()
-    identity = install(stage, package_ref=str(source), limits=limits)
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("CLICOLOR_FORCE", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    events = []
+    identity = install(
+        stage, package_ref=str(source), limits=limits, verbose=True, on_preparation=events.append,
+    )
+    output = [event.text for event in events if isinstance(event, ApmOutputEvent)]
+    assert any("[>] Resolving " in line for line in output)
+    assert any("Phase:" in line for line in output)
+    assert all("\x1b" not in line for line in output)
     assert identity["version"] == "0.30.0"
     assert source_hash(source, limits) == before
     assert (stage / "apm.lock.yaml").is_file()
@@ -258,8 +269,8 @@ def _unit_backend(tmp_path, monkeypatch, *, install_observation=None, version=b"
         if request.argv[1] == "--version":
             on_bytes("stdout", version or (apm_backend.expected_version_output() + "\n").encode())
             return ProcessObservation(0)
-        on_bytes("stdout", b"PRIVATE_INSTALL_OUTPUT_MUST_NOT_ESCAPE")
-        on_bytes("stderr", b"PRIVATE_AUTH_OUTPUT_MUST_NOT_ESCAPE")
+        on_bytes("stdout", b"https://user:PRIVATE_INSTALL_OUTPUT_MUST_NOT_ESCAPE@example.test/repo")
+        on_bytes("stderr", b"Authorization: Bearer PRIVATE_AUTH_OUTPUT_MUST_NOT_ESCAPE")
         return install_observation or ProcessObservation(0)
 
     monkeypatch.setattr(apm_backend, "supervise_process", supervise)
@@ -276,6 +287,10 @@ def test_native_invocation_preserves_auth_and_suppresses_activation_child_only(t
     monkeypatch.setenv("APM_GIT_PROTOCOL", "ssh")
     monkeypatch.setenv("APM_ALLOW_PROTOCOL_FALLBACK", "0")
     monkeypatch.setenv("GITHUB_TOKEN", "fixture-token-not-real")
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("CLICOLOR_FORCE", "1")
+    monkeypatch.setenv("PY_COLORS", "1")
+    monkeypatch.setenv("TERM", "xterm-256color")
     before = dict(os.environ)
     install(tmp_path, package_ref="org/repo/jobs#v1", limits=ContractLimits())
     assert dict(os.environ) == before
@@ -286,10 +301,51 @@ def test_native_invocation_preserves_auth_and_suppresses_activation_child_only(t
         "--only", "apm", "--target", "agent-skills", "--no-trust-bin",
     )
     assert request.env["APM_NO_SCRIPTS"] == "1"
+    assert request.env["APM_PROGRESS"] == "never"
+    assert request.env["NO_COLOR"] == "1"
+    assert request.env["TERM"] == "dumb"
+    assert request.env["COLUMNS"] == "4096"
+    assert not {"FORCE_COLOR", "CLICOLOR_FORCE", "PY_COLORS"} & request.env.keys()
     for name in ("HOME", "GITHUB_TOKEN", "APM_GIT_PROTOCOL", "APM_ALLOW_PROTOCOL_FALLBACK"):
         assert request.env.get(name) == before.get(name)
     assert "--no-policy" not in request.argv
     assert "--trust-transitive-mcp" not in request.argv
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_verbose_requests_native_diagnostics_without_a_second_install(tmp_path, monkeypatch, verbose):
+    from apmx.contracts.models import ContractLimits
+    from apmx.install.apm_backend import install
+
+    requests = _unit_backend(tmp_path, monkeypatch)
+    install(tmp_path, limits=ContractLimits(), verbose=verbose)
+    assert ("--verbose" in requests[-1].argv) is verbose
+    assert len(requests) == 2
+
+
+def test_native_install_line_reaches_logger_before_install_returns(tmp_path, monkeypatch, capsys):
+    from apmx.contracts.models import ContractLimits, ProcessObservation
+    from apmx.core.contract_logger import ContractLogger
+    from apmx.install import apm_backend
+
+    _unit_backend(tmp_path, monkeypatch)
+    original = apm_backend.supervise_process
+
+    def supervise(request, *, on_bytes, limits):
+        if request.argv[1] == "--version":
+            return original(request, on_bytes=on_bytes, limits=limits)
+        on_bytes("stdout", b"[>] Resolving ./skills/handoff-style...\n")
+        assert "APM > [>] Resolving ./skills/handoff-style..." in capsys.readouterr().out
+        on_bytes("stderr", b"[!] Package retry needed\n")
+        assert "APM stderr > [!] Package retry needed" in capsys.readouterr().out
+        return ProcessObservation(0)
+
+    monkeypatch.setattr(apm_backend, "supervise_process", supervise)
+    logger = ContractLogger()
+    apm_backend.install(tmp_path, limits=ContractLimits(), on_preparation=logger.on_preparation)
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    assert "APM (untrusted) > [>] Resolving" in (tmp_path / "transcript.log").read_text()
 
 
 def test_frozen_native_replay_never_adds_positional_packages(tmp_path, monkeypatch):
@@ -320,7 +376,7 @@ def test_native_failures_halt_without_leaking_output(tmp_path, monkeypatch, fail
     events = []
     with pytest.raises(ContractError) as error:
         install(tmp_path, limits=ContractLimits(), on_preparation=events.append)
-    assert [event.phase for event in events] == ["started"]
+    assert [event.phase for event in events if isinstance(event, ApmInstallEvent)] == ["started"]
     assert error.value.code == "apm_install_failed"
     assert "PRIVATE_AUTH_OUTPUT" not in str(error.value)
     assert "private host" not in str(error.value)
@@ -348,9 +404,9 @@ def test_wrong_backend_version_refuses_before_install(tmp_path, monkeypatch):
 def test_preparation_events_describe_only_validated_install_facts(
     tmp_path, monkeypatch, scope, frozen, package_ref,
 ):
-    from apmx.contracts.events import ApmInstallEvent
     from apmx.contracts.models import ContractLimits
     from apmx.install.apm_backend import install
+    from apmx.contracts.stream import safe_text
 
     requests = _unit_backend(tmp_path, monkeypatch)
     monkeypatch.setenv("GITHUB_TOKEN", "PRIVATE_AUTH_SENTINEL")
@@ -359,12 +415,14 @@ def test_preparation_events_describe_only_validated_install_facts(
         tmp_path, package_ref=package_ref, frozen=frozen, limits=ContractLimits(), scope=scope,
         on_preparation=lambda event: events.append((event, len(requests))),
     )
-    assert events == [
-        (ApmInstallEvent("started", scope, identity["version"], frozen, package_ref is not None), 1),
-        (ApmInstallEvent("completed", scope, identity["version"], frozen, package_ref is not None), 2),
+    assert [(event, count) for event, count in events if isinstance(event, ApmInstallEvent)] == [
+        (ApmInstallEvent("started", scope, identity["version"], frozen, package_ref is not None,
+                         tmp_path, package_ref), 1),
+        (ApmInstallEvent("completed", scope, identity["version"], frozen, package_ref is not None,
+                         tmp_path, package_ref), 2),
     ]
-    assert "PRIVATE" not in repr(events)
-    assert str(tmp_path) not in repr(events)
+    assert "PRIVATE" not in safe_text(repr(events))
+    assert len([event for event, _ in events if isinstance(event, ApmOutputEvent)]) == 2
     assert len(requests) == 2  # One version probe and one install, not a logging probe.
 
 
@@ -395,7 +453,7 @@ def test_post_probe_failure_never_emits_install_completion(tmp_path, monkeypatch
     events = []
     with pytest.raises(exception):
         apm_backend.install(tmp_path, limits=ContractLimits(), on_preparation=events.append)
-    assert [event.phase for event in events] == ["started"]
+    assert [event.phase for event in events if isinstance(event, ApmInstallEvent)] == ["started"]
 
 
 @pytest.mark.parametrize("target", [

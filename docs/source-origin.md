@@ -71,46 +71,71 @@ cache. This is native host access, not a zero-host-write or sandbox guarantee.
 MCP/LSP integration, hooks, commands, agents, native plugin registration, bin
 deployment and lifecycle scripts are not enabled by this invocation. The native
 backend is supervised with the existing process cleanup/watchdog boundary;
-backend output and credentials are not copied into records or public commentary.
+native output is framed, best-effort redacted and escaped before display or
+retention. No unfiltered backend stream is spooled to disk.
 
 Dependency preparation has its own durable, apmx-owned APM lifecycle messages,
-separate from `Preparing Copilot working copy` and `Running Copilot`. For example:
+separate from `Preparing files for Copilot` and `Running Copilot`. For example:
 
 ```text
-  [>] APM: installing package dependencies (resolution).
-  [+] APM: package dependencies installed.
-  [i] Selected imports: handoff-style (1 context document).
+  [>] Installing packages with APM 0.30.0
+  Temporary workspace; your project files are unchanged.
+  APM > [>] Resolving ./skills/handoff-style...
+  [+] Packages ready.
+  [i] Using handoff-style
 ```
 
-`--verbose` also shows the observed, validated backend version and a sanitized
-command shape before installation:
+The APM version is shown only after the backend passes the exact version check.
+`--verbose` requests APM's own verbose diagnostics and also explains the operation
+and options before installation:
 
 ```text
-  APM version: 0.30.0 (validated against bundled pin).
-  APM command shape (placeholders): apm install <package-request> --root <owned-stage> --only apm --target agent-skills --no-trust-bin
-  Context: handoff-style / skill handoff-style (SKILL.md)
+  Running: apm install (in a temporary workspace)
+  APM options: --only apm --target agent-skills --no-trust-bin --verbose
+  APM > Resolved dependency tree: 1 direct + 1 transitive deps (max depth 2)
+  Skill: handoff-style (SKILL.md)
 ```
 
-This is **not exact argv**: `apm` labels the validated bundled/provisioned backend,
-not a PATH lookup; `<package-request>` and `<owned-stage>` replace the actual
-request and temporary root. When the request is already in the owned manifest,
-there is no positional request placeholder. A separate consumer-import install
-is labeled `consumer imports`, and `frozen consumer-lock replay` plus `--frozen`
-appear only when that invocation replays a consumer lock. Each actual install
-has its own scoped start/completion; logging does not install again. Completion
-requires observed backend success and unchanged backend identity. It does not
-claim that later context validation, Copilot execution or checks have passed.
-Selected import packages and context documents are reported only after frontend
-selection and workspace inspection, not inferred from the installed graph.
+`Running` names the operation, not a copyable command with invented arguments.
+The executable is the validated bundled/provisioned APM, not a PATH lookup;
+the request and `--root` are supplied to the actual temporary install. A separate
+consumer install is labeled `Installing project imports`; `Using locked versions`
+and the verbose `--frozen` option appear only when that invocation replays a
+consumer lock. Each actual install has its own scoped start/completion; logging
+does not install again. `Packages ready` requires observed backend success and
+unchanged backend identity. It does not claim that later context validation,
+Copilot execution or checks have passed. `Using` lists only the packages selected
+after frontend validation and workspace inspection, not the entire installed graph.
 
-One logger retains these preparation facts, including verbose details, in the
-bounded `transcript.log` if an admitted run is subsequently created. Preparation
-failure before admission creates no run record and launches no producer. Output
-uses the existing redaction, ASCII escaping, TTY spinner and broken-pipe handling;
+Real APM stdout and stderr lines stream live with `APM >` / `APM stderr >`
+attribution. Default output hides recognized setup, performance and inactive-target
+details, not unknown messages or warnings/errors. Verbose output shows all eligible
+bounded lines, including APM's own verbose diagnostics. Native package counts and
+timings remain attributed native observations, never fabricated apmx facts or
+proof of a contract outcome. Default output abbreviates known source paths relative
+to the caller and labels the temporary root; verbose output and the transcript
+retain the full sanitized native lines.
+
+Both pipes use the existing bounded line framer: partial credentials are withheld
+until a complete line or EOF, oversized lines are omitted whole with one warning,
+and subsequent output continues to drain. A single logger applies the existing
+redaction and ASCII/control escaping, then retains the bounded beginning/tail in
+`transcript.log` if a run is later admitted. Transcript omission counts remain
+available in the run record. Preparation failure before admission creates no run
+record and launches no producer. Backend-child-only color/progress settings prevent
+inherited forced color from producing ANSI noise; the wrapper's own terminal
+colors and spinner remain unchanged. A wide child output width avoids native
+soft-wrapping paths or credentials before framing. Injected controls are still
+escaped, not silently stripped.
+
 APM lifecycle lines remain visible after the spinner stops and in captured text.
-Raw APM stdout/stderr, environment values and actual install argv are never
-forwarded. Offline `--plan` never runs or reports an install; local execution
-without imports does not claim APM ran.
+Backend diagnostics can contain sensitive data: redaction is best-effort, not
+protection against every unknown secret. Review logs before sharing them. No
+environment dump, raw stream spool or full argv is logged. Copilot protocol
+housekeeping names stay in the private bounded transcript rather than obscuring
+prose on the verbose screen; public/private message filtering and completion
+checks are unchanged. Offline `--plan` never runs or reports an install; local
+execution without imports does not claim APM ran.
 
 Imports name APM packages, not arbitrary skill symbols or repository basenames.
 The consumer's manifest and lock govern even a packaged contract. Without a

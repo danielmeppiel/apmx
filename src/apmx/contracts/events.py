@@ -3,6 +3,7 @@
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from .models import EventSink, ImportedSkill, RunEvent
@@ -14,13 +15,25 @@ PreparationScope = Literal["package", "consumer"]
 
 @dataclass(frozen=True)
 class ApmInstallEvent:
-    """Observed backend lifecycle, without argv, paths, environment or child text."""
+    """Observed backend lifecycle; source paths are transient presentation hints."""
 
     phase: Literal["started", "completed"]
     scope: PreparationScope
     version: str
     frozen: bool
     package_request: bool
+    directory: Path | None = None
+    package_ref: str | None = None
+    verbose: bool = False
+
+
+@dataclass(frozen=True)
+class ApmOutputEvent:
+    """One bounded native line, never an apmx assessment."""
+
+    stream: Literal["stdout", "stderr"]
+    text: str
+    overflow: bool = False
 
 
 @dataclass(frozen=True)
@@ -30,7 +43,7 @@ class ImportsSelectedEvent:
     imports: tuple[ImportedSkill, ...]
 
 
-PreparationEvent = ApmInstallEvent | ImportsSelectedEvent
+PreparationEvent = ApmInstallEvent | ApmOutputEvent | ImportsSelectedEvent
 PreparationSink = Callable[[PreparationEvent], None]
 
 

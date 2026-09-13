@@ -44,6 +44,7 @@ def invoke_contract(
         with prepare_imports(
             Path.cwd(), selected, source=source, planning=planning, limits=limits,
             on_preparation=logger.on_preparation,
+            verbose=verbose,
         ) as (imports_root, backend):
             plan = frontend.plan_contract(
                 Path(contract), Path.cwd(), harness=harness, model=model, source=source,

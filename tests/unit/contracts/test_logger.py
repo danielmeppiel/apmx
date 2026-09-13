@@ -13,7 +13,7 @@ import click
 import pytest
 from rich.console import Console
 
-from apmx.contracts.events import ApmInstallEvent, EventEmitter, ImportsSelectedEvent
+from apmx.contracts.events import ApmInstallEvent, ApmOutputEvent, EventEmitter, ImportsSelectedEvent
 from apmx.contracts.frontend import parse_contract
 from apmx.contracts.models import (
     Artifact,
@@ -32,7 +32,7 @@ from apmx.contracts.models import (
     RunResult,
     SourceLocation,
 )
-from apmx.contracts.stream import ContractStreamDecoder
+from apmx.contracts.stream import ApmStreamDecoder, ContractStreamDecoder
 from apmx.core.contract_logger import ContractLogger, _Transcript
 from apmx.core.output_mode import OutputMode, configure_output_mode
 from apmx.utils import console
@@ -123,7 +123,7 @@ def test_ordered_phases_final_once_and_frozen_transcript(tmp_path: Path, capsys)
     positions = [
         output.index(name)
         for name in (
-            "Preparing Copilot working copy",
+            "Preparing files for Copilot",
             "Running Copilot",
             "Saving output",
             "apmx: checking",
@@ -133,7 +133,7 @@ def test_ordered_phases_final_once_and_frozen_transcript(tmp_path: Path, capsys)
     ]
     assert positions == sorted(positions)
     assert output.count("VERIFIED") == 1
-    assert output.index("Job: hello.contract.md") < output.index("Preparing Copilot working copy")
+    assert output.index("Job: hello.contract.md") < output.index("Preparing files for Copilot")
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     assert b"VERIFIED" not in path.read_bytes()
     assert "Observed execution model" not in output
@@ -609,24 +609,24 @@ def test_apm_lifecycle_survives_spinner_and_late_run_attachment(
     status = animated_console.status.return_value
     status.start.assert_called_once()
     calls = console._rich_echo.call_args_list
-    assert calls[0].args[0].startswith("  [>] APM: installing consumer imports")
-    assert not any("installed." in call.args[0] for call in calls)
-    assert any("APM version:" in call.args[0] for call in calls) is verbose
+    assert calls[0].args[0] == "  [>] Installing project imports with APM 0.30.0"
+    assert not any("ready." in call.args[0] for call in calls)
+    assert any("Running: apm install" in call.args[0] for call in calls) is verbose
     assert all(
         call.kwargs["color"] == "dim" for call in calls
-        if "APM version:" in call.args[0] or "command shape" in call.args[0]
+        if "Running: apm install" in call.args[0] or "APM options:" in call.args[0]
     )
     logger.on_preparation(replace(event, phase="completed"))
     status.stop.assert_called_once()
-    assert console._rich_echo.call_args.args[0] == "  [+] APM: consumer imports installed."
+    assert console._rich_echo.call_args.args[0] == "  [+] Project imports ready."
     assert console._rich_echo.call_args.kwargs["color"] == "green"
     logger.attach_run("run", tmp_path)
     logger.close()
     text = (tmp_path / "transcript.log").read_text()
-    assert text.count("APM: installing") == text.count("APM: consumer imports installed.") == 1
-    assert "APM version: 0.30.0" in text
+    assert text.count("Installing project imports") == text.count("Project imports ready.") == 1
+    assert "with APM 0.30.0" in text
     assert ("--frozen" in text) is frozen
-    assert ("frozen consumer-lock replay" in text) is frozen
+    assert ("Using locked versions." in text) is frozen
 
 
 def test_selected_context_counts_documents_not_entire_dependency_graph(
@@ -645,17 +645,36 @@ def test_selected_context_counts_documents_not_entire_dependency_graph(
     logger = ContractLogger(verbose=True)
     logger.on_preparation(ImportsSelectedEvent(imports))
     calls = console._rich_echo.call_args_list
-    assert calls[0].args[0] == "  [i] Selected imports: style, rules (3 context documents)."
+    assert calls[0].args[0] == "  [i] Using style, rules"
     assert calls[0].kwargs["color"] == "blue"
     assert all(call.kwargs["color"] == "dim" for call in calls[1:])
     logger.attach_run("run", tmp_path)
     logger.close()
     text = (tmp_path / "transcript.log").read_text()
-    assert "Context: style / skill concise (SKILL.md)" in text
-    assert "Context: rules / instruction global-rules" in text
-    assert text.count("Context: ") == 3
+    assert "Skill: concise (from style; SKILL.md)" in text
+    assert "Instruction: global-rules (from rules; .apm/instructions/rules.instructions.md)" in text
+    assert text.count("Skill: ") == 2
     assert "PRIVATE" not in text
     assert str(tmp_path) not in text
+
+
+@pytest.mark.parametrize("package_name", [None, "friendly-style"])
+def test_context_identity_uses_package_name_without_duplicate_labels(tmp_path, capsys, package_name):
+    logger = ContractLogger(verbose=True)
+    logger.on_preparation(ImportsSelectedEvent((
+        ImportedSkill(
+            "style", tmp_path / "SKILL.md", "", "digest", "lock",
+            package_name=package_name, context_name="style", source_relative_path="SKILL.md",
+        ),
+    )))
+    logger.close()
+    expected = (
+        "Skill: style (from friendly-style; SKILL.md)"
+        if package_name else "Skill: style (SKILL.md)"
+    )
+    output = capsys.readouterr().out
+    assert expected in output
+    assert "style / style" not in output
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -689,16 +708,137 @@ def test_preparation_broken_pipe_preserves_later_transcript(tmp_path, animated_c
     monkeypatch.setattr(console, "_rich_echo", Mock(side_effect=BrokenPipeError))
     event = ApmInstallEvent("started", "package", "0.30.0", False, True)
     logger.on_preparation(event)
+    logger.on_preparation(ApmOutputEvent("stdout", "[>] Resolving ./style..."))
+    logger.on_preparation(ApmOutputEvent("stderr", "Authorization: Bearer PRIVATE_BROKEN_PIPE"))
     logger.on_preparation(replace(event, phase="completed"))
     logger.attach_run("run", tmp_path)
     logger.close()
     text = (tmp_path / "transcript.log").read_text()
-    assert "APM: installing package dependencies" in text
-    assert "APM: package dependencies installed." in text
-    assert "apm install <package-request> --root <owned-stage>" in text
+    assert "Installing packages with APM" in text
+    assert "Packages ready." in text
+    assert "Running: apm install (in a temporary workspace)" in text
+    assert "APM (untrusted) > [>] Resolving ./style..." in text
+    assert "APM stderr (untrusted) > Authorization: ***" in text
+    assert "PRIVATE" not in text
     console._rich_echo.assert_called_once()
     animated_console.status.return_value.stop.assert_called_once()
     assert not logger._human_enabled
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("stream,text,visible,color", [
+    ("stdout", "[>] Resolving ./style...", True, "dim cyan"),
+    ("stdout", "[!] Package access may need login", True, "yellow"),
+    ("stdout", "[x] Package download failed", True, "red"),
+    ("stdout", "Unrecognized native failure detail", True, "red"),
+    ("stdout", "Unexpected service response", True, "dim cyan"),
+    ("stderr", "Retrying connection", True, "dim cyan"),
+    ("stdout", "Phase: download -> 0.01s", False, "dim"),
+    ("stdout", "[#] Perf: 4 walks", False, "dim"),
+    ("stdout", "[i] Skipped inactive experimental resolver for target 'unused'", False, "dim"),
+    ("stdout", "Copilot native registration: unavailable (copilot target not selected)", False, "dim"),
+    ("stdout", "Phase: download failed", True, "red"),
+    ("stdout", "[+] package (local)", False, "dim"),
+])
+def test_native_apm_line_visibility_color_and_retention(
+    tmp_path, animated_console, verbose, stream, text, visible, color,
+):
+    logger = ContractLogger(verbose=verbose)
+    logger.on_preparation(ApmOutputEvent(stream, text))
+    calls = console._rich_echo.call_args_list
+    assert bool(calls) is (verbose or visible)
+    if calls:
+        assert calls[0].kwargs["color"] == color
+        assert "APM" in calls[0].args[0]
+        assert not calls[0].args[0].startswith("  [+]")
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    retained = (tmp_path / "transcript.log").read_text()
+    assert text in retained
+    assert "APM" in retained and "(untrusted) >" in retained
+
+
+def test_default_native_paths_are_brief_but_full_sanitized_lines_are_retained(tmp_path, capsys):
+    logger = ContractLogger()
+    source = Path.cwd().parent / "package"
+    logger.on_preparation(ApmInstallEvent(
+        "started", "package", "0.30.0", False, True, tmp_path, str(source),
+    ))
+    text = f"[>] Resolving {source} in {tmp_path}"
+    logger.on_preparation(ApmOutputEvent("stdout", text))
+    output = capsys.readouterr().out
+    assert "APM > [>] Resolving ../package in <temporary workspace>" in output
+    assert str(tmp_path) not in output
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    assert text in (tmp_path / "transcript.log").read_text()
+
+
+def test_apm_flood_is_drained_with_bounded_head_tail_retention(tmp_path, capsys):
+    from apmx.contracts.models import ContractLimits
+
+    logger = ContractLogger(verbose=True)
+    logger._transcript = _Transcript(2048)
+    decoder = ApmStreamDecoder(logger.on_preparation, limits=ContractLimits())
+    received = 0
+    for number in range(200):
+        wire = f"Phase: fixture-{number} {'x' * 80}\n".encode()
+        received += len(wire)
+        decoder.feed("stdout", wire)
+    decoder.feed("stderr", b"[!] Final useful warning\n")
+    decoder.finish()
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    data = (tmp_path / "transcript.log").read_bytes()
+    assert len(data) <= 2048
+    assert b"fixture-0 " in data and b"fixture-199 " in data
+    assert b"Final useful warning" in data
+    assert data.count(b"Transcript truncated:") == 1
+    assert logger.transcript_metadata["omitted_lines"] > 0
+    assert decoder.bytes_received == {"stdout": received, "stderr": 25}
+    assert "Final useful warning" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_apm_stream_sanitizes_live_output_and_late_transcript(tmp_path, capsys, verbose):
+    from apmx.contracts.models import ContractLimits
+
+    logger = ContractLogger(verbose=verbose)
+    decoder = ApmStreamDecoder(logger.on_preparation, limits=ContractLimits())
+    wire = (
+        b"[!] Authorization: Bearer PRIVATE_AUTH_SENTINEL\n"
+        b"https://user:PRIVATE_PASSWORD@example.test/repo?token=PRIVATE_QUERY\n"
+        b"ghp_PRIVATE_TOKEN_123456 \x1b]52;c;injection\x07\n"
+    )
+    for byte in wire:
+        decoder.feed("stderr", bytes([byte]))
+    decoder.finish()
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    for text in (capsys.readouterr().out, (tmp_path / "transcript.log").read_text()):
+        assert "PRIVATE" not in text
+        assert "***" in text
+        assert "\\x1b" in text
+        assert all(char == "\n" or " " <= char <= "~" for char in text)
+
+
+def test_copilot_protocol_bookkeeping_stays_in_transcript_not_verbose_screen(tmp_path, capsys):
+    logger = ContractLogger(verbose=True)
+    decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
+    decoder.feed("stdout", b'{"type":"session.tools_updated","data":{"private":"NEVER_PRINT"}}\n')
+    decoder.feed("stdout", b'{"type":"assistant.idle","data":{}}\n')
+    decoder.feed("stdout", b'{"type":"assistant.intent","data":{"intent":"Reading the input"}}\n')
+    decoder.finish()
+    logger.attach_run("run", tmp_path)
+    logger.close()
+    output = capsys.readouterr().out
+    assert "Reading the input" in output
+    assert "Native event not interpreted" not in output
+    assert "Native assistant idle" not in output
+    text = (tmp_path / "transcript.log").read_text()
+    assert "Native event not interpreted: session.tools_updated" in text
+    assert "Native assistant idle" in text
+    assert "NEVER_PRINT" not in text
 
 
 def test_transcript_cannot_overwrite_or_follow_existing_path(tmp_path: Path) -> None:
@@ -1234,7 +1374,7 @@ def test_animated_phases_are_transient_but_retained(tmp_path: Path, animated_con
     written = "\n".join(call.args[0] for call in console._rich_echo.call_args_list)
     assert written.strip() == "apmx: checking saved output"
     for label in (
-        "Preparing Copilot working copy",
+        "Preparing files for Copilot",
         "Running Copilot",
         "Saving output",
         "Saving results",

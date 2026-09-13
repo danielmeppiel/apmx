@@ -110,6 +110,7 @@ def prepare_contract_source(
     planning: bool,
     limits: ContractLimits,
     on_preparation: PreparationSink | None = None,
+    verbose: bool = False,
 ) -> Iterator[ContractSource]:
     """Never run APM from the real caller or package checkout."""
     admit_caller_policy(caller_root, limits=limits)
@@ -207,6 +208,7 @@ def prepare_contract_source(
                     frozen = False
                 identity = apm_backend.install(
                     stage, frozen=frozen, limits=limits, on_preparation=on_preparation,
+                    verbose=verbose,
                 )
                 installed_lock, _ = read_lock(stage, limits)
                 apm_backend.require_preserved_pins(established, installed_lock)
@@ -216,7 +218,7 @@ def prepare_contract_source(
                                         code="invalid_manifest")
                 identity = apm_backend.install(
                     stage, package_ref=str(original) if original else package_ref, limits=limits,
-                    on_preparation=on_preparation,
+                    on_preparation=on_preparation, verbose=verbose,
                 )
             _, _, current_manifest = read_project_manifest(caller_root, limits, allow_missing=True)
             _, current_lock = read_lock(caller_root, limits)
@@ -255,6 +257,7 @@ def prepare_imports(
     planning: bool,
     limits: ContractLimits,
     on_preparation: PreparationSink | None = None,
+    verbose: bool = False,
 ) -> Iterator[tuple[Path, dict[str, str] | None]]:
     """The consumer manifest/lock wins over a packaged contract's dependencies."""
     admit_caller_policy(caller_root, limits=limits)
@@ -278,6 +281,7 @@ def prepare_imports(
         frozen = apm_backend.snapshot_manifest(caller_root, stage, limits)
         identity = apm_backend.install(
             stage, frozen=frozen, limits=limits, on_preparation=on_preparation, scope="consumer",
+            verbose=verbose,
         )
         if _original_bytes(caller_root, limits) != before:
             raise ContractError("Consumer declarations changed during preparation.",

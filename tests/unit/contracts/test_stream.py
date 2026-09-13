@@ -7,9 +7,65 @@ import pytest
 
 from apmx.contracts.events import EventEmitter
 from apmx.contracts.models import ContractLimits
-from apmx.contracts.stream import ContractStreamDecoder, safe_text
+from apmx.contracts.stream import ApmStreamDecoder, ContractStreamDecoder, safe_text
 
 pytestmark = pytest.mark.unit
+
+
+def test_apm_frames_both_streams_before_redaction_and_flushes_eof_once():
+    events = []
+    decoder = ApmStreamDecoder(events.append, limits=ContractLimits())
+    secret = "ghp_PRIVATE_TOKEN_123456"
+    stdout = f"[>] Resolving https://user:{secret}@example.test/repo?token=PRIVATE_QUERY\n".encode()
+    stderr = f"Authorization: Bearer {secret}".encode()
+    for byte in stdout[:-1]:
+        decoder.feed("stdout", bytes([byte]))
+    decoder.feed("stderr", stderr)
+    assert not events
+    decoder.feed("stdout", b"\n")
+    assert len(events) == 1
+    assert events[0].stream == "stdout"
+    decoder.finish()
+    decoder.finish()
+    assert [event.stream for event in events] == ["stdout", "stderr"]
+    for event in events:
+        assert "PRIVATE" not in safe_text(event.text)
+        assert "***" in safe_text(event.text)
+    assert decoder.bytes_received == {"stdout": len(stdout), "stderr": len(stderr)}
+    decoder.feed("stdout", b"ignored after close")
+    assert len(events) == 2
+    with pytest.raises(ValueError, match="stdout or stderr"):
+        decoder.feed("unknown", b"")
+
+
+def test_apm_overlong_lines_omit_entire_frame_count_and_warn_once():
+    events = []
+    decoder = ApmStreamDecoder(events.append, limits=replace(ContractLimits(), frame_bytes=64))
+    for stream in ("stdout", "stderr", "stdout"):
+        for _ in range(100):
+            decoder.feed(stream, b"PRIVATE_PREFIX" * 10)
+            assert len(decoder._streams[stream].pending) <= 64
+        decoder.feed(stream, b"PRIVATE_TAIL\n")
+    decoder.feed("stderr", b"[!] Still useful\n")
+    decoder.finish()
+    assert decoder.omitted_lines == 3
+    assert sum(event.overflow for event in events) == 1
+    assert events[-1].text == "[!] Still useful"
+    assert "PRIVATE" not in str(events)
+    assert sum(decoder.bytes_received.values()) == 3 * (100 * 140 + 13) + 17
+
+
+def test_apm_framing_preserves_utf8_and_dangerous_controls_for_safe_renderer():
+    events = []
+    decoder = ApmStreamDecoder(events.append, limits=ContractLimits())
+    wire = "Caf\u00e9 \x1b[31m\x1b]52;c;data\x07\u202e\r[+] forged\n".encode()
+    for byte in wire:
+        decoder.feed("stdout", bytes([byte]))
+    decoder.finish()
+    assert len(events) == 1
+    text = safe_text(events[0].text)
+    assert "\\xe9" in text and "\\x1b" in text and "\\r[+] forged" in text
+    assert all(" " <= char <= "~" for char in text)
 
 
 def _frame(kind: str, **data: object) -> bytes:

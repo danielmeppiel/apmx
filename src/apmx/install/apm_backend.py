@@ -14,6 +14,7 @@ from apmx.contracts.events import ApmInstallEvent, PreparationScope, Preparation
 from apmx.contracts.imports import _read_bytes, read_project_manifest
 from apmx.contracts.models import ContractError, ContractLimits, ProcessRequest
 from apmx.contracts.process import supervise_process
+from apmx.contracts.stream import ApmStreamDecoder
 from apmx.core.tls_trust import build_child_tls_env
 from apmx.deps.lockfile import LockFile, resolve_lockfile_path_for_read
 from apmx.models.dependency.selection import parse_dependency_entry
@@ -134,11 +135,13 @@ def install(
     limits: ContractLimits,
     on_preparation: PreparationSink | None = None,
     scope: PreparationScope = "package",
+    verbose: bool = False,
 ) -> dict[str, str]:
     """Run in an owned source/deploy root with normal APM auth/config semantics.
 
     APM may bootstrap its user config/cache. No HOME/credential rewriting or
-    provider-policy overrides are used. Raw child output never enters records.
+    provider-policy overrides are used. Native lines pass through bounded
+    framing to the logger's redaction/escaping path; no raw stream is spooled.
     """
     if frozen and package_ref is not None:
         raise ContractError("A frozen install cannot add packages.", code="invalid_lock")
@@ -153,7 +156,12 @@ def install(
     ))
     if frozen:
         argv.append("--frozen")
+    if verbose:
+        argv.append("--verbose")
     env = backend_child_env(dict(os.environ))
+    for name in ("FORCE_COLOR", "CLICOLOR_FORCE", "PY_COLORS"):
+        env.pop(name, None)
+    env.update(NO_COLOR="1", TERM="dumb", COLUMNS="4096")
     version_output = bytearray()
     oversized = False
 
@@ -186,12 +194,17 @@ def install(
     if on_preparation is not None:
         on_preparation(ApmInstallEvent(
             "started", scope, identity["version"], frozen, package_ref is not None,
+            stage, package_ref, verbose,
         ))
-    observed = supervise_process(
-        ProcessRequest(tuple(argv), stage, limits.attempt_seconds, env=env),
-        on_bytes=lambda _stream, _chunk: None,
-        limits=limits,
-    )
+    decoder = ApmStreamDecoder(on_preparation, limits=limits)
+    try:
+        observed = supervise_process(
+            ProcessRequest(tuple(argv), stage, limits.attempt_seconds, env=env),
+            on_bytes=decoder.feed,
+            limits=limits,
+        )
+    finally:
+        decoder.finish()
     if (
         observed.returncode != 0
         or observed.stop_reason
@@ -208,6 +221,7 @@ def install(
     if on_preparation is not None:
         on_preparation(ApmInstallEvent(
             "completed", scope, identity["version"], frozen, package_ref is not None,
+            stage, package_ref, verbose,
         ))
     return identity
 

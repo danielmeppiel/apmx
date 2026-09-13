@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 import sys
 from collections import deque
@@ -10,7 +11,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
 
 from apmx.contracts import records
-from apmx.contracts.events import HEARTBEAT_SECONDS, ApmInstallEvent, PreparationEvent
+from apmx.contracts.events import (
+    HEARTBEAT_SECONDS, ApmInstallEvent, ApmOutputEvent, PreparationEvent,
+)
 from apmx.contracts.models import (
     CheckObservation,
     ContractError,
@@ -23,7 +26,7 @@ from apmx.contracts.models import (
 )
 from apmx.contracts.stream import safe_text
 from apmx.utils import console
-from apmx.utils.paths import portable_relpath
+from apmx.utils.paths import portable_link_relpath, portable_relpath
 
 
 if TYPE_CHECKING:
@@ -96,6 +99,8 @@ class ContractLogger:
         self._produces = "saved output"
         self._activity_label = "Working"
         self._checks_heading_shown = False
+        self._preparation_notice_shown = False
+        self._apm_paths: tuple[tuple[str, str], ...] = ()
 
     def start_activity(self, message: str, *, announce: bool = True) -> None:
         """Animate quiet work using the install spinner, never in retained logs."""
@@ -190,6 +195,8 @@ class ContractLogger:
         accent: str = "",
         indent: int = 2,
         dim_remainder: bool = False,
+        retained_only: bool = False,
+        display_message: str | None = None,
     ) -> None:
         text = safe_text(message)
         source = safe_text(attribution, limit=256) if attribution else ""
@@ -212,8 +219,10 @@ class ContractLogger:
         if not self._closed:
             retained_prefix = f"{source} (untrusted) > " if source else ""
             self._transcript.append(" " * indent + marker + retained_prefix + text)
-        if not self._human_enabled or (detail and not self.verbose):
+        if not self._human_enabled or retained_only or (detail and not self.verbose):
             return
+        if display_message is not None:
+            line = " " * indent + marker + prefix + safe_text(display_message)
         prefix_length = indent + len(marker) + len(prefix)
         accent_length = prefix_length + len(safe_text(accent)) if accent else prefix_length
         if severity in {"detail", "heading"}:
@@ -310,46 +319,88 @@ class ContractLogger:
     def on_preparation(self, event: PreparationEvent) -> None:
         """Retain pre-run facts in the same bounded transcript later attached by the engine."""
         if isinstance(event, ApmInstallEvent):
-            subject = {"package": "package dependencies", "consumer": "consumer imports"}[
-                event.scope
-            ]
+            subject = "packages" if event.scope == "package" else "project imports"
             if event.phase == "completed":
                 self.stop_activity()
-                self._write(f"APM: {subject} installed.", severity="success")
+                self._write(f"{subject.capitalize()} ready.", severity="success")
                 return
-            mode = "frozen consumer-lock replay" if event.frozen else "resolution"
-            message = f"APM: installing {subject} ({mode})."
+            self._apm_paths = (
+                ((str(event.directory), "<temporary workspace>"),) if event.directory else ()
+            )
+            if event.package_ref and Path(event.package_ref).is_absolute():
+                label = portable_link_relpath(event.package_ref, self._caller_root)
+                self._apm_paths += ((event.package_ref, label or event.package_ref),)
+            message = f"Installing {subject} with APM {event.version}"
             self._write(message, severity="start")
-            self.start_activity(message.removesuffix("."), announce=False)
-            self._write(
-                f"APM version: {event.version} (validated against bundled pin).",
-                severity="detail", detail=True,
-            )
-            command = "apm install"
-            if event.package_request:
-                command += " <package-request>"
-            command += " --root <owned-stage> --only apm --target agent-skills --no-trust-bin"
+            self.start_activity(message, announce=False)
+            if not self._preparation_notice_shown:
+                self._write(
+                    "Temporary workspace; your project files are unchanged.", severity="detail",
+                )
+                self._preparation_notice_shown = True
             if event.frozen:
-                command += " --frozen"
+                self._write("Using locked versions.", severity="notice")
             self._write(
-                f"APM command shape (placeholders): {command}",
+                "Running: apm install (in a temporary workspace)", severity="detail", detail=True,
+            )
+            options = "--only apm --target agent-skills --no-trust-bin"
+            if event.frozen:
+                options += " --frozen"
+            if event.verbose:
+                options += " --verbose"
+            self._write(
+                f"APM options: {options}",
                 severity="detail", detail=True,
             )
+            return
+        if isinstance(event, ApmOutputEvent):
+            self._apm_output(event)
             return
         if not event.imports:
             return
         packages = ", ".join(dict.fromkeys(item.name for item in event.imports))
-        count = len(event.imports)
-        self._write(
-            f"Selected imports: {packages} ({count} context document{'s' if count != 1 else ''}).",
-            severity="notice",
-        )
+        self._write(f"Using {packages}", severity="notice")
         for item in event.imports:
+            package = item.package_name or item.name
+            name = item.context_name or item.name
+            path = item.source_relative_path or item.source_path.name
+            origin = path if name == package else f"from {package}; {path}"
             self._write(
-                f"Context: {item.name} / {item.kind} {item.context_name or item.name} "
-                f"({item.source_relative_path or item.source_path.name})",
+                f"{item.kind.capitalize()}: {name} ({origin})",
                 severity="detail", detail=True,
             )
+
+    def _apm_output(self, event: ApmOutputEvent) -> None:
+        text = event.text.strip()
+        if text.startswith("[x]") or re.search(r"\b(error|failed|failure|fatal|denied)\b", text, re.I):
+            severity = "error"
+        elif event.overflow or text.startswith("[!]") or re.search(r"\b(warning|warn)\b", text, re.I):
+            severity = "warning"
+        else:
+            severity = "info"
+        detail = event.stream == "stdout" and severity == "info" and text.startswith((
+            "[*] Created apm.yml", "[i] Targets", "[*] Updated apm.yml",
+            "[>] Installing ", "[+] ", "|-- ", "[i] Added apm_modules/",
+            "[i] Skipped inactive experimental resolver ", "lockfile reconciliation.",
+            "+- To include it", "for this install.", "Added ", "Parsed apm.yml:",
+            "Resolved dependency tree:", "Phase:", "Copilot native registration:", "[#] Perf:",
+            "Generated apm.lock.yaml",
+        ))
+        displayed = event.text
+        if not self.verbose:
+            for original, label in self._apm_paths:
+                displayed = displayed.replace(original, label)
+            if displayed.startswith("[>] Resolving ") and displayed.endswith("..."):
+                reference = displayed[len("[>] Resolving "):-3]
+                if Path(reference).is_absolute():
+                    relative = portable_link_relpath(reference, self._caller_root)
+                    if relative is not None:
+                        displayed = f"[>] Resolving {relative}..."
+        self._write(
+            event.text, attribution="APM stderr" if event.stream == "stderr" else "APM",
+            severity="detail" if detail else severity, detail=detail,
+            display_message=displayed,
+        )
 
     @staticmethod
     def _field(event: RunEvent, name: str, default: str = "unknown") -> str:
@@ -396,7 +447,7 @@ class ContractLogger:
         if phase == "checks":
             self._checks_heading()
         message = {
-            "preflight": "Preparing Copilot working copy",
+            "preflight": "Preparing files for Copilot",
             "execution": "Running Copilot",
             "capture": "Saving output",
             "checks": f"Checking {self._produces}",
@@ -433,6 +484,7 @@ class ContractLogger:
             severity="detail",
             detail=True,
             attribution=self._attribution(event),
+            retained_only=event.data.get("retained_only") is True,
         )
 
     def _diagnostic(self, event: RunEvent) -> None:

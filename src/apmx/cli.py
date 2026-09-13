@@ -89,6 +89,7 @@ def main(
         with prepare_contract_source(
             package_ref, contract, caller_root=caller_root, planning=planning, limits=limits,
             on_preparation=logger.on_preparation,
+            verbose=verbose,
         ) as source:
             logger.stop_activity()
             invoke_contract(
