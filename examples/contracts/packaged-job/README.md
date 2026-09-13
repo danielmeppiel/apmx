@@ -32,9 +32,15 @@ The contract imports the package name `handoff-style`; its dependency/version
 declaration belongs in `apm.yml`, never in `imports`. A consumer's own manifest
 and lock take precedence over this package's defaults. Multiple imported
 packages can supply global instructions and root or collection skills.
-Bounded `references/`, `assets/`, and `scripts/` companions are materialized as
-inert data beneath `_apmx_context/import-N/`, with exact version and byte digests
-in the record. Installing another dependency does not expose its context.
+Selected skills and their bounded `references/`, `assets/`, and `scripts/`
+companions are placed under `.agents/skills/<skill-name>/` in the execution
+workspace. Copilot discovers and loads the skill by name or matching task intent,
+without apmx injecting its body into the prompt. Instruction-type imports remain
+passive context under `_apmx_context/import-N/`. Exact versions and byte digests
+remain in the record. Installing another dependency does not expose its context.
+Scripts remain data; native skill loading does not grant shell access.
+`Imported handoff-style` means the import was prepared; `Copilot > Loaded skill:
+handoff-style` means native loading was observed.
 
 `handoff.json` and its record remain below the caller's `.apm/runs/` directory.
 There is no automatic copy back to the caller root. Inspect the retained record

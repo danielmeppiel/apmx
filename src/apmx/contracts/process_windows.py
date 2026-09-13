@@ -418,6 +418,8 @@ def supervise_process(
     records the actual TerminateJobObject operation, not invented POSIX signals.
     No native fallback runs if safe pre-resume job assignment is unavailable.
     """
+    from .process import post_exit_grace
+
     limits = limits or ContractLimits()
     started = time.monotonic()
     if os.name != "nt":
@@ -482,11 +484,11 @@ def supervise_process(
                     elif (
                         leader_exited_at is not None
                         and active
-                        and now - leader_exited_at >= min(0.5, limits.cleanup_seconds / 4)
+                        and now - leader_exited_at >= post_exit_grace(limits.cleanup_seconds)
                     ):
                         residual_group = ({"inspection": "owned_windows_job",
                                            "active_processes": active},)
-                        stop("lingering_children", now)
+                        stop("lingering_children", leader_exited_at)
                     elif now >= next_heartbeat and returncode is None:
                         next_heartbeat = now + HEARTBEAT_SECONDS
                         if events is not None:

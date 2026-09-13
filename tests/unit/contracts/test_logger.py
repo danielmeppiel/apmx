@@ -679,7 +679,7 @@ def test_selected_context_counts_documents_not_entire_dependency_graph(
     logger = ContractLogger(verbose=True)
     logger.on_preparation(ImportsSelectedEvent(imports))
     calls = console._rich_echo.call_args_list
-    assert calls[0].args[0] == "  [i] Using style, rules"
+    assert calls[0].args[0] == "  [i] Imported style, rules"
     assert calls[0].kwargs["color"] == "blue"
     assert all(call.kwargs["color"] == "dim" for call in calls[1:])
     logger.attach_run("run", tmp_path)
@@ -709,6 +709,21 @@ def test_context_identity_uses_package_name_without_duplicate_labels(tmp_path, c
     output = capsys.readouterr().out
     assert expected in output
     assert "style / style" not in output
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_observed_skill_load_is_visible_and_retained(tmp_path, capsys, verbose):
+    logger = ContractLogger(verbose=verbose)
+    logger.attach_run("run", tmp_path)
+    EventEmitter("run", logger.on_event).emit(
+        "skill_loaded", source="harness", name="handoff-style",
+    )
+    logger.close()
+    output = capsys.readouterr().out
+    assert "Copilot > Loaded skill: handoff-style" in output
+    assert "Copilot (untrusted) > Loaded skill: handoff-style" in (
+        tmp_path / "transcript.log"
+    ).read_text()
 
 
 @pytest.mark.parametrize("verbose", [False, True])

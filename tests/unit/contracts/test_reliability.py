@@ -252,12 +252,13 @@ def test_watchdog_kills_term_ignoring_child_with_bounded_cleanup(tmp_path: Path)
     assert observation.signals == ("SIGTERM", "SIGKILL")
 
 
-def test_natural_child_shutdown_is_not_an_operational_failure(tmp_path: Path) -> None:
+@pytest.mark.parametrize("delay", [0.15, 0.8, 3.0])
+def test_natural_child_shutdown_is_not_an_operational_failure(tmp_path: Path, delay: float) -> None:
     chunks = bytearray()
     code = (
         "import subprocess,sys\n"
         "subprocess.Popen([sys.executable,'-c',"
-        "'import time; time.sleep(0.15); print(\"closed\",flush=True)'])\n"
+        f"'import time; time.sleep({delay}); print(\"closed\",flush=True)'])\n"
     )
     observation = process.supervise_process(
         ProcessRequest((sys.executable, "-c", code), tmp_path, 10),

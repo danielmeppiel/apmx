@@ -177,6 +177,8 @@ class ContractStreamDecoder:
         self._native_exit_code: int | None = None
         self._models: list[str] = []
         self._messages: dict[str, _Message] = {}
+        self._skill_calls: dict[str, str] = {}
+        self._loaded_skills: set[str] = set()
         self._unknown: set[str] = set()
         self._omission_notices: set[str] = set()
         self._closed = False
@@ -301,6 +303,7 @@ class ContractStreamDecoder:
             "assistant.intent": self._intent,
             "tool.execution_start": self._tool_started,
             "tool.execution_complete": self._tool_finished,
+            "skill.invoked": self._skill_invoked,
             "session.error": self._session_error,
             "assistant.usage": self._observe_model,
             "model.call_start": self._observe_model,
@@ -470,17 +473,50 @@ class ContractStreamDecoder:
 
     def _tool_started(self, data: dict) -> None:
         name = data.get("toolName")
+        if name == "skill":
+            identifier = data.get("toolCallId")
+            arguments = data.get("arguments")
+            skill = arguments.get("skill") if isinstance(arguments, dict) else None
+            from .context_layout import is_native_skill_name
+
+            if (
+                isinstance(identifier, str) and 0 < len(identifier) <= 256
+                and is_native_skill_name(skill)
+            ):
+                if len(self._skill_calls) < 32:
+                    self._skill_calls[identifier] = skill
+                else:
+                    self._notice_once("skill-calls", "Further native skill calls omitted.")
         if isinstance(name, str) and len(name) <= 256:
             self._activity(f"Tool started: {name}", tool_status="started")
         else:
             self._activity("Tool started", tool_status="started")
 
     def _tool_finished(self, data: dict) -> None:
+        identifier = data.get("toolCallId")
+        skill = self._skill_calls.pop(identifier, None) if isinstance(identifier, str) else None
+        if skill is not None and data.get("success") is True:
+            self._skill_invoked({"name": skill})
         status = {True: "completed", False: "failed"}.get(
             data.get("success") if isinstance(data.get("success"), bool) else None,
             "completion observed",
         )
         self._activity(f"Tool {status}", tool_status=status)
+
+    def _skill_invoked(self, data: dict) -> None:
+        from .context_layout import is_native_skill_name
+
+        name = data.get("name")
+        if not is_native_skill_name(name):
+            self._notice_once("skill-name", "Unrecognized native skill identity omitted.")
+            return
+        if name in self._loaded_skills:
+            return
+        if len(self._loaded_skills) >= 32:
+            self._notice_once("skills", "Further native skill identities omitted.")
+            return
+        self._loaded_skills.add(name)
+        self._emit("skill_loaded", name=name)
 
     def _session_error(self, data: dict) -> None:
         message = data.get("message")

@@ -25,6 +25,7 @@ from .models import (
     LeafPlan,
 )
 from .process import local_git
+from .context_layout import context_directory, is_native_skill_path
 
 
 def _path(root: Path, name: str) -> Path:
@@ -106,6 +107,11 @@ def _selected_names(plan: LeafPlan) -> tuple[str, ...]:
     if plan.source and plan.source.original_root:
         excluded_roots.append(plan.source.original_root)
     names = set(plan.contract.needs)
+    if any(is_native_skill_path(name) for name in names):
+        raise ContractError(
+            "Inputs cannot activate project skills; declare skill packages in imports instead.",
+            code="source_collision",
+        )
     if plan.source is None:
         names.add(plan.contract.path.relative_to(root).as_posix())
     if (root / "apm.yml").exists():
@@ -122,6 +128,8 @@ def _selected_names(plan: LeafPlan) -> tuple[str, ...]:
             if metadata.split()[0] == b"160000":
                 raise ContractError("Git submodules are unsupported in captured baselines.")
             if name.split("/")[0] in {".apm", "apm_modules"}:
+                continue
+            if is_native_skill_path(name):
                 continue
             path = _path(root, name)
             if any(path.is_relative_to(excluded) for excluded in excluded_roots):
@@ -165,7 +173,7 @@ def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
             raise ContractError("Reserved _apmx_context collides with caller content.",
                                 code="source_collision")
         for index, context in enumerate(plan.imported_skills, start=1):
-            base = f"_apmx_context/import-{index}"
+            base = context_directory(context, index)
             selected.append((
                 context.source_path.parent, context.source_path.name,
                 f"{base}/{context.source_path.name}",
@@ -240,7 +248,7 @@ def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
     )
     expected = {source: plan.contract.source_digest}
     for index, context in enumerate(plan.imported_skills, start=1):
-        base = f"_apmx_context/import-{index}"
+        base = context_directory(context, index)
         expected[f"{base}/{context.source_path.name}"] = context.source_digest
         expected.update({f"{base}/{item.relative_path}": item.sha256 for item in context.resources})
     if plan.source is None:

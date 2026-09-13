@@ -18,6 +18,7 @@ from ..utils.yaml_io import load_yaml_str, loads_frontmatter_document
 from .models import (
     ContractError, ContractLimits, ImportedResource, ImportedSkill, LeafContract, SourceLocation,
 )
+from .context_layout import native_skill_name
 
 
 def _read_bytes(path: Path, *, maximum: int, root: Path) -> bytes:
@@ -139,7 +140,7 @@ def _context_files(root: Path, limits: ContractLimits) -> tuple[tuple[Path, str,
             raise ContractError("Scoped instruction activation is unsupported.",
                                 code="unsupported_import")
         if any(document.metadata.get(key) for key in (
-            "hooks", "mcp", "mcpServers", "lspServers", "agent", "model", "allowed-tools",
+            "hooks", "mcp", "mcpServers", "lspServers", "agent", "model", "allowed-tools", "context",
         )):
             raise ContractError("Selected context requires unsupported activation.",
                                 code="unsupported_import")
@@ -148,6 +149,15 @@ def _context_files(root: Path, limits: ContractLimits) -> tuple[tuple[Path, str,
         )
         if not isinstance(context_name, str) or not context_name.strip():
             raise ContractError("Selected context name is invalid.", code="invalid_import")
+        if kind == "skill":
+            if not document.metadata.get("name") or not isinstance(
+                document.metadata.get("description"), str
+            ) or not document.metadata["description"].strip():
+                raise ContractError(
+                    "Native skills require name and description in SKILL.md frontmatter.",
+                    code="invalid_import",
+                )
+            native_skill_name(context_name)
         selected.append((root / name, kind, context_name))
     return tuple(selected)
 

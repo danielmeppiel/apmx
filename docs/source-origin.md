@@ -82,7 +82,7 @@ separate from `Preparing files for Copilot` and `Running Copilot`. For example:
   Temporary workspace; your project files are unchanged.
   APM > [>] Resolving ./skills/handoff-style...
   [+] Packages ready.
-  [i] Using handoff-style
+  [i] Imported handoff-style
 ```
 
 The APM version is shown only after the backend passes the exact version check.
@@ -156,14 +156,44 @@ are rewritten, and unlisted markers or changed package content remain failures.
 Records expose any omitted metadata paths as `managed_metadata`; observed source
 hashes still describe the actual installed tree.
 
-Only selected package instructions and skills enter `_apmx_context/import-N/`.
+Selected skills enter `.agents/skills/<skill-name>/` in the actual Copilot
+producer workspace, with their original `SKILL.md` bytes and supporting files.
+Copilot discovers and loads them natively; their bodies are not embedded in the
+contract prompt. Instruction-type imports remain passive context beneath
+`_apmx_context/import-N/`. The destination/name authority is
+`contracts/context_layout.py`; package aliases are not native skill names.
 Supported sources are global `.apm/instructions/**/*.instructions.md`, root
 `SKILL.md`, and collections in `.apm/skills/` or `skills/`. Selected skill
 `references/`, `assets/`, and `scripts/` companions are bounded data; scripts are
 never executed by the importer. Scoped instruction activation and context
-metadata requiring additional tools, models, agents or services refuse. Native
-custom-instruction discovery remains disabled; the adapter supplies selected
-text and resource paths explicitly rather than claiming native autoload semantics.
+metadata requiring additional tools, models, agents, hooks, forked contexts or
+services refuse. Native skill names and descriptions are required; names must be
+portable lowercase Agent Skills identifiers. Case-colliding context names refuse.
+Tracked caller skill trees are not copied into the producer; inputs and outputs
+cannot occupy those activation paths. Unselected package content is not exposed.
+Personal and plugin skills remain governed by Copilot's host configuration, not
+an apmx sandbox or isolated profile.
+
+Native custom instructions remain disabled. Runs with imported skills expose
+the native `skill` tool alongside `view` and `apply_patch`; other runs retain the
+two-tool profile. Shell/network denial and the exact output write grant remain.
+Use a skill name (the documented explicit form is `/handoff-style`) or a request
+matching its description; no instruction to open a skill path is needed.
+See [GitHub's native CLI skill documentation](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills).
+
+`Imported handoff-style` reports preparation only. `Copilot > Loaded skill:
+handoff-style` reports a successful, correlated native skill-tool call or a
+native `skill.invoked` event. Both normal and verbose output show this receipt,
+and the bounded transcript retains it. Skill bodies, tool results and other
+arguments are not printed. Repeated observations of the same loaded skill are
+deduplicated; a load receipt is not an output assessment.
+
+The process supervisor allows natural descendant shutdown for the first
+two-thirds of the existing cleanup budget (four of the default six seconds).
+The remaining budget handles forced cleanup; it is not additional time.
+This avoids premature halts for native clients that close after their leader.
+Timeout/cancellation still request immediate termination, genuinely lingering
+processes still halt, and success still requires confirmed group/job cleanup.
 
 ## State and format compatibility
 

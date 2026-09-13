@@ -119,8 +119,11 @@ def test_multiple_package_context_and_resources_exclude_decoys(fixture, tmp_path
         assert {item.kind for item in plan.imported_skills} == {"skill", "instruction"}
         store = AttemptStore.create(plan)
         snapshot = capture_workspace(plan, store.directory)
-        assert (snapshot.producer / "_apmx_context/import-1/references/marker.txt").read_text() == "resource marker"
-        assert not list((snapshot.producer / "_apmx_context").rglob("decoy.json"))
+        native = snapshot.producer / ".agents/skills/handoff-style"
+        assert (native / "references/marker.txt").read_text() == "resource marker"
+        assert (native / "SKILL.md").read_bytes() == (style / "SKILL.md").read_bytes()
+        assert not list((snapshot.producer / ".agents/skills").rglob("decoy.json"))
+        assert (snapshot.producer / "_apmx_context/import-2/style.instructions.md").is_file()
         assert plan.imported_skills[0].resources[0].relative_path == "references/marker.txt"
 
 
@@ -177,6 +180,10 @@ def test_unselected_local_packages_are_not_copied_from_tracked_caller(fixture):
     (unselected / "SKILL.md").write_text(
         (unselected / "SKILL.md").read_text() + "\nUNSELECTED_PACKAGE_SENTINEL\n"
     )
+    for directory in (".agents/skills", ".github/skills", ".claude/skills"):
+        decoy = caller / directory / "unselected"
+        decoy.mkdir(parents=True)
+        shutil.copyfile(unselected / "SKILL.md", decoy / "SKILL.md")
     (caller / "apm.yml").write_text(
         "name: caller\nversion: 1.0.0\ndependencies:\n  apm:\n"
         "    - ./packages/selected\n    - ./packages/unselected\n"
@@ -211,10 +218,11 @@ def test_aggregate_resources_are_bounded(fixture):
             )
 
 
-def test_selected_unsupported_activation_refuses(fixture):
+@pytest.mark.parametrize("metadata", ["model: other", "context: fork", "allowed-tools: shell", "hooks: [unsafe]"])
+def test_selected_unsupported_activation_refuses(fixture, metadata):
     caller, package = fixture
     skill = package / "skills/handoff-style/SKILL.md"
-    skill.write_text(skill.read_text().replace("name: handoff-style", "name: handoff-style\nmodel: other"))
+    skill.write_text(skill.read_text().replace("name: handoff-style", f"name: handoff-style\n{metadata}"))
     with prepare_contract_source(
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
     ) as source:

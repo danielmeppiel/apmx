@@ -894,6 +894,11 @@ def _run_case(
         else:
             require_local_identity(imported["lock_identity"], skill_source)
         require(imported["sha256"] == digest(skill_source / "SKILL.md"), "Skill digest")
+        native_skills_root = run / "producer/.agents/skills"
+        require(
+            digest(native_skills_root / "release-style/SKILL.md") == imported["sha256"],
+            "Native skill discovery bytes differ from the selected import",
+        )
         if mixed_imports:
             instruction = package / "contexts/release-context-package/.apm/instructions/release-guidance.instructions.md"
             selected_instruction = record["imports"][1]
@@ -927,7 +932,7 @@ def _run_case(
             require(selected_skill["context_name"] == "contained-style", "Contained skill name mismatch")
             require(selected_skill["sha256"] == digest(contained), "Contained skill digest mismatch")
             for relative, source_resource in resources.items():
-                matches = list(context_root.glob(f"import-*/{relative}"))
+                matches = list(native_skills_root.glob(f"*/{relative}"))
                 require(len(matches) == 1, f"Expected one staged selected resource: {relative}")
                 require(digest(matches[0]) == digest(source_resource), f"Selected resource changed: {relative}")
                 require(

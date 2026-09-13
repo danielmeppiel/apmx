@@ -87,6 +87,22 @@ def test_success_preserves_streams_and_observation_interface(managed):
     assert managed[0][0].closed and not managed[0][0].terminated
 
 
+def test_natural_descendant_shutdown_uses_existing_cleanup_budget(managed, monkeypatch):
+    original = windows._JobProcess
+
+    def create(req):
+        job = original(req)
+        job.active_processes = lambda: int(managed[1][0] < 3.0)
+        return job
+
+    monkeypatch.setattr(windows, "_JobProcess", create)
+    observation = windows.supervise_process(request(10), on_bytes=lambda *args: None)
+    assert observation.cleanup_confirmed
+    assert observation.stop_reason is None
+    assert not observation.signals
+    assert 3.0 <= managed[1][0] < 6.0
+
+
 @pytest.mark.parametrize("callback", ["bytes", "started", "event"])
 def test_callback_exception_cleans_job_before_propagating(managed, callback):
     def fail(*args):

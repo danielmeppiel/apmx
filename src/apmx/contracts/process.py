@@ -23,6 +23,11 @@ from .models import (
 )
 
 
+def post_exit_grace(cleanup_seconds: float) -> float:
+    """Reserve the final third of the existing budget for forced descendant cleanup."""
+    return cleanup_seconds * 2 / 3
+
+
 def _group_exists(pgid: int) -> bool:
     try:
         os.killpg(pgid, 0)
@@ -152,7 +157,7 @@ def supervise_process(
                     elif (
                         leader_exited_at is not None
                         and group_alive
-                        and now - leader_exited_at >= min(0.5, limits.cleanup_seconds / 4)
+                        and now - leader_exited_at >= post_exit_grace(limits.cleanup_seconds)
                     ):
                         stop_reason = "lingering_children"
                     if stop_reason is not None:
@@ -169,7 +174,12 @@ def supervise_process(
                         sent.append("SIGTERM")
                 if stop_started is not None:
                     elapsed = now - stop_started
-                    if elapsed >= limits.cleanup_seconds / 2 and "SIGKILL" not in sent:
+                    grace = (
+                        post_exit_grace(limits.cleanup_seconds)
+                        if stop_reason == "lingering_children" else 0
+                    )
+                    kill_after = grace + (limits.cleanup_seconds - grace) / 2
+                    if elapsed >= kill_after and "SIGKILL" not in sent:
                         _signal_group(pgid, signal.SIGKILL)
                         sent.append("SIGKILL")
                     if elapsed >= limits.cleanup_seconds:

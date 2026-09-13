@@ -256,11 +256,15 @@ def plan_contract(
         "apm.lock",
     }
     output_name = contract.produces.casefold()
+    from .context_layout import NATIVE_SKILL_ROOTS, is_native_skill_path
+
     if (
         output_name == "checks"
         or output_name.startswith("checks/")
         or output_name == "_apmx_context"
         or output_name.startswith("_apmx_context/")
+        or is_native_skill_path(output_name)
+        or any(name.startswith(output_name + "/") for name in NATIVE_SKILL_ROOTS)
         or any(
             output_name == item
             or output_name.startswith(item + "/")

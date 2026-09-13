@@ -54,17 +54,31 @@ def main():
         raise RuntimeError("Unexpected hermetic actor invocation")
     mode = os.environ["APMX_ACTOR_MODE"]
     prompt = sys.argv[sys.argv.index("-p") + 1]
-    if os.environ.get("APMX_EXPECT_SKILL") == "1" and "RELEASE_SKILL_SENTINEL" not in prompt:
-        raise RuntimeError("Selected packaged skill did not reach the native producer")
+    native_skills = {
+        path.parent.name: path.read_text()
+        for path in Path(".agents/skills").glob("*/SKILL.md")
+    }
+    if os.environ.get("APMX_EXPECT_SKILL") == "1":
+        if (
+            "RELEASE_SKILL_SENTINEL" not in native_skills.get("release-style", "")
+            or "RELEASE_SKILL_SENTINEL" in prompt
+        ):
+            raise RuntimeError("Selected skill must be discovered natively, not inlined")
+        for name in sorted(native_skills):
+            emit("tool.execution_start", toolName="skill", toolCallId=f"skill-{name}",
+                 arguments={"skill": name})
+            emit("tool.execution_complete", toolCallId=f"skill-{name}", success=True)
     if os.environ.get("APMX_EXPECT_INSTRUCTION") == "1":
         if (
             "RELEASE_INSTRUCTION_SENTINEL" not in prompt
-            or "RELEASE_CONTAINED_SKILL_SENTINEL" not in prompt
+            or "RELEASE_CONTAINED_SKILL_SENTINEL" not in native_skills.get("contained-style", "")
+            or "RELEASE_CONTAINED_SKILL_SENTINEL" in prompt
             or "UNSELECTED_" in prompt
+            or any("UNSELECTED_" in text for text in native_skills.values())
         ):
             raise RuntimeError("Package linkage did not constrain native context")
         for relative, expected in json.loads(os.environ["APMX_CONTEXT_RESOURCE_DIGESTS"]).items():
-            matches = list(Path("_apmx_context").glob(f"import-*/{relative}"))
+            matches = list(Path(".agents/skills").glob(f"*/{relative}"))
             if len(matches) != 1 or hashlib.sha256(matches[0].read_bytes()).hexdigest() != expected:
                 raise RuntimeError(f"Selected supporting resource missing or changed: {relative}")
     phases = (

@@ -121,7 +121,7 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
         phases = [
             "Installing packages with APM 0.30.0",
             "Packages ready.",
-            "Using style",
+            "Imported style",
             "Preparing files for Copilot",
             "Running Copilot",
         ]
@@ -180,11 +180,11 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
         started = "Installing project imports with APM 0.30.0"
         completed = "Project imports ready."
         assert output.count(started) == output.count(completed) == 1
-        assert output.index(started) < output.index(completed) < output.index("Using style")
+        assert output.index(started) < output.index(completed) < output.index("Imported style")
         assert output.count("Packages ready.") == int(packaged)
         if packaged:
             assert output.index("Packages ready.") < output.index(started)
-        assert output.count("Using style") == 1
+        assert output.count("Imported style") == 1
         assert ("Using locked versions." in output) is frozen
         assert output.count("Temporary workspace; your project files are unchanged.") == 1
     options = [line for line in transcript.splitlines() if "APM options:" in line]
@@ -277,7 +277,7 @@ def test_failed_preparation_never_launches_producer_or_claims_success(
     assert ("with APM" in result.output) is (failure != "version")
     assert "[+]" not in result.output
     assert "ready." not in result.output
-    assert "Using style" not in result.output
+    assert "Imported style" not in result.output
     assert "Preparing files for Copilot" not in result.output
     assert "PRIVATE" not in result.output
     assert "\x1b" not in result.output

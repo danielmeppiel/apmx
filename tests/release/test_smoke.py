@@ -716,16 +716,20 @@ class SmokeFixtureTests(unittest.TestCase):
                 (package / "apm.yml").write_text("dependencies:\n  apm: []\n")
                 resources = smoke.add_mixed_context(package, env)
                 for relative, source in resources.items():
-                    target = root / "_apmx_context/import-1" / relative
+                    target = root / ".agents/skills/release-style" / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(source, target)
                 (root / "checks").mkdir()
                 (root / "notes.md").write_text('{"source":"caller","value":7}')
-                prompt = "RELEASE_SKILL_SENTINEL RELEASE_INSTRUCTION_SENTINEL RELEASE_CONTAINED_SKILL_SENTINEL"
+                shutil.copyfile(skill / "SKILL.md", root / ".agents/skills/release-style/SKILL.md")
+                contained = root / ".agents/skills/contained-style"
+                contained.mkdir()
+                (contained / "SKILL.md").write_text("RELEASE_CONTAINED_SKILL_SENTINEL")
+                prompt = "RELEASE_INSTRUCTION_SENTINEL"
                 if failure == "unselected":
                     prompt += " UNSELECTED_SKILL_SENTINEL"
                 if failure == "resource":
-                    (root / "_apmx_context/import-1/references/detail.txt").write_text("changed")
+                    (root / ".agents/skills/release-style/references/detail.txt").write_text("changed")
                 result = subprocess.run(
                     [sys.executable, "-I", str(smoke.FIXTURES / "copilot_actor.py"), "-p", prompt],
                     cwd=root, env=env, capture_output=True, timeout=10,

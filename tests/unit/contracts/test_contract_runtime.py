@@ -112,12 +112,13 @@ def test_native_request_exact_permissions_and_model(
     prompt = request.argv[2]
     for selected in (
         contract.body,
-        context.content,
-        context.source_digest,
         "notes.md",
         "handoff.json",
     ):
         assert selected in prompt
+    assert context.content not in prompt
+    assert "_apmx_context" not in prompt
+    assert "does not activate skills" not in prompt
     assert "Use view to read and apply_patch to write." in prompt
     assert (
         "Send brief progress updates in plain ASCII before reading inputs and writing the output."
@@ -125,9 +126,10 @@ def test_native_request_exact_permissions_and_model(
     )
     tail = request.argv[3:]
     assert tail[:4] == ("--output-format", "json", "--stream", "on")
-    assert tail[tail.index("--available-tools") + 1 : tail.index("--available-tools") + 3] == (
+    assert tail[tail.index("--available-tools") + 1 : tail.index("--available-tools") + 4] == (
         "view",
         "apply_patch",
+        "skill",
     )
     assert tail[tail.index("--allow-tool") + 1] == f"write({snapshot.producer / 'handoff.json'})"
     assert tail.count("--allow-tool") == 1

@@ -299,6 +299,7 @@ class ContractLogger:
             "selected": self._selected,
             "phase": self._phase,
             "activity": self._activity,
+            "skill_loaded": self._skill_loaded,
             "diagnostic": self._diagnostic,
             "metadata": self._metadata,
             "process_started": self._process_started,
@@ -359,7 +360,7 @@ class ContractLogger:
         if not event.imports:
             return
         packages = ", ".join(dict.fromkeys(item.name for item in event.imports))
-        self._write(f"Using {packages}", severity="notice")
+        self._write(f"Imported {packages}", severity="notice")
         for item in event.imports:
             package = item.package_name or item.name
             name = item.context_name or item.name
@@ -468,6 +469,12 @@ class ContractLogger:
         if stream == "stderr":
             parts.append("stderr")
         return " ".join(parts)
+
+    def _skill_loaded(self, event: RunEvent) -> None:
+        self._write(
+            f"Loaded skill: {self._field(event, 'name')}",
+            severity="notice", attribution=self._attribution(event),
+        )
 
     def _activity(self, event: RunEvent) -> None:
         text = self._field(event, "text", "")
