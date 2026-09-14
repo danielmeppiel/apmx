@@ -726,6 +726,147 @@ def test_observed_skill_load_is_visible_and_retained(tmp_path, capsys, verbose):
     ).read_text()
 
 
+@pytest.mark.parametrize("encoding", ["ascii", "cp1252", "utf-8"])
+@pytest.mark.parametrize("rich_output", [False, True])
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.windows_compat
+def test_native_prose_punctuation_is_readable_on_strict_terminal_encodings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    encoding: str, rich_output: bool, verbose: bool,
+) -> None:
+    raw = io.BytesIO()
+    target = io.TextIOWrapper(raw, encoding=encoding, errors="strict", write_through=True)
+    rich_console = Console(file=target, force_terminal=rich_output, width=120)
+    monkeypatch.setattr(sys, "stdout", target)
+    monkeypatch.setattr(console, "_get_console", lambda: rich_console)
+    monkeypatch.setattr(console, "_console_stderr", False)
+    if rich_output:
+        monkeypatch.delenv("NO_COLOR")
+        monkeypatch.setenv("TERM", "xterm-256color")
+    logger = ContractLogger(verbose=verbose)
+    logger.attach_run("run", tmp_path)
+    decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
+    text = "I\u2019m reading \u201cnotes\u201d \u2014 that\u2019s ready\u2026"
+    wire = (json.dumps({
+        "type": "assistant.message",
+        "data": {"messageId": "m", "phase": "commentary", "content": text},
+    }, ensure_ascii=False) + "\n").encode()
+    for byte in wire:
+        decoder.feed("stdout", bytes([byte]))
+    decoder.finish()
+    logger.close()
+    assert b"""I'm reading "notes" -- that's ready...""" in raw.getvalue()
+    assert all(byte < 128 for byte in raw.getvalue())
+    retained = (tmp_path / "transcript.log").read_text(encoding="ascii")
+    assert r"I\u2019m reading \u201cnotes\u201d \u2014" in retained
+
+
+def test_prose_formatting_preserves_code_paths_controls_and_literal_escapes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    logger = ContractLogger()
+    logger.attach_run("run", tmp_path)
+    decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
+    text = (
+        "I\u2019m reading `O\u2019Connor.md` and /tmp/O\u2019Connor/file.\n"
+        "```json\n"
+        '{"name": "O\u2019Connor"}\n'
+        "```\n"
+        "It\u2019s done\u2026\n"
+        + r"Literal I\u2019m stays literal." + "\n"
+        "I\u2019m using ghp_PRIVATE_TOKEN_123456 \u2014 \x1b[31m\u202e"
+    )
+    decoder.feed("stdout", (json.dumps({
+        "type": "assistant.message",
+        "data": {"messageId": "m", "phase": "final_answer", "content": text},
+    }) + "\n").encode())
+    decoder.finish()
+    logger.close()
+    output = capsys.readouterr().out
+    assert r"I'm reading `O\u2019Connor.md` and /tmp/O\u2019Connor/file." in output
+    assert r'{"name": "O\u2019Connor"}' in output
+    assert "It's done..." in output
+    assert r"Literal I\u2019m stays literal." in output
+    assert "PRIVATE" not in output + (tmp_path / "transcript.log").read_text()
+    assert r"\x1b[31m\u202e" in output
+
+
+def test_interleaved_native_messages_do_not_share_code_fence_state(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    logger = ContractLogger()
+    decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
+
+    def emit(kind: str, **data: object) -> None:
+        decoder.feed("stdout", (json.dumps({"type": kind, "data": data}) + "\n").encode())
+
+    code = "```text\nI\u2019m literal.\n"
+    emit("assistant.message_start", messageId="code", phase="final_answer")
+    emit("assistant.message_delta", messageId="code", deltaContent=code)
+    emit("assistant.message", messageId="narration", phase="commentary", content="I\u2019m reading.")
+    emit("assistant.message", messageId="code", phase="final_answer", content=code + "```\n")
+    emit("assistant.intent", intent="I\u2019m writing the output\u2026")
+    decoder.finish()
+    logger.close()
+    output = capsys.readouterr().out
+    assert r"I\u2019m literal." in output
+    assert "I'm reading." in output
+    assert "I'm writing the output..." in output
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("delimiter", ["```", "~~~~"])
+@pytest.mark.windows_compat
+def test_prose_preserves_code_delimiters_and_indented_code(
+    capsys: pytest.CaptureFixture[str], newline: str, delimiter: str,
+) -> None:
+    logger = ContractLogger()
+    decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
+    content = newline.join((
+        delimiter,
+        "I\u2019m literal.",
+        delimiter[:2],
+        "I\u2019m still literal.",
+        delimiter,
+        "    I\u2019m indented code.",
+        "\tI\u2019m tabbed code.",
+        "I\u2019m done\u2026",
+        "``I\u2019m `inline` code`` It\u2019s readable.",
+        "Here\u2019s O\u2019Connor.md and C:\\Users\\O\u2019Connor\\notes.",
+        "Caf\u00e9 stays escaped.",
+    ))
+    decoder.feed("stdout", (json.dumps({
+        "type": "assistant.message",
+        "data": {"messageId": "m", "phase": "final_answer", "content": content},
+    }) + "\n").encode())
+    decoder.finish()
+    logger.close()
+    output = capsys.readouterr().out
+    for phrase in ("literal.", "still literal.", "indented code.", "tabbed code."):
+        assert rf"I\u2019m {phrase}" in output
+    assert "I'm done..." in output
+    assert r"``I\u2019m `inline` code`` It's readable." in output
+    assert r"Here's O\u2019Connor.md and C:\Users\O\u2019Connor\notes." in output
+    assert r"Caf\xe9 stays escaped." in output
+
+
+def test_prose_state_is_bounded_by_native_message_admission() -> None:
+    logger = ContractLogger()
+    logger._human_enabled = False
+    decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
+    for identifier in range(100):
+        decoder.feed("stdout", (json.dumps({
+            "type": "assistant.message",
+            "data": {
+                "messageId": str(identifier), "phase": "final_answer", "content": "`" * 2000,
+            },
+        }) + "\n").encode())
+    decoder.finish()
+    logger.close()
+    assert len(logger._prose) == len(decoder._messages) == 64
+    assert all(formatter.fence == ("`", 2000) for formatter in logger._prose.values())
+
+
 @pytest.mark.parametrize("verbose", [False, True])
 def test_preparation_uses_existing_redaction_and_ascii_escape_path(tmp_path, capsys, verbose):
     logger = ContractLogger(verbose=verbose)

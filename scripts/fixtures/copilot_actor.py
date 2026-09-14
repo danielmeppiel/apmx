@@ -86,6 +86,13 @@ def main():
         ("analysis", "PRIVATE_REASONING_SENTINEL\n"),
         ("final_answer", "Hermetic fixture finished.\n"),
     )
+    if os.environ.get("APMX_ACTOR_TYPOGRAPHY") == "1":
+        phases = (
+            ("commentary", "Hermetic fixture progress. "
+             "I\u2019m reading the source IDs and their exact supporting notes now.\n"),
+            phases[1],
+            ("final_answer", "Hermetic fixture finished. It\u2019s ready \u2014 done\u2026\n"),
+        )
     if mode == "quiet":
         phases = ()
         time.sleep(0.2)

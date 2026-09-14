@@ -33,6 +33,57 @@ if TYPE_CHECKING:
     from rich.status import Status
 
 
+class _ProseDisplay:
+    """Readable ASCII typography without rewriting literal code or path-like tokens."""
+
+    _punctuation = str.maketrans({
+        "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+        "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"',
+        "\u00ab": '"', "\u00bb": '"', "\u2039": "'", "\u203a": "'",
+        "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
+        "\u2014": "--", "\u2015": "--", "\u2026": "...",
+        "\u00a0": " ", "\u202f": " ",
+    })
+
+    def __init__(self) -> None:
+        self.fence: tuple[str, int] | None = None
+        self.inline = 0
+
+    def render(self, text: str) -> str:
+        return "\n".join(self._line(line) for line in text.split("\n"))
+
+    def _line(self, text: str) -> str:
+        fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", text.removesuffix("\r"))
+        if self.fence:
+            if (
+                fence and fence[1][0] == self.fence[0] and len(fence[1]) >= self.fence[1]
+                and not fence[2].strip(" \t")
+            ):
+                self.fence = None
+            return text
+        if not self.inline and text[:4].expandtabs(4).startswith("    "):
+            return text
+        if fence and not self.inline:
+            self.fence = fence[1][0], len(fence[1])
+            return text
+        parts = []
+        for segment in re.split(r"(`+)", text):
+            if segment.startswith("`"):
+                if len(segment) == self.inline:
+                    self.inline = 0
+                elif not self.inline:
+                    self.inline = len(segment)
+                parts.append(segment)
+            elif self.inline:
+                parts.append(segment)
+            else:
+                parts.append("".join(
+                    token if re.search(r"[/\\]|\.\w", token) else token.translate(self._punctuation)
+                    for token in re.split(r"([ \t]+)", segment)
+                ))
+        return "".join(parts)
+
+
 class _Transcript:
     """Bounded beginning/tail retention with exact omitted byte/line counts."""
 
@@ -101,6 +152,8 @@ class ContractLogger:
         self._checks_heading_shown = False
         self._preparation_notice_shown = False
         self._apm_paths: tuple[tuple[str, str], ...] = ()
+        # Message identities are admitted by the decoder's bounded correlation table.
+        self._prose: dict[int, _ProseDisplay] = {}
 
     def start_activity(self, message: str, *, announce: bool = True) -> None:
         """Animate quiet work using the install spinner, never in retained logs."""
@@ -480,11 +533,22 @@ class ContractLogger:
         text = self._field(event, "text", "")
         tool_status = self._field(event, "tool_status", "")
         severity = "error" if tool_status == "failed" else "detail" if tool_status else "info"
+        displayed = None
+        if event.data.get("prose") is True:
+            identifier = event.data.get("prose_group")
+            if isinstance(identifier, int):
+                formatter = self._prose.get(identifier)
+                if formatter is None:
+                    formatter = self._prose[identifier] = _ProseDisplay()
+            else:
+                formatter = _ProseDisplay()
+            displayed = formatter.render(text)
         self._write(
             text,
             severity=severity,
             attribution=self._attribution(event),
             accent=text if tool_status == "failed" else "",
+            display_message=displayed,
         )
 
     def _metadata(self, event: RunEvent) -> None:

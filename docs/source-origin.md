@@ -139,6 +139,20 @@ prose on the verbose screen; public/private message filtering and completion
 checks are unchanged. Offline `--plan` never runs or reports an install; local
 execution without imports does not claim APM ran.
 
+Copilot's public narration uses portable ASCII typography on screen: curly
+apostrophes/quotes become straight quotes, typographic dashes become ASCII
+dashes, and ellipses become `...`. For example, a curly apostrophe in "I'm"
+does not appear as a literal `\u2019` in ordinary prose. This rendering is the
+same on Windows, macOS and Linux, including ASCII and Windows `cp1252` streams;
+it does not change terminal encoding or require Unicode fonts.
+
+Code spans/blocks, path-like tokens, structured file identities, APM/checker
+diagnostics and the retained transcript keep their original escaped text.
+Literal backslash sequences are never decoded. Other unsupported characters
+and unsafe controls, including ANSI injection and bidirectional controls, still
+use visible escapes. Redaction, size limits, source bytes and outcome semantics
+are unchanged.
+
 Imports name APM packages, not arbitrary skill symbols or repository basenames.
 The consumer's manifest and lock govern even a packaged contract. Without a
 consumer environment, execution can resolve an ephemeral one; a package-owned

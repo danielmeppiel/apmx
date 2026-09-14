@@ -229,7 +229,8 @@ class ContractStreamDecoder:
         self.events.emit(kind, source=self.source, label=self.label, **data)
 
     def _activity(
-        self, text: str, stream: str = "stdout", *, tool_status: str | None = None
+        self, text: str, stream: str = "stdout", *, tool_status: str | None = None,
+        prose: bool = False, prose_group: int | None = None,
     ) -> None:
         if text:
             # Both consumers use safe_text; keep raw bounded text in the
@@ -239,6 +240,7 @@ class ContractStreamDecoder:
                 text=text,
                 stream=stream,
                 **({"tool_status": tool_status} if tool_status is not None else {}),
+                **({"prose": True, "prose_group": prose_group} if prose else {}),
             )
 
     def _notice_once(self, key: str, message: str) -> None:
@@ -251,10 +253,15 @@ class ContractStreamDecoder:
                 action="Inspect the native session if more detail is needed.",
             )
 
-    def _text_lines(self, stream: str) -> _Lines:
+    def _text_lines(
+        self, stream: str, *, prose: bool = False, prose_group: int | None = None,
+    ) -> _Lines:
         return _Lines(
             _TEXT_BYTES,
-            lambda value: self._activity(value.decode("utf-8", errors="backslashreplace"), stream),
+            lambda value: self._activity(
+                value.decode("utf-8", errors="backslashreplace"), stream,
+                prose=prose, prose_group=prose_group,
+            ),
             lambda: self._notice_once(
                 "long-text",
                 "Oversized native text lines omitted; stream draining continues.",
@@ -374,7 +381,9 @@ class ContractStreamDecoder:
                     "messages", "Message correlation limit reached; further response text omitted."
                 )
                 return None
-            self._messages[identifier] = _Message(self._text_lines("stdout"))
+            self._messages[identifier] = _Message(
+                self._text_lines("stdout", prose=True, prose_group=len(self._messages))
+            )
         return self._messages[identifier]
 
     def _message_phase(self, message: _Message, data: dict) -> None:
@@ -469,7 +478,7 @@ class ContractStreamDecoder:
         if len(text.encode("utf-8", errors="surrogatepass")) > _TEXT_BYTES:
             self._notice_once("long-text", "Oversized native text omitted; draining continues.")
         else:
-            self._activity(text)
+            self._activity(text, prose=True)
 
     def _tool_started(self, data: dict) -> None:
         name = data.get("toolName")

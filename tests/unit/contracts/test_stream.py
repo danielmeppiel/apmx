@@ -100,6 +100,21 @@ def _text(events) -> str:
     return "\n".join(safe_text(str(event.data.get("text", ""))) for event in events)
 
 
+def test_only_public_assistant_text_is_tagged_as_prose_without_native_ids() -> None:
+    decoder, events = _decoder()
+    decoder.feed("stdout", _frame(
+        "assistant.message", messageId="PRIVATE_NATIVE_ID", phase="commentary",
+        content="I\u2019m reading.",
+    ))
+    decoder.feed("stderr", "O\u2019Connor.md\n".encode())
+    decoder.feed("stdout", _frame("tool.execution_start", toolName="view"))
+    activities = [event for event in events if event.kind == "activity"]
+    assert activities[0].data["prose"] is True
+    assert activities[0].data["prose_group"] == 0
+    assert all("prose" not in event.data for event in activities[1:])
+    assert "PRIVATE" not in str(events)
+
+
 @pytest.mark.parametrize("success", [True, False, None])
 def test_native_skill_is_loaded_only_after_correlated_success(success: bool | None) -> None:
     decoder, events = _decoder()
