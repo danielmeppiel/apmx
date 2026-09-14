@@ -15,20 +15,6 @@ pytestmark = pytest.mark.component
 def candidate(factory: Modules, tmp_path: Path) -> Path:
     files = outputs(factory)
     files["request.json"] = (EXAMPLE / "request.json").read_bytes()
-    files["evidence.json"] = factory.evidence.encode(
-        {
-            "assurance": "UNPROVEN",
-            "stages": [
-                {
-                    "stage": stage.name,
-                    "output": stage.output,
-                    "sha256": factory.evidence.sha(files[stage.output]),
-                    "checks": [{"name": "contract", "normalized": 0, "raw_exit": 0}],
-                }
-                for stage in factory.driver.STAGES[:4]
-            ],
-        }
-    )
     for name, raw in files.items():
         (tmp_path / name).write_bytes(raw)
     return tmp_path
@@ -255,18 +241,12 @@ def test_review_does_not_certify_or_accept_bad_references(
     assert factory.checks.main(["review", "--directory", str(candidate)]) == 1
 
 
-def test_review_evidence_is_bound_to_supplied_bytes(factory: Modules, candidate: Path) -> None:
-    evidence = json.loads((candidate / "evidence.json").read_bytes())
-    evidence["stages"][0]["sha256"] = "0" * 64
-    (candidate / "evidence.json").write_text(json.dumps(evidence), encoding="ascii")
-    assert factory.checks.main(["review", "--directory", str(candidate)]) == 1
-
-
-def test_malformed_review_evidence_is_a_failed_condition(factory: Modules, candidate: Path) -> None:
-    evidence = json.loads((candidate / "evidence.json").read_bytes())
-    evidence["stages"][0] = {}
-    (candidate / "evidence.json").write_text(json.dumps(evidence), encoding="ascii")
-    assert factory.checks.main(["review", "--directory", str(candidate)]) == 1
+def test_review_uses_artifacts_without_invented_runtime_observations(
+    factory: Modules,
+    candidate: Path,
+) -> None:
+    assert not (candidate / "evidence.json").exists()
+    assert factory.checks.main(["review", "--directory", str(candidate)]) == 0
 
 
 def test_large_numeric_case_is_refused_without_float_overflow(

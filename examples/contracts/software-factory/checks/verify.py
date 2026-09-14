@@ -2,7 +2,6 @@
 
 import argparse
 import ast
-import hashlib
 import json
 import math
 import re
@@ -434,34 +433,6 @@ def check_review(directory: Path) -> None:
     else:
         require(
             bool(review["findings"] or review["follow_up"]), "Explain the recommended follow-up."
-        )
-    evidence = fields(document(directory, "evidence.json"), {"assurance", "stages"})
-    require(
-        evidence["assurance"] == "UNPROVEN"
-        and type(evidence["stages"]) is list
-        and len(evidence["stages"]) == 4,
-        "Expected four admitted stages.",
-    )
-    for entry, phase, name in zip(
-        evidence["stages"],
-        PHASES[:4],
-        (
-            "plan.json",
-            "spec.json",
-            "shipping.py",
-            "tests.json",
-        ),
-        strict=True,
-    ):
-        fields(entry, {"stage", "output", "sha256", "checks"})
-        require(entry["stage"] == phase and entry["output"] == name, "Evidence stage mismatch.")
-        require(
-            entry["sha256"] == hashlib.sha256(read_bytes(directory / name)).hexdigest(),
-            "Evidence does not describe the supplied artifact.",
-        )
-        require(
-            entry["checks"] == [{"name": "contract", "normalized": 0, "raw_exit": 0}],
-            "Evidence must state the actual passing check observations.",
         )
 
 

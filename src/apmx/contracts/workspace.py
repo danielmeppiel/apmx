@@ -17,12 +17,15 @@ from ..utils.path_security import (
 )
 from .models import (
     Artifact,
+    ArtifactView,
     BaselineSnapshot,
     CapturedInput,
     ContractError,
     ContractLimits,
     FileEntry,
     LeafPlan,
+    RetainedInput,
+    RunResult,
 )
 from .process import local_git
 from .context_layout import context_directory, is_native_skill_path
@@ -140,6 +143,10 @@ def _selected_names(plan: LeafPlan) -> tuple[str, ...]:
                 raise ContractError("Baseline file count exceeds the limit.", code="baseline_limit")
     names.update(_check_names(root, plan.limits))
     names.discard(plan.contract.produces)
+    produced = {name.casefold() for name in plan.chain_outputs}
+    names = {name for name in names if name.casefold() not in produced}
+    names.difference_update(plan.deferred_inputs)
+    names.difference_update(binding.artifact.relative_path for binding in plan.input_bindings)
     if len(names) > plan.limits.baseline_files:
         raise ContractError("Baseline file count exceeds the limit.", code="baseline_limit")
     if len({name.casefold() for name in names}) != len(names):
@@ -168,16 +175,26 @@ def _check_names(root: Path, limits: ContractLimits) -> tuple[str, ...]:
 def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
     """Own caller/package mapping and collision admission for inspection and copy."""
     selected = [(plan.project_root, name, name) for name in _selected_names(plan)]
+    from .records import validate_binding
+
+    for binding in plan.input_bindings:
+        validate_binding(binding, plan.project_root, plan.limits)
+        artifact = binding.artifact
+        selected.append((artifact.path.parent, artifact.path.name, artifact.relative_path))
     if plan.imported_skills:
         if any(child.name.casefold() == "_apmx_context" for child in plan.project_root.iterdir()):
-            raise ContractError("Reserved _apmx_context collides with caller content.",
-                                code="source_collision")
+            raise ContractError(
+                "Reserved _apmx_context collides with caller content.", code="source_collision"
+            )
         for index, context in enumerate(plan.imported_skills, start=1):
             base = context_directory(context, index)
-            selected.append((
-                context.source_path.parent, context.source_path.name,
-                f"{base}/{context.source_path.name}",
-            ))
+            selected.append(
+                (
+                    context.source_path.parent,
+                    context.source_path.name,
+                    f"{base}/{context.source_path.name}",
+                )
+            )
             selected.extend(
                 (context.source_path.parent, item.relative_path, f"{base}/{item.relative_path}")
                 for item in context.resources
@@ -300,21 +317,36 @@ def capture_provenance(
             _, entry = _read(plan.imports_root, "apm.yml", plan.limits.source_bytes)
             selected.append((plan.imports_root, "apm.yml", "imports-apm.yml", entry.sha256))
     if plan.consumer_manifest_digest is not None:
-        selected.append((
-            plan.project_root, "apm.yml", "consumer-apm.yml", plan.consumer_manifest_digest,
-        ))
+        selected.append(
+            (
+                plan.project_root,
+                "apm.yml",
+                "consumer-apm.yml",
+                plan.consumer_manifest_digest,
+            )
+        )
     if plan.consumer_lock_digest is not None:
         lock = resolve_lockfile_path_for_read(plan.project_root, read_only=True)
-        selected.append((
-            plan.project_root, lock.name, "consumer-apm.lock.yaml", plan.consumer_lock_digest,
-        ))
+        selected.append(
+            (
+                plan.project_root,
+                lock.name,
+                "consumer-apm.lock.yaml",
+                plan.consumer_lock_digest,
+            )
+        )
     if plan.source and plan.source.imports_root and plan.source.imports_root != plan.imports_root:
         lock = resolve_lockfile_path_for_read(plan.source.imports_root, read_only=True)
         if lock.is_file():
             _, entry = _read(plan.source.imports_root, lock.name, plan.limits.file_bytes)
-            selected.append((
-                plan.source.imports_root, lock.name, "package-resolution-apm.lock.yaml", entry.sha256,
-            ))
+            selected.append(
+                (
+                    plan.source.imports_root,
+                    lock.name,
+                    "package-resolution-apm.lock.yaml",
+                    entry.sha256,
+                )
+            )
     destination = run_directory / "source"
     destination.mkdir(mode=0o700)
     retained = {}
@@ -358,11 +390,34 @@ def _write(root: Path, entry: FileEntry, data: bytes) -> None:
 
 
 def _copy_entries(source: Path, destination: Path, entries: tuple[FileEntry, ...]) -> None:
-    for expected in entries:
-        data, observed = _read(source, expected.relative_path, expected.size)
-        if observed != expected:
-            raise ContractError("Captured baseline identity changed.", code="baseline_changed")
-        _write(destination, expected, data)
+    _copy_captures(
+        tuple(CapturedInput(source, entry.relative_path, entry) for entry in entries),
+        destination,
+    )
+
+
+def _copy_captures(
+    captures: tuple[CapturedInput, ...],
+    destination: Path,
+    *,
+    readonly: bool = False,
+) -> tuple[FileEntry, ...]:
+    """One exact-copy authority for leaf baselines, assessments and aggregate views."""
+    entries = []
+    for captured in captures:
+        data, observed = _read(
+            captured.source_root,
+            captured.source_relative_path,
+            captured.entry.size,
+        )
+        if replace(observed, relative_path=captured.entry.relative_path) != captured.entry:
+            raise ContractError("Captured source identity changed.", code="baseline_changed")
+        entry = captured.entry
+        if readonly:
+            entry = replace(entry, mode=entry.mode & 0o555)
+        _write(destination, entry, data)
+        entries.append(entry)
+    return tuple(entries)
 
 
 def _initialize_git(root: Path, template: Path) -> str:
@@ -381,17 +436,15 @@ def capture_workspace(plan: LeafPlan, run_directory: Path) -> BaselineSnapshot:
     """Materialize the admitted effective tree and a fresh producer workspace."""
     captures = _capture_mapping(plan)
     entries = tuple(captured.entry for captured in captures)
+    if plan.deferred_inputs:
+        raise ContractError("Preview dependencies cannot be executed.", code="unresolved_inputs")
+    if plan.input_inventory is not None and entries != plan.input_inventory:
+        raise ContractError("Admitted input or resource bytes changed.", code="plan_changed")
     baseline = run_directory / "baseline"
     producer = run_directory / "producer"
     baseline.mkdir(mode=0o700)
     producer.mkdir(mode=0o700)
-    for captured in captures:
-        data, observed = _read(
-            captured.source_root, captured.source_relative_path, captured.entry.size
-        )
-        if replace(observed, relative_path=captured.entry.relative_path) != captured.entry:
-            raise ContractError("Captured source identity changed.", code="baseline_changed")
-        _write(baseline, captured.entry, data)
+    _copy_captures(captures, baseline)
     _copy_entries(baseline, producer, entries)
     template = run_directory / "git-template"
     template.mkdir(mode=0o700)
@@ -403,10 +456,110 @@ def capture_workspace(plan: LeafPlan, run_directory: Path) -> BaselineSnapshot:
         original_head = refs.decode("ascii").strip() or None
     head = _initialize_git(baseline, template)
     shutil.copytree(baseline / ".git", producer / ".git")
+    from .records import validate_binding
+
+    for binding in plan.input_bindings:
+        validate_binding(binding, plan.project_root, plan.limits)
     resources = tuple(entry for entry in entries if entry.relative_path.startswith("checks/"))
     return BaselineSnapshot(
         baseline, producer, entries, _digest(entries), original_head, head, _digest(resources)
     )
+
+
+def inspect_artifact_view(view: ArtifactView) -> None:
+    """Verify the published projection against its recorded identities."""
+    _path(view.root.parent, view.root.name)
+    if _digest(view.files) != view.digest:
+        raise ContractError("Aggregate artifact manifest changed.", code="artifact_view_changed")
+    files = {entry.relative_path.casefold() for entry in view.files}
+    directories = {
+        parent.as_posix().casefold()
+        for entry in view.files
+        for parent in PurePosixPath(entry.relative_path).parents
+        if parent.as_posix() != "."
+    }
+    for path in view.root.rglob("*"):
+        name = path.relative_to(view.root).as_posix()
+        path = _path(view.root, name)
+        allowed = directories if path.is_dir() else files
+        if name.casefold() not in allowed:
+            raise ContractError(
+                "Aggregate view contains an unrecorded path.", code="artifact_view_changed"
+            )
+    for expected in view.files:
+        _, observed = _read(view.root, expected.relative_path, expected.size)
+        if observed != expected:
+            raise ContractError("Aggregate artifact bytes changed.", code="artifact_view_changed")
+
+
+def capture_chain_view(
+    directory: Path,
+    completed: tuple[tuple[LeafPlan, RunResult], ...],
+    bindings: tuple[RetainedInput, ...],
+) -> ArtifactView:
+    """Project only admitted outputs and captured root inputs/checks, never caller files."""
+    from .records import validate_binding
+
+    if not completed or len(completed) != len(bindings):
+        raise ContractError(
+            "Aggregate view requires every selected leaf's admission.", code="incomplete_chain"
+        )
+    selected: dict[str, CapturedInput] = {}
+
+    def select(captured: CapturedInput) -> None:
+        name = captured.entry.relative_path
+        previous = selected.get(name)
+        if previous is not None and previous.entry != captured.entry:
+            raise ContractError("Aggregate source identities disagree.", code="source_collision")
+        selected.setdefault(name, captured)
+
+    for (plan, result), binding in zip(completed, bindings, strict=True):
+        validate_binding(binding, plan.project_root, plan.limits)
+        if (
+            result.artifact != binding.artifact
+            or binding.record_path.parent != result.run_directory
+        ):
+            raise ContractError(
+                "Aggregate leaf receipt differs from its result.", code="invalid_binding"
+            )
+        if plan.deferred_inputs or plan.input_inventory is None:
+            raise ContractError(
+                "Aggregate inputs must have been captured.", code="unresolved_inputs"
+            )
+        roots = set(plan.contract.needs) - set(plan.chain_outputs)
+        baseline = result.run_directory / "baseline"
+        for entry in plan.input_inventory:
+            if entry.relative_path in roots or entry.relative_path.startswith("checks/"):
+                select(CapturedInput(baseline, entry.relative_path, entry))
+        artifact = binding.artifact
+        origin = result.run_directory / "artifacts"
+        _, entry = _read(origin, artifact.relative_path, plan.limits.output_bytes)
+        if (entry.sha256, entry.size) != (artifact.sha256, artifact.size):
+            raise ContractError("Assessed aggregate output changed.", code="artifact_changed")
+        select(CapturedInput(origin, artifact.relative_path, entry))
+    names = {name.casefold() for name in selected}
+    if len(names) != len(selected) or any(
+        parent.as_posix() in names for name in names for parent in PurePosixPath(name).parents
+    ):
+        raise ContractError("Aggregate artifact paths collide.", code="source_collision")
+    pending = _path(directory, "artifacts.pending")
+    destination = _path(directory, "artifacts")
+    if destination.exists():
+        raise ContractError("Aggregate artifacts already exist.", code="artifact_view_collision")
+    pending.mkdir(mode=0o700)
+    captures = tuple(selected[name] for name in sorted(selected))
+    entries = _copy_captures(captures, pending, readonly=True)
+    view = ArtifactView(pending, entries, _digest(entries), captures)
+    inspect_artifact_view(view)
+    for (plan, _), binding in zip(completed, bindings, strict=True):
+        validate_binding(binding, plan.project_root, plan.limits)
+    _path(directory, destination.name)
+    if destination.exists():
+        raise ContractError(
+            "Aggregate artifacts appeared during capture.", code="artifact_view_collision"
+        )
+    pending.rename(destination)
+    return replace(view, root=destination)
 
 
 def capture_output(

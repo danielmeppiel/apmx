@@ -4,7 +4,7 @@
 | --- | --- |
 | [First contract](#produce-and-assess-a-handoff) | Turn notes into a retained JSON handoff and check source-ID coverage. |
 | [Packaged handoff](packaged-job/README.md) | Let bundled APM prepare a package and its selected skill. |
-| [Software factory](software-factory/README.md) | Run planning, specification, build, test and review with explicit artifact handoffs. |
+| [Software factory](software-factory/README.md) | Let APMX infer and run planning, specification, build, test and review from artifact dependencies. |
 
 These are authored, secret-free fixtures, not copies of a governed project.
 Copy this directory to a fresh disposable directory outside another Git
@@ -74,8 +74,12 @@ and record are still saved; the host-isolation limit is not a check failure.
 
 The profile requires positively established no-policy
 projects. Governed/unresolved-policy projects, command
-leaves, `budget`, `sandbox`, captures, output alternatives and composed jobs
-refuse before inference. Passing checks never authorizes merge or delivery.
+leaves, `budget`, `sandbox`, captures and output alternatives refuse before
+inference. To run a factory, select its directory; APMX infers the connections
+between contracts without a pipeline file or chain flag. The interactive
+local-run confirmation, or explicit automation flags, permits only fully
+checked native outputs to advance. It never permits failed or incomplete
+checks to be ignored. Passing checks never authorizes merge or delivery.
 
 On Windows replace `python3` check commands with a native Python executable,
 using quoted forward-slash paths. Git for Windows' `sh.exe` runs checks;

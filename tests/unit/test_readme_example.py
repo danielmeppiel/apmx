@@ -1,4 +1,4 @@
-"""Keep the README's contract example runnable with its supplied checker."""
+"""Keep the first-contract walkthrough runnable with its supplied checker."""
 
 import json
 import re
@@ -16,12 +16,37 @@ ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples/contracts/first-contract"
 
 
+def test_readme_first_command_runs_a_factory() -> None:
+    """Run the factory itself, without a chain switch or terminal-step selection."""
+    snippets = re.findall(r"```(?:sh|bash)\n(.*?)\n```", (ROOT / "README.md").read_text(), re.S)
+    assert snippets
+    command = shlex.split(snippets[0])
+    assert command[0] == "apmx"
+    assert Path(command[1]).parts == ("feature-factory",)
+    assert len(command) == 4
+    assert set(command[2:]) == {"--on", "copilot"}
+    assert command[command.index("--on") + 1] == "copilot"
+
+
+def test_readme_teaches_the_real_build_contract_before_running() -> None:
+    """Keep the contract introduction concrete and aligned with the hero factory."""
+    readme = (ROOT / "README.md").read_text()
+    snippets = re.findall(r"```(?:markdown|yaml)\n---\n(.*?)\n---", readme, re.S)
+    assert len(snippets) == 1
+    documented = yaml.safe_load(snippets[0])
+    build = ROOT / "examples/contracts/software-factory/contracts/build.contract.md"
+    actual = yaml.safe_load(build.read_text().split("---", 2)[1])
+    assert documented == actual
+    assert readme.index(snippets[0]) < readme.index("```sh")
+
+
 @pytest.mark.parametrize("omit_source", [False, True])
 def test_readme_contract_uses_the_complete_example_checker(
-    tmp_path: Path, omit_source: bool,
+    tmp_path: Path,
+    omit_source: bool,
 ) -> None:
     """Exercise the documented command, including its required positional arguments."""
-    snippets = re.findall(r"```markdown\n(.*?)\n```", (ROOT / "README.md").read_text(), re.S)
+    snippets = re.findall(r"```markdown\n(.*?)\n```", (EXAMPLE / "README.md").read_text(), re.S)
     assert len(snippets) == 1 and snippets[0].startswith("---\n")
     documented = yaml.safe_load(snippets[0].split("---", 2)[1])
     actual = yaml.safe_load((EXAMPLE / "handoff.contract.md").read_text().split("---", 2)[1])
@@ -38,8 +63,12 @@ def test_readme_contract_uses_the_complete_example_checker(
     command = shlex.split(documented["verify"]["handoff"])
     assert command[0] == "python3"
     result = subprocess.run(
-        [sys.executable, *command[1:]], cwd=caller, capture_output=True, text=True,
-        timeout=10, check=False,
+        [sys.executable, *command[1:]],
+        cwd=caller,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
     )
     assert result.returncode == (1 if omit_source else 0), result.stdout + result.stderr
     assert (caller / "notes.md").read_bytes() == (EXAMPLE / "notes.md").read_bytes()

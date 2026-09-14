@@ -1,4 +1,4 @@
-"""One per-command conductor for a captured, assessed agent leaf."""
+"""Canonical lifecycle for one captured, assessed agent leaf."""
 
 import time
 from dataclasses import replace
@@ -123,8 +123,12 @@ def run_contract(
     *,
     logger: ContractLogger,
     allow_advisory: bool = False,
+    consent_source: str = "flag",
+    allow_unproven_inputs: bool | None = None,
 ) -> RunResult:
     """Admit, execute, capture, assess and atomically record one fresh run."""
+    if plan.deferred_inputs:
+        raise ContractError("Preview dependencies cannot be executed.", code="unresolved_inputs")
     if not allow_advisory:
         raise ContractError(
             "Copilot and checks can read or change files, use the network, and use "
@@ -142,13 +146,20 @@ def run_contract(
         source=plan.source,
         imports_root=plan.imports_root,
         apm_backend=plan.apm_backend,
+        deferred_inputs=plan.deferred_inputs,
+        input_bindings=plan.input_bindings,
+        chain_outputs=plan.chain_outputs,
+        input_inventory=plan.input_inventory,
     )
     if current_plan != plan:
         raise ContractError(
             "Contract source, installed context or native prerequisites changed. Plan again.",
             code="plan_changed",
         )
-    store = records.AttemptStore.create(plan)
+    policy = (
+        records.handoff_policy(allow_unproven_inputs) if allow_unproven_inputs is not None else None
+    )
+    store = records.AttemptStore.create(plan, consent_source=consent_source, handoff_policy=policy)
     events = EventEmitter(store.run_id, logger.on_event)
     artifact: Artifact | None = None
     checks: list[CheckObservation] = []
@@ -173,7 +184,7 @@ def run_contract(
             run_directory=str(store.directory),
         )
         events.emit("phase", name="preflight")
-        store.update("preflight", advisory_consent="flag")
+        store.update("preflight")
         snapshot = workspace.capture_workspace(plan, store.directory)
         store.update("execution", baseline=snapshot)
         events.emit("phase", name="execution")
@@ -258,6 +269,9 @@ def run_contract(
     result = RunResult(
         run_id=store.run_id,
         run_directory=store.directory,
+        consent_source=consent_source,
+        handoff_policy=policy,
+        retained_provenance=store.retained_provenance,
         outcome=records.reduce_outcome(artifact, tuple(checks), stop_reason),
         artifact=artifact,
         checks=tuple(checks),
@@ -268,7 +282,7 @@ def run_contract(
     try:
         logger.close()
         store.update("record", transcript_retention=logger.transcript_metadata)
-    except OSError as exc:
+    except (OSError, KeyboardInterrupt) as exc:
         store.fail_finalization(result, exc)
     store.finish(result)
     events.emit("finished", result=result)

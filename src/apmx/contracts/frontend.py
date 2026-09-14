@@ -25,6 +25,8 @@ from .models import (
     LeafPlan,
     Outcome,
     SourceLocation,
+    RetainedInput,
+    FileEntry,
 )
 
 
@@ -171,8 +173,9 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
         except PathTraversalError as exc:
             raise ContractError(str(exc), location=at("imports")) from exc
     if len({name.casefold() for name in imports}) != len(imports):
-        raise ContractError("imports contains duplicate or case-colliding names.",
-                            location=at("imports"))
+        raise ContractError(
+            "imports contains duplicate or case-colliding names.", location=at("imports")
+        )
     return LeafContract(
         path=path,
         source_digest=hashlib.sha256(document.raw).hexdigest(),
@@ -211,6 +214,10 @@ def plan_contract(
     source: ContractSource | None = None,
     imports_root: Path | None = None,
     apm_backend: Mapping[str, str] | None = None,
+    deferred_inputs: tuple[str, ...] = (),
+    input_bindings: tuple[RetainedInput, ...] = (),
+    chain_outputs: tuple[str, ...] = (),
+    input_inventory: tuple[FileEntry, ...] | None = None,
 ) -> LeafPlan:
     """Resolve a bounded leaf using local reads only; no version/inference probe."""
     from ..runtime.registry import get_runtime_descriptor
@@ -276,11 +283,27 @@ def plan_contract(
             "Output overlaps supplied input, source, manifest or checks.", location=location
         )
     size = 0
+    supplied = tuple(binding.artifact.relative_path for binding in input_bindings)
+    if len(set((*deferred_inputs, *supplied))) != len(deferred_inputs) + len(supplied) or not set(
+        (*deferred_inputs, *supplied)
+    ) <= set(contract.needs):
+        raise ContractError(
+            "Deferred/bound inputs must be distinct declared needs.", code="invalid_binding"
+        )
+    from .records import validate_binding
+
+    for binding in input_bindings:
+        validate_binding(binding, root, limits)
+        size += binding.artifact.size
     for name in contract.needs:
+        if name in deferred_inputs or name in supplied:
+            continue
         info = _regular(root / name, root, contract.locations.get("needs", source_location))
         size += info.st_size
         if info.st_size > limits.file_bytes or size > limits.input_bytes:
             raise ContractError("Selected inputs exceed the byte limit.", code="input_limit")
+    if size > limits.input_bytes:
+        raise ContractError("Selected inputs exceed the byte limit.", code="input_limit")
     admit_caller_policy(root, limits=limits)
     package, _, manifest_digest = read_project_manifest(
         source_root, limits, allow_missing=source is None
@@ -340,4 +363,8 @@ def plan_contract(
         apm_backend=apm_backend or (source.apm_backend if source else None),
         consumer_manifest_digest=consumer_manifest_digest,
         consumer_lock_digest=consumer_lock_digest,
+        deferred_inputs=deferred_inputs,
+        input_bindings=input_bindings,
+        chain_outputs=chain_outputs,
+        input_inventory=input_inventory,
     )

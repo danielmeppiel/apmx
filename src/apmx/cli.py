@@ -1,4 +1,4 @@
-"""Companion launcher for one explicit local or packaged contract."""
+"""Native entrypoint for local factory directories and explicit leaf contracts."""
 
 from pathlib import Path
 
@@ -8,6 +8,7 @@ from apmx.commands.contracts import invoke_contract
 from apmx.contracts.frontend import admit_caller_policy
 from apmx.contracts.models import ContractError, ContractLimits, Outcome
 from apmx.core.contract_logger import ContractLogger
+from apmx.contracts.records import preparation_failure
 from apmx.core.output_mode import configure_output_mode, detect_output_mode
 from apmx.core.tls_trust import configure_process_tls_trust
 from apmx.install.contract_source import prepare_contract_source
@@ -18,19 +19,26 @@ from apmx.version import get_version
     name="apmx",
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
-        "Run one explicit CONTRACT file; no script or default-job fallback.\n\n"
+        "Run a factory directory or one .contract.md file. "
+        "A factory's input and output files determine which steps run first.\n\n"
         "Package contracts are package-relative .contract.md paths. Inputs and "
-        "retained evidence belong to the calling directory, not the package."
+        "retained evidence belong to the calling directory, not the package. "
+        "A factory directory is its own input, policy and retained-evidence root."
     ),
 )
-@click.argument("contract", type=str)
+@click.argument("contract", type=str, metavar="FACTORY_OR_CONTRACT")
 @click.option(
     "--from", "package_ref", metavar="PACKAGE_REF", help="Select a contract from an APM package."
 )
-@click.option("--on", "harness", required=True, type=str, help="Native harness.")
-@click.option("--model", metavar="MODEL", help="Native model identifier.")
+@click.option("--on", "harness", required=True, type=str, help="Agent CLI to use (copilot).")
+@click.option("--model", metavar="MODEL", help="Model to use through the selected agent CLI.")
 @click.option(
-    "--plan", "planning", is_flag=True, help="Inspect locally, offline and without execution."
+    "--plan", "planning", is_flag=True, help="Show steps and checks without running or downloading."
+)
+@click.option(
+    "--allow-unproven-inputs",
+    is_flag=True,
+    help="For factories, permit fully checked native UNPROVEN handoffs; not certification.",
 )
 @click.option(
     "--allow-host-access",
@@ -52,19 +60,28 @@ def main(
     planning: bool,
     allow_advisory: bool,
     verbose: bool,
+    allow_unproven_inputs: bool,
 ) -> None:
-    """Dispatch one explicitly selected contract through the canonical boundary."""
+    """Dispatch an explicit directory or file through canonical admission."""
     configure_output_mode(detect_output_mode([]))
     configure_process_tls_trust()
     ctx.ensure_object(dict)
     logger = ContractLogger(verbose=verbose)
     caller_root = Path.cwd().resolve()
     limits = ContractLimits()
+    result = None
     try:
-        if not contract.endswith(".contract.md"):
-            raise click.UsageError("CONTRACT must name one explicit .contract.md file.")
+        selected = Path(contract).expanduser().absolute()
+        factory_root = selected if package_ref is None and selected.is_dir() else None
+        if factory_root is None and not contract.endswith(".contract.md"):
+            raise click.UsageError(
+                "Select a local factory directory or one explicit .contract.md file. "
+                "--from supports package-relative leaf contracts only."
+            )
+        if allow_unproven_inputs and factory_root is None:
+            raise click.UsageError("--allow-unproven-inputs requires a factory directory.")
         if package_ref is None:
-            invoke_contract(
+            result = invoke_contract(
                 ctx,
                 contract,
                 harness=harness,
@@ -73,7 +90,12 @@ def main(
                 planning=planning,
                 allow_advisory=allow_advisory,
                 logger=logger,
+                factory_root=factory_root,
+                allow_unproven_inputs=allow_unproven_inputs,
             )
+            if result is not None:
+                logger.render_chain_result(result)
+                ctx.exit(int(result.outcome))
             return
         admit_caller_policy(caller_root, limits=limits)
         if not planning and not allow_advisory:
@@ -87,12 +109,16 @@ def main(
             )
         logger.start_activity("Preparing package", announce=False)
         with prepare_contract_source(
-            package_ref, contract, caller_root=caller_root, planning=planning, limits=limits,
+            package_ref,
+            contract,
+            caller_root=caller_root,
+            planning=planning,
+            limits=limits,
             on_preparation=logger.on_preparation,
             verbose=verbose,
         ) as source:
             logger.stop_activity()
-            invoke_contract(
+            result = invoke_contract(
                 ctx,
                 contract,
                 harness=harness,
@@ -103,22 +129,32 @@ def main(
                 source=source,
                 logger=logger,
             )
+        if result is not None:
+            logger.render_chain_result(result)
+            ctx.exit(int(result.outcome))
     except ContractError as exc:
-        logger.render_error(exc)
-        ctx.exit(int(exc.outcome))
+        error = preparation_failure(result, exc)
+        logger.render_error(error)
+        ctx.exit(int(error.outcome))
     except OSError:
         logger.render_error(
-            ContractError(
-                "Package preparation failed. Check source permissions and available space.",
-                code="source_filesystem",
+            preparation_failure(
+                result,
+                ContractError(
+                    "Package preparation failed. Check source permissions and available space.",
+                    code="source_filesystem",
+                ),
             )
         )
         ctx.exit(int(Outcome.HALTED))
     except KeyboardInterrupt:
         logger.render_error(
-            ContractError(
-                "Package preparation interrupted. Retry after inspecting any retained run record.",
-                code="cancelled",
+            preparation_failure(
+                result,
+                ContractError(
+                    "Package preparation interrupted. Retry after inspecting any retained run record.",
+                    code="cancelled",
+                ),
             )
         )
         ctx.exit(int(Outcome.HALTED))

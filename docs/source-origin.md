@@ -209,6 +209,59 @@ This avoids premature halts for native clients that close after their leader.
 Timeout/cancellation still request immediate termination, genuinely lingering
 processes still halt, and success still requires confirmed group/job cleanup.
 
+## Factory execution
+
+A directory argument selects a factory: its contracts, trusted check resources
+and supplied inputs. That directory is the caller root for policy, capture and
+evidence; temporary preparation never substitutes a policy-free root.
+APMX matches fixed `needs` paths to `produces` paths and resolves all terminal
+outputs in the selected factory. Shared prerequisites run once. There is no
+chain flag, required final-contract selection, pipeline manifest or name registry.
+An explicit `.contract.md` argument retains single-contract behavior.
+
+`--plan` previews the graph without installation, checks or model calls.
+A contract that produces a planning document is an ordinary execution step,
+not the graph resolver.
+
+Execution calls the existing leaf engine directly and retains its ordinary
+records. Downstream inputs come from exact captured predecessor artifacts,
+not a model-printed path, an arbitrary existing file, or a guessed latest run.
+Missing roots, ambiguous producers and cycles refuse before inference.
+The original caller's policy remains authoritative during private preparation.
+
+The aggregate `.apm/chains/<id>/record.json` links the actual leaf runs and their
+input receipts. After all steps are admitted, its `artifacts/` view collects
+exact retained outputs, required starting inputs and captured checks. The
+canonical capture owner records every file's hash and origin, builds the view
+privately, then publishes it by rename. Source inventories are revalidated,
+including retained package manifests, locks and their original copies, before
+handoff admission and whenever a receipt is reused. Temporary source roots need
+not survive. Missing or changed evidence cannot authorize downstream work.
+
+Without an explicit local-development exception, the handoff policy requires
+VERIFIED. The current native profile cannot emit that result. For an interactive
+factory invocation without consent flags, APMX describes the local host access,
+checked-output handoffs and UNPROVEN result, then asks for confirmation. The
+default is no. No installation or model work starts before a positive answer.
+This permission is invocation-local and recorded, not remembered globally.
+
+Automation supplies `--allow-host-access --allow-unproven-inputs` explicitly.
+Pipes, CI, previews and invocations with explicit consent flags never prompt.
+Host-access-only keeps the strict handoff policy; it does not grant an additional
+permission. Existing single-contract consent behavior is unchanged.
+
+The local exception never changes a leaf outcome or elevates the factory beyond
+UNPROVEN. Every required check must pass on the retained subject; missing output,
+undecided checks, rejection, changed bytes and failed cleanup still block
+dependent execution.
+
+The native adapter cannot observe a complete read set, so chained producers run
+afresh. Existing output files and modification times never authorize reuse.
+The conductor exists only for the invocation: no service, watch loop, retries,
+capture fan-out, parallel scheduling, merge or deployment is introduced.
+This is the fixed-path native profile, not implementation of ASF's protected
+runner, signed evidence, spend caps or effect contracts.
+
 ## State and format compatibility
 
 `apm.yml`, `apm.lock.yaml`, legacy `apm.lock`, `apm_modules` and package `.apm`

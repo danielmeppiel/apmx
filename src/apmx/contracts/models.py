@@ -61,6 +61,7 @@ class ContractLimits:
     cleanup_seconds: float = 6
     frame_bytes: int = 1024 * 1024
     transcript_bytes: int = 4 * 1024 * 1024
+    chain_contracts: int = 64
 
 
 @dataclass(frozen=True)
@@ -156,6 +157,10 @@ class LeafPlan:
     apm_backend: Mapping[str, str] | None = None
     consumer_manifest_digest: str | None = None
     consumer_lock_digest: str | None = None
+    deferred_inputs: tuple[str, ...] = ()
+    input_bindings: tuple["RetainedInput", ...] = ()
+    chain_outputs: tuple[str, ...] = ()
+    input_inventory: tuple["FileEntry", ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +180,16 @@ class CapturedInput:
     source_root: Path
     source_relative_path: str
     entry: FileEntry
+
+
+@dataclass(frozen=True)
+class ArtifactView:
+    """A retained aggregate projection, with exact bytes and captured origins."""
+
+    root: Path
+    files: tuple[FileEntry, ...]
+    digest: str
+    sources: tuple[CapturedInput, ...]
 
 
 @dataclass(frozen=True)
@@ -198,6 +213,15 @@ class Artifact:
     path: Path
     sha256: str
     size: int
+
+
+@dataclass(frozen=True)
+class RetainedInput:
+    """An assessed artifact bound to its finalized, caller-owned leaf record."""
+
+    artifact: Artifact
+    record_path: Path
+    record_sha256: str
 
 
 @dataclass(frozen=True)
@@ -251,6 +275,21 @@ class RunResult:
     stop_reason: str | None = None
     requested_model: str | None = None
     observed_models: tuple[str, ...] = ()
+    consent_source: str | None = None
+    handoff_policy: str | None = None
+    retained_provenance: tuple[FileEntry, ...] = ()
+
+
+@dataclass(frozen=True)
+class ChainResult:
+    """Persisted aggregate; a completed native chain remains UNPROVEN."""
+
+    chain_id: str
+    record_path: Path
+    outcome: Outcome
+    complete: bool
+    runs: tuple[RunResult, ...]
+    stop_reason: str | None = None
 
 
 @dataclass(frozen=True)

@@ -5,16 +5,17 @@ needs:
   - spec.json
   - shipping.py
   - tests.json
-  - evidence.json
 produces: review.json
 verify:
   contract: python3 -I -B checks/verify.py review
 ---
 Give a fresh-context advisory review of this tiny shipping-library change.
 Target: native Copilot through apmx. Read all supplied inputs. Compare the plan,
-specification, actual implementation and tests to request.json. evidence.json
-contains host-derived observations; do not invent checks, compute hashes in
-prose, or treat the earlier agent's completion claim as proof.
+specification, actual implementation and tests to request.json. You receive
+ordinary artifacts, not runtime records. Assess the code and test coverage;
+do not claim executions or passed checks, compute hashes in prose, or treat
+an earlier agent's completion claim as proof. APMX retains runtime observations
+separately; they are not an input to your advisory judgment.
 
 Write review.json with exactly these fields:
 
@@ -23,7 +24,7 @@ Write review.json with exactly these fields:
   "advisory": true,
   "assurance": "UNPROVEN",
   "recommendation": "no_findings",
-  "summary": "Your assessment, grounded in the supplied implementation and observations",
+  "summary": "Your assessment, grounded in the supplied implementation and test cases",
   "findings": [],
   "limitations": ["Separate passing checks do not establish host isolation or production readiness."],
   "follow_up": []

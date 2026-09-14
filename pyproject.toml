@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "apmx"
 version = "0.2.0"
-description = "Run one packaged contract through native Copilot with independent checks"
+description = "Run AI software factories with independent checks and evidence"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"

@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING, BinaryIO
 
 from apmx.contracts import records
 from apmx.contracts.events import (
-    HEARTBEAT_SECONDS, ApmInstallEvent, ApmOutputEvent, PreparationEvent,
+    HEARTBEAT_SECONDS,
+    ApmInstallEvent,
+    ApmOutputEvent,
+    PreparationEvent,
 )
 from apmx.contracts.models import (
     CheckObservation,
@@ -23,6 +26,7 @@ from apmx.contracts.models import (
     Outcome,
     RunEvent,
     RunResult,
+    ChainResult,
 )
 from apmx.contracts.stream import safe_text
 from apmx.utils import console
@@ -31,19 +35,37 @@ from apmx.utils.paths import portable_link_relpath, portable_relpath
 
 if TYPE_CHECKING:
     from rich.status import Status
+    from apmx.contracts.resolution import ChainPlan, Graph
 
 
 class _ProseDisplay:
     """Readable ASCII typography without rewriting literal code or path-like tokens."""
 
-    _punctuation = str.maketrans({
-        "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
-        "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"',
-        "\u00ab": '"', "\u00bb": '"', "\u2039": "'", "\u203a": "'",
-        "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
-        "\u2014": "--", "\u2015": "--", "\u2026": "...",
-        "\u00a0": " ", "\u202f": " ",
-    })
+    _punctuation = str.maketrans(
+        {
+            "\u2018": "'",
+            "\u2019": "'",
+            "\u201a": "'",
+            "\u201b": "'",
+            "\u201c": '"',
+            "\u201d": '"',
+            "\u201e": '"',
+            "\u201f": '"',
+            "\u00ab": '"',
+            "\u00bb": '"',
+            "\u2039": "'",
+            "\u203a": "'",
+            "\u2010": "-",
+            "\u2011": "-",
+            "\u2012": "-",
+            "\u2013": "-",
+            "\u2014": "--",
+            "\u2015": "--",
+            "\u2026": "...",
+            "\u00a0": " ",
+            "\u202f": " ",
+        }
+    )
 
     def __init__(self) -> None:
         self.fence: tuple[str, int] | None = None
@@ -56,7 +78,9 @@ class _ProseDisplay:
         fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", text.removesuffix("\r"))
         if self.fence:
             if (
-                fence and fence[1][0] == self.fence[0] and len(fence[1]) >= self.fence[1]
+                fence
+                and fence[1][0] == self.fence[0]
+                and len(fence[1]) >= self.fence[1]
                 and not fence[2].strip(" \t")
             ):
                 self.fence = None
@@ -77,10 +101,14 @@ class _ProseDisplay:
             elif self.inline:
                 parts.append(segment)
             else:
-                parts.append("".join(
-                    token if re.search(r"[/\\]|\.\w", token) else token.translate(self._punctuation)
-                    for token in re.split(r"([ \t]+)", segment)
-                ))
+                parts.append(
+                    "".join(
+                        token
+                        if re.search(r"[/\\]|\.\w", token)
+                        else token.translate(self._punctuation)
+                        for token in re.split(r"([ \t]+)", segment)
+                    )
+                )
         return "".join(parts)
 
 
@@ -147,6 +175,7 @@ class ContractLogger:
         self._last_activity = 0.0
         self._status: Status | None = None
         self._caller_root = Path.cwd()
+        self._display_root: Path | None = None
         self._produces = "saved output"
         self._activity_label = "Working"
         self._checks_heading_shown = False
@@ -319,7 +348,7 @@ class ContractLogger:
         path = Path(path)
         if not path.is_absolute():
             path = self._caller_root / path
-        return portable_relpath(path, self._caller_root)
+        return portable_relpath(path, self._display_root or self._caller_root)
 
     def _disable_human_output(self) -> None:
         self._human_enabled = False
@@ -389,13 +418,16 @@ class ContractLogger:
             self.start_activity(message, announce=False)
             if not self._preparation_notice_shown:
                 self._write(
-                    "Temporary workspace; your project files are unchanged.", severity="detail",
+                    "Temporary workspace; your project files are unchanged.",
+                    severity="detail",
                 )
                 self._preparation_notice_shown = True
             if event.frozen:
                 self._write("Using locked versions.", severity="notice")
             self._write(
-                "Running: apm install (in a temporary workspace)", severity="detail", detail=True,
+                "Running: apm install (in a temporary workspace)",
+                severity="detail",
+                detail=True,
             )
             options = "--only apm --target agent-skills --no-trust-bin"
             if event.frozen:
@@ -404,7 +436,8 @@ class ContractLogger:
                 options += " --verbose"
             self._write(
                 f"APM options: {options}",
-                severity="detail", detail=True,
+                severity="detail",
+                detail=True,
             )
             return
         if isinstance(event, ApmOutputEvent):
@@ -421,38 +454,63 @@ class ContractLogger:
             origin = path if name == package else f"from {package}; {path}"
             self._write(
                 f"{item.kind.capitalize()}: {name} ({origin})",
-                severity="detail", detail=True,
+                severity="detail",
+                detail=True,
             )
 
     def _apm_output(self, event: ApmOutputEvent) -> None:
         text = event.text.strip()
-        if text.startswith("[x]") or re.search(r"\b(error|failed|failure|fatal|denied)\b", text, re.I):
+        if text.startswith("[x]") or re.search(
+            r"\b(error|failed|failure|fatal|denied)\b", text, re.I
+        ):
             severity = "error"
-        elif event.overflow or text.startswith("[!]") or re.search(r"\b(warning|warn)\b", text, re.I):
+        elif (
+            event.overflow or text.startswith("[!]") or re.search(r"\b(warning|warn)\b", text, re.I)
+        ):
             severity = "warning"
         else:
             severity = "info"
-        detail = event.stream == "stdout" and severity == "info" and text.startswith((
-            "[*] Created apm.yml", "[i] Targets", "[*] Updated apm.yml",
-            "[>] Installing ", "[+] ", "|-- ", "[i] Added apm_modules/",
-            "[i] Skipped inactive experimental resolver ", "lockfile reconciliation.",
-            "+- To include it", "for this install.", "Added ", "Parsed apm.yml:",
-            "Resolved dependency tree:", "Phase:", "Copilot native registration:", "[#] Perf:",
-            "Generated apm.lock.yaml",
-        ))
+        detail = (
+            event.stream == "stdout"
+            and severity == "info"
+            and text.startswith(
+                (
+                    "[*] Created apm.yml",
+                    "[i] Targets",
+                    "[*] Updated apm.yml",
+                    "[>] Installing ",
+                    "[+] ",
+                    "|-- ",
+                    "[i] Added apm_modules/",
+                    "[i] Skipped inactive experimental resolver ",
+                    "lockfile reconciliation.",
+                    "+- To include it",
+                    "for this install.",
+                    "Added ",
+                    "Parsed apm.yml:",
+                    "Resolved dependency tree:",
+                    "Phase:",
+                    "Copilot native registration:",
+                    "[#] Perf:",
+                    "Generated apm.lock.yaml",
+                )
+            )
+        )
         displayed = event.text
         if not self.verbose:
             for original, label in self._apm_paths:
                 displayed = displayed.replace(original, label)
             if displayed.startswith("[>] Resolving ") and displayed.endswith("..."):
-                reference = displayed[len("[>] Resolving "):-3]
+                reference = displayed[len("[>] Resolving ") : -3]
                 if Path(reference).is_absolute():
                     relative = portable_link_relpath(reference, self._caller_root)
                     if relative is not None:
                         displayed = f"[>] Resolving {relative}..."
         self._write(
-            event.text, attribution="APM stderr" if event.stream == "stderr" else "APM",
-            severity="detail" if detail else severity, detail=detail,
+            event.text,
+            attribution="APM stderr" if event.stream == "stderr" else "APM",
+            severity="detail" if detail else severity,
+            detail=detail,
             display_message=displayed,
         )
 
@@ -526,7 +584,8 @@ class ContractLogger:
     def _skill_loaded(self, event: RunEvent) -> None:
         self._write(
             f"Loaded skill: {self._field(event, 'name')}",
-            severity="notice", attribution=self._attribution(event),
+            severity="notice",
+            attribution=self._attribution(event),
         )
 
     def _activity(self, event: RunEvent) -> None:
@@ -854,3 +913,112 @@ class ContractLogger:
             self._write(
                 f"Source: {self._path(error.location.path)}:{error.location.line}:{error.location.column}"
             )
+
+    def new_leaf(self) -> ContractLogger:
+        """Each leaf owns its transcript and finalization lifecycle."""
+        leaf = ContractLogger(verbose=self.verbose)
+        leaf._display_root = self._display_root
+        return leaf
+
+    def select_factory_root(self, root: Path) -> None:
+        self._display_root = self._caller_root
+        self._caller_root = root
+
+    def can_confirm_factory(self) -> bool:
+        """The prompt uses stdout; both it and stdin must be interactive."""
+        return not os.environ.get("CI") and sys.stdin.isatty() and sys.stdout.isatty()
+
+    def render_factory_work(self, graph: Graph) -> None:
+        self.stop_activity()
+        self._write(f"Factory: {self._path(graph.root)}", severity="heading", indent=0)
+        self._write(
+            f"Resolved {len(graph.order)} contracts; their file dependencies determine order."
+        )
+        for index, contract in enumerate(graph.order, start=1):
+            self._write(
+                f"{index}. {contract.path.relative_to(graph.root).as_posix()} -> {contract.produces}"
+            )
+            self._write("Checks: " + ", ".join(check.name for check in contract.checks), indent=4)
+        outputs = [contract.produces for contract in graph.order if contract.path in graph.targets]
+        self._write("Final outputs: " + ", ".join(outputs))
+
+    def confirm_factory(self) -> bool:
+        """Ask once, default NO, without conflating EOF with interruption."""
+        self._write("Copilot and checks can use host files, network and available logins.")
+        self._write("Package dependencies may be installed before execution.")
+        self._write("Only outputs whose required checks all passed can move to another step.")
+        self._write("Local execution is not isolated; results remain UNPROVEN.")
+        self._write("Model calls may incur charges under your configured account.")
+        self._write("Run this factory locally? [y/N]", indent=0)
+        if not self._human_enabled:
+            return False
+        try:
+            answer = sys.stdin.readline(32)
+        except EOFError:
+            return False
+        return answer.endswith("\n") and answer.strip().casefold() in {"y", "yes"}
+
+    def chain_node(self, index: int, count: int, contract: Path) -> None:
+        self._write(f"Step {index}/{count}: {self._path(contract)}", severity="heading", indent=0)
+
+    def render_chain_plan(self, plan: ChainPlan) -> None:
+        self._write(f"Factory preview: {len(plan.nodes)} contracts", severity="heading", indent=0)
+        self._write(f"{plan.nodes[0].plan.harness} / {plan.nodes[0].plan.model or 'default model'}")
+        self._write("Nothing will execute or download. Dependency resolution uses no model calls.")
+        policy = (
+            "fully checked local outputs (--allow-unproven-inputs); still UNPROVEN"
+            if plan.allow_unproven_inputs
+            else "strict VERIFIED-only; UNPROVEN inputs block"
+        )
+        self._write(f"Handoff policy: {policy}")
+        terminals = [
+            node.plan.contract.produces
+            for node in plan.nodes
+            if node.plan.contract.path in plan.graph.targets
+        ]
+        self._write("Final outputs: " + ", ".join(terminals))
+        for index, node in enumerate(plan.nodes, start=1):
+            contract = node.plan.contract
+            name = contract.path.relative_to(plan.graph.root).as_posix()
+            self._write(f"{index}. {name} -> {contract.produces}")
+            for value in contract.needs:
+                kind = (
+                    "from an earlier step"
+                    if value in node.plan.deferred_inputs
+                    else "starting file"
+                )
+                self._write(f"Input: {value} ({kind})", indent=4)
+            self._write("Checks: " + ", ".join(check.name for check in contract.checks), indent=4)
+        self._write("Every run starts fresh; APMX does not cap model charges.")
+        self._write(
+            f"Limits: {plan.nodes[0].plan.limits.chain_contracts} discovered contracts; "
+            "one attempt per step, no retries."
+        )
+        self._write(
+            "Without --plan or consent flags, an interactive factory invocation asks for "
+            "confirmation before execution."
+        )
+        if not plan.allow_unproven_inputs:
+            self._write(
+                "For trusted local automation, explicitly add --allow-host-access and "
+                "--allow-unproven-inputs to permit fully checked native handoffs. "
+                "Native results remain UNPROVEN."
+            )
+
+    def chain_stopped(self, reason: str) -> None:
+        self._write(reason, severity="warning", indent=0)
+
+    def render_chain_result(self, result: ChainResult) -> None:
+        self._write(
+            f"apmx factory: {result.outcome.name} ({'complete' if result.complete else 'stopped'})",
+            severity="warning" if result.outcome == Outcome.UNPROVEN else "error",
+            indent=0,
+        )
+        if result.complete:
+            self._write("All selected checks completed; no isolation or production certification.")
+            self._write(f"Artifacts: {self._path(result.record_path.parent / 'artifacts')}")
+        else:
+            self._write(
+                f"Stop: {result.stop_reason}. Inspect the record before starting another run."
+            )
+        self._write(f"Factory record: {self._path(result.record_path)}")

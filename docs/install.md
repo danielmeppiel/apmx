@@ -16,7 +16,7 @@ requires an authenticated GitHub account with repository access.
 | Route | What you get |
 | --- | --- |
 | [Published v0.2.0](https://github.com/danielmeppiel/apmx/releases/tag/v0.2.0) | A complete native bundle with APM and the single-contract runner. |
-| [Current source checkout](#run-the-current-source-checkout) | This branch's newer native skill discovery, preparation logs, readable prose, and examples. These changes are not yet in v0.2.0. |
+| [Current source checkout](#run-the-current-source-checkout) | Factory execution, native skill discovery and improved logs. These changes are not yet in v0.2.0. |
 
 The published release was built from commit
 `2f0356d3e7ebb07f62911768198f9b0cd120cca9`. This document does not imply a new
@@ -184,11 +184,14 @@ uv run --frozen --extra build python scripts/release.py build --target macos-arm
 
 Use the target for your current machine; this is not cross-compilation.
 
-## Before running a contract
+## Before running
 
-Run only contracts you trust. `--allow-host-access` permits Copilot, checks and
-package preparation to use host files, network and available login details.
-Native tool restrictions are not a sandbox.
+Run only factories and contracts you trust. Execution permits Copilot, checks
+and package preparation to use host files, network and available login details.
+Native tool restrictions are not a sandbox. A factory asks for confirmation in
+an interactive terminal; single contracts require `--allow-host-access`.
+The [factory guide](../examples/contracts/software-factory/README.md#automation)
+documents explicit permissions for automation.
 
 Use a fresh disposable caller for the examples, outside a Git repository with a
 remote or configured policy. Do not remove a real project's remotes or policy
@@ -202,7 +205,7 @@ verify:
   handoff: '"C:/Program Files/Python312/python.exe" -I checks/check_handoff.py handoff.json notes.md'
 ```
 
-The [first contract walkthrough](../README.md#run-your-first-contract) and
+The [first contract walkthrough](../examples/contracts/first-contract/README.md) and
 [packaged handoff](../examples/contracts/packaged-job/README.md) explain their
 specific checker arguments.
 
