@@ -1,148 +1,199 @@
 # apmx
 
-Run **one explicit contract** through native GitHub Copilot, retain its output,
-and assess that exact output using independently captured checks.
+**Run a Copilot task with declared inputs, one output file, and checks you control.**
 
-This private standalone project bundles official APM for package management;
-no separate APM installation or experimental activation is required.
-It is derived from Microsoft's MIT-licensed APM contract engine; see
-[source origin and migration boundaries](docs/source-origin.md).
+Instead of stopping at "the agent says it's done," keep the output and a record
+of what separate checks observed. APMX runs one Markdown contract through
+GitHub Copilot CLI. For packaged tasks, its bundled APM prepares the dependencies
+and selected context; you do not install APM separately.
 
-## Install a private release
+[First run](#run-your-first-contract) | [Install](docs/install.md) |
+[Software factory](examples/contracts/software-factory/README.md) |
+[Contract examples](examples/contracts/README.md)
 
-Use an authenticated GitHub CLI account with access to this private repository.
-Choose a published version from [Releases](https://github.com/danielmeppiel/apmx/releases).
-For `v0.2.0`, once published, on Apple Silicon macOS:
+**Status:** private, MIT-licensed standalone project. This README describes the
+current checkout. [v0.2.0 is published](https://github.com/danielmeppiel/apmx/releases/tag/v0.2.0),
+but predates the newer native skill discovery, preparation logs and factory
+example. Use a [matching source installation](docs/install.md#run-the-current-source-checkout)
+for the full walkthrough, not just a binary with the same version string.
 
-```sh
-version=0.2.0
-target=macos-arm64
-install_dir="$HOME/.local/share/apmx/$version"
-archive="apmx-$version-$target.tar.gz"
-mkdir -p "$install_dir" &&
-gh release download "v$version" --repo danielmeppiel/apmx \
-  --pattern "$archive" --pattern "$archive.sha256" --dir "$install_dir" &&
-(cd "$install_dir" && shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive") &&
-export PATH="$install_dir/apmx-$target:$PATH" &&
-apmx --version
-```
+## Run your first contract
 
-Keep the **entire extracted folder**, including `_internal` and `libexec/apm/`
-with the backend's separate `_internal`; do not copy only the executable.
-APM 0.30.0 is pinned inside the archive; apmx never selects a host APM from PATH.
-Available target names are `linux-x86_64`, `linux-arm64`,
-`macos-x86_64`, `macos-arm64`, and `windows-x86_64` (ZIP rather than tar.gz).
-Checksums detect changed download bytes; they are not publisher signatures.
-These releases have **no publisher signing or macOS notarization**.
+Turn three source notes into a `handoff.json` file with a summary and caution
+for each note. The example includes the input, contract and Python checker.
 
-## Run
+Before starting, have **APMX on PATH, Git, Copilot CLI, and Python 3.12+**
+available. Authenticate Copilot before live execution. Repository access is needed to obtain this private
+checkout. The [installation guide](docs/install.md) covers native archives,
+current source, and platform prerequisites.
 
-Install native GitHub Copilot CLI and Git. Authenticate with Copilot itself.
-Install any tools explicitly required by the selected contract's checks.
-Windows requires native `copilot.exe`, not an npm `.cmd` shim, and Git for
-Windows' `sh.exe` for the same shell check language used on Linux/macOS.
-
-```sh
-# Start in this repository's source checkout; execute in a fresh external caller.
-package="$(pwd -P)/examples/contracts/packaged-job"
-caller="$(mktemp -d "${TMPDIR:-/tmp}/apmx-caller.XXXXXX")"
-cp "$package/caller/notes.md" "$caller/notes.md" &&
-cd "$caller" &&
-apmx --from "$package" contracts/handoff.contract.md \
-  --on copilot --allow-host-access
-```
-
-The example requires Python 3 for its independent checker. Alternatively, place
-your trusted contract and required inputs in a fresh caller outside any Git
-repository and run `apmx job.contract.md --on copilot --allow-host-access`.
-Add `--model MODEL` to explicitly select a supported native model.
-Do not remove remotes or policy configuration from an existing project to make
+**Run only contracts you trust.** Execution uses your host files, network and
+available login details; it is not sandboxed. The example uses a fresh caller
+outside the checkout. Do not remove a real project's remotes or policy to make
 it eligible.
 
-`--plan` only inspects local inputs and installed package/lock state. It neither
-fetches packages nor probes/launches Copilot. Remote execution also accepts an
-explicit HTTPS/SSH Git package reference with a literal revision. An existing
-direct caller lock is replayed exactly; drift is refused rather than repaired.
-`imports` names one or more APM packages, without version selectors. Versions
-belong in `apm.yml` and the consumer's lock, including when the contract itself
-comes from a package. The body can refer to skills supplied by those packages
-by their own names; importing a skill symbol is not a separate API.
-Selected global instructions, root/collection skills, and bounded companion
-resources become explicit context. Other installed dependencies, hooks, agents
-and service configurations do not become producer context.
-For an optional offline preview, add `--plan` and omit `--allow-host-access`.
-A fresh package whose imported skill is not yet prepared returns **UNPROVEN / 21**
-with "Imported context is unresolved offline"; this is not a failed check.
-Execution uses genuine bundled APM to prepare the dependency graph privately,
-without rewriting caller/package manifests or locks. With no consumer manifest,
-this is an ephemeral resolution, not a durable caller lock.
+From this checkout's root, on macOS or Linux:
 
-**Run only contracts you trust.** `--allow-host-access` permits the native producer
-and checks, plus APM package preparation, to use host files, network and available
-login details. Unchanged APM may bootstrap its user configuration and version
-cache. apmx does not rewrite HOME or copy credential profiles. Native tool
-restrictions are not a sandbox. Policy admission remains fail-closed: configured,
-disabled or unresolved remote governance is unsupported.
+```sh
+caller="$(mktemp -d "${TMPDIR:-/tmp}/apmx-first.XXXXXX")" &&
+cp -R examples/contracts/first-contract/. "$caller/" &&
+cd "$caller" &&
+apmx handoff.contract.md --on copilot --plan
+```
 
-| Exit | Meaning |
-|---|---|
-| 0 | Help, version, or planning completed; **not** verification success |
-| 20 | REJECTED: a failed independent check |
-| 21 | UNPROVEN: includes passing checks without certified isolation, missing output, incomplete checks, and unsupported assurance/policy requests |
-| 22 | HALTED: operational failure, cancellation or unconfirmed cleanup |
+The preview lists `notes.md`, `handoff.json` and the `handoff` check. Nothing
+executes or downloads. Copilot must be discoverable, but preview success does
+not validate its login, run checker tools or prove that output can be produced.
+If the preview succeeds and you are ready for host execution, run the same contract:
 
-Evidence belongs to the calling directory, under `.apm/runs/<run-id>/`.
-Checks run in separate workspaces from immutable captured inputs/resources,
-against the retained output digest. Producer exit zero never certifies a result.
-Verbose `-v` adds observations; only public native commentary is streamed.
-Redaction is best-effort, not a promise that arbitrary output cannot contain
-sensitive content.
+```sh
+apmx handoff.contract.md --on copilot --allow-host-access
+```
 
-## Contract
+This uses your configured Copilot model and may incur usage charges. Add
+`--model MODEL` only to select a model explicitly. For PowerShell, use the
+[Windows first-run commands](docs/install.md#windows-first-run).
+
+The important result lines from a completed run are shown below.
+Output is abbreviated; the run ID is a placeholder:
+
+```text
+apmx: checking handoff.json
+  [+] handoff: passed
+
+[!] apmx: UNPROVEN
+  Contract checks passed; this run was not sandboxed.
+  Output: .apm/runs/<run-id>/artifacts/handoff.json
+  Record: .apm/runs/<run-id>/record.json
+```
+
+**Open the printed Output and Record paths.** They are relative to your caller
+directory. Nothing is copied back over a caller-root `handoff.json`.
+The checker confirms JSON shape and source-ID coverage, not complete factual
+correctness of the summaries.
+
+**Exit 21 is expected here:** the checks passed, but this native run is not sandboxed.
+Do not treat every 21 as success; missing output or incomplete checks also
+produce 21. Read the check results and the [exit-code explanation](#understand-the-result).
+
+## What a contract contains
+
+A `.contract.md` file combines a small YAML header with the task instructions.
+For example, using the notes and checker from the walkthrough:
 
 ```markdown
 ---
 needs: notes.md
 produces: handoff.json
 verify:
-  valid: 'python3 -I checks/check_handoff.py'
+  handoff: python3 checks/check_handoff.py handoff.json notes.md
 ---
-Read notes.md and create handoff.json.
+Read notes.md and write a JSON array to handoff.json.
+Include one object per source ID, with nonempty source_id, summary and caution.
+Explain each fact plainly and name its limitation. Do not invent facts.
 ```
 
-Inputs are caller-relative; packaged contracts/checks are package-relative.
-Select an explicit `.contract.md` file; no default job or script fallback exists.
-[The packaged-job example](examples/contracts/packaged-job/README.md) includes
-a caller, package and imported context. Supported selected context is global
-`.apm/instructions/**/*.instructions.md`, root `SKILL.md`, and collections in
-`.apm/skills/` or `skills/`. Skill `references/`, `assets/`, and `scripts/`
-resources are copied beneath `_apmx_context/import-N/`; scripts remain data,
-not importer-executed commands. Unsupported scoped/native activation refuses.
-The record retains exact package/version, document and resource digests.
-On Windows use a native checker executable with POSIX-style quoting and
-forward slashes, for example
-`'"C:/Program Files/Python312/python.exe" -I checks/check_handoff.py'`.
-Checks use `sh -c` on every platform, preserving compound commands and pipelines.
-Git for Windows' shell is found on PATH or beside its Git installation.
+| Part | Responsibility |
+| --- | --- |
+| `needs` | Files supplied by the **caller**, not a package's example data. |
+| `produces` | The **one file** to retain and assess. |
+| `verify` | Named commands run against that retained output in separate check workspaces. |
+| Body | What Copilot should do; not permission to skip the checks. |
 
-## Develop
+The task's author chooses the checks. A passing command establishes only what
+that check actually tests, not everything the agent claims.
 
-Python 3.12 is the development baseline; binary archives bundle their Python
-runtime, but not Copilot, Git, or contract-specific check tools.
+## How APMX, APM and Copilot fit together
+
+```mermaid
+flowchart LR
+    C["Contract + caller inputs"] --> P["Prepare files and selected context"]
+    A["Bundled APM<br/>when packages are needed"] --> P
+    P --> H["Copilot CLI<br/>produces one file"]
+    H --> O["Retain the output"]
+    O --> V["Run independent checks"]
+    V --> R["Artifact + record + outcome"]
+```
+
+APM owns package installation and resolution. Copilot does the agent work.
+APMX selects the contract, captures inputs and checker resources, supervises
+execution, and records the assessed output's identity and check results.
+It does not apply a patch, commit, merge or deploy the result for you.
+
+For reuse, `--from PACKAGE_REF` selects a package-owned contract and checks.
+Optional `imports` select **APM package names**; their versions belong in
+`apm.yml` and the caller's lock, not the contract's `imports` list.
+Caller manifests and locks remain unchanged during temporary preparation.
+
+In the current checkout, selected skills are discovered natively from
+`.agents/skills/<skill-name>/`; their bodies are not pasted into the prompt.
+`Imported ...` reports preparation. `Copilot > Loaded skill: ...` reports an
+observed native load, not a passed check. Add `--verbose` for APM diagnostics
+and detailed run observations.
+
+[Run the packaged handoff](examples/contracts/packaged-job/README.md) to see
+bundled APM and a selected skill in action. For lock, context and platform
+details, see [runtime boundaries](docs/source-origin.md).
+
+## Chain an AI-native software lifecycle
+
+The [software-factory example](examples/contracts/software-factory/README.md)
+builds a small Python shipping-cost library through separate contracts:
+
+```text
+Planning -> Specification -> Build -> Test -> Review
+ plan.json     spec.json     shipping.py  tests.json  review.json
+```
+
+An ordinary Python driver owns the sequence. It gives each phase a fresh caller,
+admits only consistent records with passing required checks, and copies the
+exact retained artifact bytes into the next phase's inputs. Failed or incomplete
+phases stop the chain; generated tests and AI review cannot certify their own
+success.
+
+This is composition **outside** APMX, not a built-in workflow engine. The
+completed example remains `UNPROVEN`. The driver has no deployment or merge
+step. Its accompanying guide covers the command, phase checks, cost
+implications and result inspection.
+
+## Understand the result
+
+| Exit | Meaning | Next action |
+| --- | --- | --- |
+| `0` | Help, version or completed preview; **not** verified execution. | Continue from a successful preview when ready. |
+| `2` | CLI usage error. | Check `apmx --help` and correct the invocation. |
+| `20` | **REJECTED:** an independent check failed. | Inspect the output and failed check before revising the job. |
+| `21` | **UNPROVEN:** passing native checks, or missing output, incomplete checks or unsupported assurance. | Inspect the check results and remaining limits; never accept 21 alone. |
+| `22` | **HALTED:** operational failure, cancellation or unconfirmed cleanup. | Resolve the reported failure or cleanup problem before retrying. |
+
+Native execution currently cannot produce a certified `VERIFIED` result.
+Tool restrictions and separate workspaces are not a sandbox. Records are
+same-user local observations, not protected or signed evidence; log redaction
+is best-effort. Configured, disabled or unresolved remote governance is
+unsupported and refuses admission rather than bypassing policy.
+
+There is no CLI `--json` option. Each admitted run retains a JSON record under
+the caller's `.apm/runs/` directory. Inspect that record rather than treating
+the agent's narration or process exit zero as an assessment.
+
+## Develop and contribute
+
+Authorized collaborators can [report a problem or discuss a change](https://github.com/danielmeppiel/apmx/issues).
+Include the release or source commit, OS, a minimal secret-free contract,
+expected behavior and observed exit/check results. Review and redact logs
+before sharing them; do not upload credentials or private project inputs.
+
+After [setting up the current source and its APM backend](docs/install.md#run-the-current-source-checkout):
 
 ```sh
-uv sync --extra dev --extra build
-# Select the matching native target from the list above.
-uv run python scripts/release.py provision-apm --target macos-arm64 --output dist/apm-backend
-uv run pytest
-uv run apmx --help
+uv sync --frozen --extra dev --extra build
+uv run --frozen --extra dev --extra build python -m pytest tests/unit tests/release -q
+uv run --frozen --extra dev --extra build ruff check src/ tests/
 ```
 
-Dependencies resolve from public PyPI. Protocol fixtures need no AI credentials
-and are not live model inference; package tests use the genuine released APM
-binary, not a fake installer. Source checkouts default to `dist/apm-backend/`;
-`APMX_APM_BACKEND` may point to an explicitly provisioned absolute executable
-path for source/wheel development. Frozen releases ignore that override.
-The release pipeline independently checks
-downloaded archive bytes on matching platforms; fixture results do not establish
-publisher signing or a sandbox.
+Protocol fixtures do not perform live model inference. Keep live runs explicit
+and distinguish them from deterministic tests.
+
+APMX is an independent MIT-licensed extraction from Microsoft APM, not an
+official Microsoft standalone release. [Source origin](docs/source-origin.md) |
+[License](LICENSE) | [Notices](NOTICE)

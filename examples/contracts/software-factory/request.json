@@ -1,0 +1,13 @@
+{
+  "task": "shipping-cost",
+  "goal": "Build a tiny dependency-free Python shipping quote library, then independently test and review it.",
+  "interface": "shipping_cost(weight_grams) returns integer cents",
+  "requirements": {
+    "types": "Accept exact Python integers, not booleans or other types.",
+    "range": "Accept weights from 1 through 5000 grams, inclusive.",
+    "rates": "Charge 500 cents through 1000g, 700 through 2000g, 900 through 3000g, 1100 through 4000g, and 1300 through 5000g.",
+    "errors": "Raise TypeError for a wrong type and ValueError for an out-of-range integer.",
+    "purity": "Use only the small branch-only Python subset described in the build contract. No imports, I/O, loops, arithmetic, decorators, or external effects."
+  },
+  "boundary": "This is an example, not a production shipping service. Checks and native execution use the host. Passing checks remain UNPROVEN; review is advisory."
+}

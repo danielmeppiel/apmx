@@ -1,4 +1,10 @@
-# First local contracts
+# Contract examples
+
+| Example | What it teaches |
+| --- | --- |
+| [First contract](#produce-and-assess-a-handoff) | Turn notes into a retained JSON handoff and check source-ID coverage. |
+| [Packaged handoff](packaged-job/README.md) | Let bundled APM prepare a package and its selected skill. |
+| [Software factory](software-factory/README.md) | Run planning, specification, build, test and review with explicit artifact handoffs. |
 
 These are authored, secret-free fixtures, not copies of a governed project.
 Copy this directory to a fresh disposable directory outside another Git
@@ -11,11 +17,12 @@ Do not remove a project's remotes or policy to make it eligible.
 From the copied `first-contract/` directory:
 
 ```sh
-apmx ./handoff.contract.md --on copilot --model gpt-6-astra --plan
-apmx ./handoff.contract.md --on copilot --model gpt-6-astra --allow-host-access
+apmx ./handoff.contract.md --on copilot --plan &&
+apmx ./handoff.contract.md --on copilot --allow-host-access
 ```
 
-The model is an explicit demonstration selection, not an apmx default.
+These commands preserve your configured Copilot model. Add `--model MODEL`
+only when you want to select a supported model explicitly.
 Planning does not call a model, install packages or execute checks.
 `--allow-host-access` is required in terminals and pipes, with no prompt or
 remembered consent. Native processes use your host identity: this is not
@@ -36,14 +43,19 @@ mkdir -p reuse-contract/checks
 cp first-contract/notes.md reuse-contract/notes.md
 cp first-contract/checks/check_handoff.py reuse-contract/checks/check_handoff.py
 cd reuse-contract
-apmx --from ./ handoff.contract.md --on copilot --model gpt-6-astra --allow-host-access
+apmx --from ./ handoff.contract.md --on copilot --allow-host-access
 ```
 
-apmx prepares the skill privately. The contract names the declared
-`handoff-style` skill, not an `apm_modules/` path. apmx supplies its selected
-content without invoking another agent or granting tools. The extra check
+apmx prepares the import privately. The contract imports the declared
+`handoff-style` package, not an `apm_modules/` path. In the current checkout,
+Copilot discovers its skill under `.agents/skills/` and loads it natively;
+the skill body is not injected into the prompt. Importing a skill does not
+grant shell access or invoke another agent. The extra check
 assesses its caution format. Local lock identity plus observed source bytes
 does not establish a cryptographic pin or protected provenance.
+
+Native discovery and newer preparation logs require a matching development
+build; see [release versus current source](../../docs/install.md#choose-release-or-current-source).
 
 ## Read outcomes literally
 
@@ -56,8 +68,7 @@ does not establish a cryptographic pin or protected provenance.
 
 Raw check exits are retained: 0 passes, 1 fails, 2 is incomplete; unknown exits,
 missing tools and signals are incomplete. No output does not mean `no_change`.
-Every check gets a fresh baseline and the captured file. Patch checks apply
-their own patch; apmx does not apply it first.
+Every check gets a fresh baseline and the captured file.
 Expect exit `21` for the completed examples with passing checks. The output
 and record are still saved; the host-isolation limit is not a check failure.
 
