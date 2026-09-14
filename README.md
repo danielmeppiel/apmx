@@ -59,9 +59,13 @@ apmx ./feature-factory --on copilot
 APMX shows the work and asks for confirmation before running it.
 Add `--plan` to preview without model calls, package installation or checks.
 
-The example's checks cover all 5000 valid shipping weights and invalid inputs.
-Generated tests must match independent expected answers and catch four known
-broken implementations. Code and tests agreeing with each other is not enough.
+**Observed with real Copilot on macOS:** all five steps completed and their
+checks passed, producing a shipping function, 23 test cases and a review.
+The build check covered all 5000 valid weights and invalid inputs; the generated
+tests caught the example's four known broken implementations.
+A 1001g quote returned 700 cents. A
+[deliberately broken copy was rejected at 1000g](examples/contracts/software-factory/README.md#observed-run).
+Code and tests agreeing with each other is not enough.
 
 ## Follow the evidence
 
