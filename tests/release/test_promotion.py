@@ -19,23 +19,38 @@ class PromotionTests(unittest.TestCase):
         self.commit = "a" * 40
         self.version = "0.1.0"
         self.release = {
-            "id": 123, "draft": True, "tag_name": "v0.1.0", "target_commitish": self.commit,
+            "id": 123,
+            "draft": True,
+            "tag_name": "v0.1.0",
+            "target_commitish": self.commit,
         }
         self.assets = [
             {
-                "id": index, "name": name, "size": 7, "state": "uploaded",
-                "updated_at": "2026-09-12T00:00:00Z", "digest": "sha256:" + "b" * 64,
+                "id": index,
+                "name": name,
+                "size": 7,
+                "state": "uploaded",
+                "updated_at": "2026-09-12T00:00:00Z",
+                "digest": "sha256:" + "b" * 64,
             }
             for index, name in enumerate(sorted(promotion.expected_names(self.version)))
         ]
 
     def inspect(self, assets=None, release=None, expected=None):
-        with patch.object(promotion, "gh_json", side_effect=[
-            self.release if release is None else release,
-            self.assets if assets is None else assets,
-        ]):
+        with patch.object(
+            promotion,
+            "gh_json",
+            side_effect=[
+                self.release if release is None else release,
+                self.assets if assets is None else assets,
+            ],
+        ):
             return promotion.inspect_draft(
-                promotion.REPOSITORY, 123, self.version, self.commit, expected,
+                promotion.REPOSITORY,
+                123,
+                self.version,
+                self.commit,
+                expected,
             )
 
     def test_private_repository_is_mandatory(self):
@@ -43,21 +58,33 @@ class PromotionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "restricted"):
                 promotion.check_repository("other/public")
             api.assert_not_called()
-        with patch.object(promotion, "gh_json", return_value={"private": False}):
-            with self.assertRaisesRegex(ValueError, "private"):
-                promotion.check_repository(promotion.REPOSITORY)
+        with (
+            patch.object(promotion, "gh_json", return_value={"private": False}),
+            self.assertRaisesRegex(ValueError, "private"),
+        ):
+            promotion.check_repository(promotion.REPOSITORY)
 
     def test_candidate_requires_unchanged_tag_including_annotated_tags(self):
-        with patch.object(promotion, "gh_json", side_effect=[
-            {"object": {"type": "tag", "sha": "b" * 40}},
-            {"object": {"type": "commit", "sha": self.commit}},
-        ]):
+        with patch.object(
+            promotion,
+            "gh_json",
+            side_effect=[
+                {"object": {"type": "tag", "sha": "b" * 40}},
+                {"object": {"type": "commit", "sha": self.commit}},
+            ],
+        ):
             promotion.check_candidate(promotion.REPOSITORY, self.version, self.commit)
-        with patch.object(promotion, "gh_json", return_value={
-            "object": {"type": "commit", "sha": "c" * 40},
-        }):
-            with self.assertRaisesRegex(ValueError, "moved"):
-                promotion.check_candidate(promotion.REPOSITORY, self.version, self.commit)
+        with (
+            patch.object(
+                promotion,
+                "gh_json",
+                return_value={
+                    "object": {"type": "commit", "sha": "c" * 40},
+                },
+            ),
+            self.assertRaisesRegex(ValueError, "moved"),
+        ):
+            promotion.check_candidate(promotion.REPOSITORY, self.version, self.commit)
         with patch.object(promotion, "gh_json") as api:
             with self.assertRaises(ValueError):
                 promotion.check_candidate(promotion.REPOSITORY, "v1;bad", self.commit)
@@ -75,7 +102,10 @@ class PromotionTests(unittest.TestCase):
 
     def test_published_release_wrong_tag_or_wrong_commit_is_not_reused(self):
         for field, value in (
-            ("draft", False), ("tag_name", "v0.2.0"), ("target_commitish", "main"), ("id", 124),
+            ("draft", False),
+            ("tag_name", "v0.2.0"),
+            ("target_commitish", "main"),
+            ("id", 124),
         ):
             with self.subTest(field=field):
                 release = {**self.release, field: value}
@@ -85,7 +115,11 @@ class PromotionTests(unittest.TestCase):
     def test_replaced_asset_invalidates_candidate_even_when_name_and_size_match(self):
         expected = promotion.asset_fingerprint(self.assets)
         self.inspect(expected=expected)
-        for field, value in (("id", 9999), ("digest", "sha256:" + "c" * 64), ("updated_at", "later")):
+        for field, value in (
+            ("id", 9999),
+            ("digest", "sha256:" + "c" * 64),
+            ("updated_at", "later"),
+        ):
             assets = copy.deepcopy(self.assets)
             assets[0][field] = value
             with self.assertRaisesRegex(ValueError, "changed"):
@@ -94,7 +128,9 @@ class PromotionTests(unittest.TestCase):
     def test_fingerprint_ignores_download_count_and_order(self):
         assets = list(reversed(copy.deepcopy(self.assets)))
         assets[0]["download_count"] = 99
-        self.assertEqual(promotion.asset_fingerprint(assets), promotion.asset_fingerprint(self.assets))
+        self.assertEqual(
+            promotion.asset_fingerprint(assets), promotion.asset_fingerprint(self.assets)
+        )
 
     def test_download_uses_numeric_asset_id_and_checks_transferred_size(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -108,18 +144,26 @@ class PromotionTests(unittest.TestCase):
             with patch.object(promotion.subprocess, "run", side_effect=transfer):
                 promotion.download_asset(promotion.REPOSITORY, {"id": 17, "size": 7}, destination)
             self.assertEqual(destination.read_bytes(), b"payload")
-            with patch.object(promotion.subprocess, "run", side_effect=transfer):
-                with self.assertRaisesRegex(ValueError, "size"):
-                    promotion.download_asset(
-                        promotion.REPOSITORY, {"id": 17, "size": 99}, Path(temporary) / "bad",
-                    )
+            with (
+                patch.object(promotion.subprocess, "run", side_effect=transfer),
+                self.assertRaisesRegex(ValueError, "size"),
+            ):
+                promotion.download_asset(
+                    promotion.REPOSITORY,
+                    {"id": 17, "size": 99},
+                    Path(temporary) / "bad",
+                )
 
     def test_download_rejects_substituted_manifest_before_extracting(self):
         with tempfile.TemporaryDirectory() as temporary:
             args = argparse.Namespace(
-                repository=promotion.REPOSITORY, release_id=123, version=self.version,
-                commit=self.commit, assets_fingerprint=promotion.asset_fingerprint(self.assets),
-                target="linux-arm64", destination=Path(temporary) / "download",
+                repository=promotion.REPOSITORY,
+                release_id=123,
+                version=self.version,
+                commit=self.commit,
+                assets_fingerprint=promotion.asset_fingerprint(self.assets),
+                target="linux-arm64",
+                destination=Path(temporary) / "download",
                 manifest_sha="f" * 64,
             )
 
@@ -145,7 +189,13 @@ class PromotionTests(unittest.TestCase):
                 bundle = root / f"apmx-{target}"
                 (bundle / "_internal").mkdir(parents=True)
                 (bundle / "LICENSES").mkdir()
-                for name in ("LICENSE", "NOTICE", "LICENSES/Python-LICENSE.txt", "LICENSES/manifest.json", "_internal/runtime"):
+                for name in (
+                    "LICENSE",
+                    "NOTICE",
+                    "LICENSES/Python-LICENSE.txt",
+                    "LICENSES/manifest.json",
+                    "_internal/runtime",
+                ):
                     (bundle / name).write_bytes(b"fixture bytes")
                 executable = bundle / ("apmx.exe" if target.startswith("windows") else "apmx")
                 executable.write_bytes(b"fixture executable bytes")
@@ -158,9 +208,14 @@ class PromotionTests(unittest.TestCase):
                 for asset in self.assets
             ]
             args = argparse.Namespace(
-                repository=promotion.REPOSITORY, release_id=123, version=self.version,
-                commit=self.commit, assets_fingerprint=promotion.asset_fingerprint(uploaded),
-                target="linux-arm64", destination=root / "download", manifest_sha=digest(manifest),
+                repository=promotion.REPOSITORY,
+                release_id=123,
+                version=self.version,
+                commit=self.commit,
+                assets_fingerprint=promotion.asset_fingerprint(uploaded),
+                target="linux-arm64",
+                destination=root / "download",
+                manifest_sha=digest(manifest),
             )
 
             def transfer(repository, asset, destination):
@@ -169,7 +224,9 @@ class PromotionTests(unittest.TestCase):
             with (
                 patch.object(promotion, "check_repository"),
                 patch.object(promotion, "check_candidate"),
-                patch.object(promotion, "inspect_draft", return_value=(self.release, uploaded)) as inspect,
+                patch.object(
+                    promotion, "inspect_draft", return_value=(self.release, uploaded)
+                ) as inspect,
                 patch.object(promotion, "download_asset", side_effect=transfer) as download,
                 patch.object(promotion, "output_values") as output,
             ):
@@ -183,8 +240,11 @@ class PromotionTests(unittest.TestCase):
 
     def test_publish_fails_closed_without_mutation_when_asset_identity_changes(self):
         args = argparse.Namespace(
-            repository=promotion.REPOSITORY, release_id=123, version=self.version,
-            commit=self.commit, assets_fingerprint="old-fingerprint",
+            repository=promotion.REPOSITORY,
+            release_id=123,
+            version=self.version,
+            commit=self.commit,
+            assets_fingerprint="old-fingerprint",
         )
         with (
             patch.object(promotion, "check_repository"),

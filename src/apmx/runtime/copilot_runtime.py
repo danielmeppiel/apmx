@@ -1,12 +1,15 @@
 """Native Copilot contract protocol; no APM runtime installation."""
+
 import json
 import os
 import re
 import time
-from pathlib import Path
 from collections.abc import Mapping
-from ..contracts.models import BaselineSnapshot, ContractLimits, LeafPlan, ProcessRequest
+from pathlib import Path
+
 from ..contracts.context_layout import context_directory
+from ..contracts.models import BaselineSnapshot, ContractLimits, LeafPlan, ProcessRequest
+
 
 class CopilotRuntime:
     def build_contract_request(
@@ -21,10 +24,14 @@ class CopilotRuntime:
         from ..contracts.models import ContractError, Outcome, ProcessRequest
         from ..core.tls_trust import build_child_tls_env
         from ..utils.path_security import ensure_path_within
+        from .artifact_tools import NATIVE_TOOL_NAMES, SERVER, TOOLS, configure
 
         started = time.monotonic()
-        output = ensure_path_within(snapshot.producer / plan.contract.produces, snapshot.producer)
-        if any(character in str(output) for character in "*?[](){}\r\n\0"):
+        outputs = tuple(
+            ensure_path_within(snapshot.producer / name, snapshot.producer)
+            for name in plan.contract.outputs
+        )
+        if any(character in str(output) for output in outputs for character in "*?[](){}\r\n\0"):
             raise ContractError(
                 "Output location cannot be represented as an exact native write permission.",
                 code="unsupported_output_location",
@@ -32,12 +39,24 @@ class CopilotRuntime:
             )
         sections = [
             plan.contract.body,
-            "\nFixed file instructions:\n"
-            f"Read the supplied inputs: {json.dumps(plan.contract.needs)}.\n"
-            f"Create exactly this output file: {json.dumps(plan.contract.produces)}.\n"
-            "Send brief progress updates in plain ASCII before reading inputs and writing the output.\n"
-            "Use view to read and apply_patch to write. Do not run checks or shell commands. "
-            "Do not modify any other file. Use only the tools permitted for this run.",
+            (
+                "\nFixed file instructions:\n"
+                f"Read the supplied inputs: {json.dumps(plan.contract.needs)}.\n"
+                f"Deliver every declared artifact file: {json.dumps(plan.contract.outputs)}.\n"
+                "Send brief progress updates in plain ASCII before reading inputs and writing the output.\n"
+                "Use view to read; apply_patch can write declared artifacts. "
+                "Use portable workspace-relative paths (never absolute paths) with "
+                "apmx_artifacts.write_file({path, content}) for bounded private working-file edits, "
+                "and apmx_artifacts.delete_file({path}) for a regular-file deletion. "
+                "When the task requests a code-change artifact, edit actual source files and explicitly call "
+                "apmx_artifacts.export_changes({output}) with its declared artifact path. "
+                "Never hand-compose patch hunks. Export once after all source edits; do not modify its artifact afterward. "
+                "Export supports regular UTF-8 text changes, not binary Git transformations or mode changes. "
+                "Private edits are not published; only declared artifacts advance. "
+                "Do not edit checks, imported context or runner state. Do not run checks or shell commands. "
+                "If an artifact tool fails, stop and report the failure; do not retry or use a fallback tool. "
+                "Use only the tools permitted for this run."
+            ),
         ]
         for index, skill in enumerate(plan.imported_skills, start=1):
             if skill.kind == "skill":
@@ -69,9 +88,8 @@ class CopilotRuntime:
             "--available-tools",
             "view",
             "apply_patch",
+            *NATIVE_TOOL_NAMES,
             *(("skill",) if any(item.kind == "skill" for item in plan.imported_skills) else ()),
-            "--allow-tool",
-            f"write({output})",
             "--deny-tool",
             "shell",
             "--deny-tool",
@@ -97,6 +115,17 @@ class CopilotRuntime:
             env=env,
             limits=plan.limits,
         )
+        if SERVER in disabled_servers:
+            raise ContractError(
+                "A configured MCP server collides with the private artifact tool server.",
+                code="native_tool_collision",
+            )
+        plugin = configure(plan, snapshot, run_directory)
+        argv.extend(("--plugin-dir", str(plugin)))
+        for output in outputs:
+            argv.extend(("--allow-tool", f"write({output})"))
+        for name in TOOLS:
+            argv.extend(("--allow-tool", f"{SERVER}({name})"))
         for name in disabled_servers:
             argv.extend(("--disable-mcp-server", name))
         if plan.model is not None:
@@ -112,6 +141,12 @@ class CopilotRuntime:
             timeout_seconds=remaining,
             env=env,
             control_observations={
+                "artifact_tools": {
+                    "server": SERVER,
+                    "tools": TOOLS,
+                    "plugin": str(plugin),
+                    "scope": "bounded private working files; explicit declared-artifact Git export; not isolation",
+                },
                 "disabled_configured_mcp_servers": disabled_servers,
                 "startup_scope": (
                     "Native mcp list --json inventory: User, Workspace, Plugin and Builtin "
@@ -120,7 +155,6 @@ class CopilotRuntime:
                 ),
             },
         )
-
 
     @staticmethod
     def get_contract_mcp_server_names(

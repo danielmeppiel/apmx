@@ -135,12 +135,26 @@ class ReleaseTests(unittest.TestCase):
             self.assertFalse((self.root / "extract").exists())
 
     def test_archive_requires_license_notice_runtime_and_target_executable(self):
-        for filename in ("LICENSE", "NOTICE", "LICENSES/Python-LICENSE.txt", "LICENSES/manifest.json", "_internal/runtime", "apmx"):
+        for filename in (
+            "LICENSE",
+            "NOTICE",
+            "LICENSES/Python-LICENSE.txt",
+            "LICENSES/manifest.json",
+            "_internal/runtime",
+            "apmx",
+        ):
             root = self.root / filename.replace("/", "-")
             root.mkdir()
             bundle = root / "apmx-linux-x86_64"
             bundle.mkdir()
-            for path in ("LICENSE", "NOTICE", "LICENSES/Python-LICENSE.txt", "LICENSES/manifest.json", "_internal/runtime", "apmx"):
+            for path in (
+                "LICENSE",
+                "NOTICE",
+                "LICENSES/Python-LICENSE.txt",
+                "LICENSES/manifest.json",
+                "_internal/runtime",
+                "apmx",
+            ):
                 destination = bundle / path
                 destination.parent.mkdir(exist_ok=True)
                 destination.write_text("content")

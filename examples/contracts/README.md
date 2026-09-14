@@ -4,13 +4,38 @@
 | --- | --- |
 | [First contract](#produce-and-assess-a-handoff) | Turn notes into a retained JSON handoff and check source-ID coverage. |
 | [Packaged handoff](packaged-job/README.md) | Let bundled APM prepare a package and its selected skill. |
-| [Software factory](software-factory/README.md) | Let APMX infer and run planning, specification, build, test and review from artifact dependencies. |
+| [Software factory](software-factory/README.md) | Turn a feature request into a plan, specification, Git patch, implementation report and review, with independent checks. |
 
 These are authored, secret-free fixtures, not copies of a governed project.
 Copy this directory to a fresh disposable directory outside another Git
 repository. Use standalone apmx, Python 3,
 and an authenticated native Copilot CLI with access to your selected model.
 Do not remove a project's remotes or policy to make it eligible.
+
+## Declare the artifacts you deliver
+
+`produces: plan.md` declares one file. Use a list when a contract delivers
+several files:
+
+```yaml
+produces:
+  - changes.diff
+  - implementation.md
+```
+
+These are **all required outputs**, not alternatives or directories the agent
+may edit. Any contract may produce any supported combination of artifacts.
+Capture preserves their bytes, including binary content; file extensions do
+not cause automatic execution, mounting or patch application.
+
+`needs` connects a consumer to the contracts that produce its required
+artifacts. A producer runs once even when a consumer needs several of its
+outputs. All outputs and required checks must be complete before any output
+can advance. The consumer receives the exact checked files, not the producer's
+working directory or a same-named stale file.
+
+Gherkin is optional. The software-factory example chooses it for behavior
+checks; other contracts can use their own verification commands and tools.
 
 ## Produce and assess a handoff
 
@@ -68,13 +93,15 @@ build; see [release versus current source](../../docs/install.md#choose-release-
 
 Raw check exits are retained: 0 passes, 1 fails, 2 is incomplete; unknown exits,
 missing tools and signals are incomplete. No output does not mean `no_change`.
-Every check gets a fresh baseline and the captured file.
+Every check gets a fresh baseline and the captured artifacts. A patch-aware
+check must apply its patch and test the resulting code in the same invocation;
+changes made by one check are not shared with the next.
 Expect exit `21` for the completed examples with passing checks. The output
 and record are still saved; the host-isolation limit is not a check failure.
 
 The profile requires positively established no-policy
 projects. Governed/unresolved-policy projects, command
-leaves, `budget`, `sandbox`, captures and output alternatives refuse before
+leaves, `budget`, `sandbox` and path captures refuse before
 inference. To run a factory, select its directory; APMX infers the connections
 between contracts without a pipeline file or chain flag. The interactive
 local-run confirmation, or explicit automation flags, permits only fully

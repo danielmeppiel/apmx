@@ -25,11 +25,11 @@ import yaml
 from frontmatter.default_handlers import YAMLHandler as _FrontmatterYAMLHandler
 
 # Shared defaults matching existing codebase convention.
-_DUMP_DEFAULTS: dict[str, Any] = dict(
-    default_flow_style=False,
-    sort_keys=False,
-    allow_unicode=True,
-)
+_DUMP_DEFAULTS: dict[str, Any] = {
+    "default_flow_style": False,
+    "sort_keys": False,
+    "allow_unicode": True,
+}
 
 
 class _BoundedSafeLoader(yaml.SafeLoader):
@@ -319,7 +319,7 @@ def _bounded_load(stream: Any) -> Any:
     ``.prompt.md`` -> whole-run DoS) instead of the intended per-file skip.
     """
     try:
-        return yaml.load(stream, Loader=_BoundedSafeLoader)  # noqa: S506 - SafeLoader subclass
+        return yaml.load(stream, Loader=_BoundedSafeLoader)
     except yaml.YAMLError:
         raise
     except (ValueError, RecursionError) as exc:
@@ -401,9 +401,11 @@ def load_yaml_roundtrip(path: str | Path) -> Any:
     """
     text = Path(path).read_text(encoding="utf-8")
     _bounded_load(text)
+    from ruamel.yaml import YAMLError as RuamelYAMLError
+
     try:
         return _roundtrip_yaml().load(text)
-    except Exception as exc:
+    except RuamelYAMLError as exc:
         _raise_as_pyyaml_error(exc)
 
 
@@ -425,10 +427,12 @@ def dump_yaml_roundtrip(data: Any, path: str | Path) -> None:
 
 def yaml_roundtrip_to_str(data: Any) -> str:
     """Serialize comment-preserving YAML for callers using atomic writes."""
+    from ruamel.yaml import YAMLError as RuamelYAMLError
+
     stream = StringIO()
     try:
         _roundtrip_yaml().dump(data, stream)
-    except Exception as exc:
+    except RuamelYAMLError as exc:
         _raise_as_pyyaml_error(exc)
     return stream.getvalue()
 
@@ -462,7 +466,7 @@ class _BoundedYAMLHandler(_FrontmatterYAMLHandler):
     def load(self, fm: str, **kwargs: Any) -> Any:
         kwargs["Loader"] = _BoundedSafeLoader
         try:
-            return yaml.load(fm, **kwargs)  # noqa: S506 - SafeLoader subclass
+            return yaml.load(fm, **kwargs)
         except yaml.YAMLError:
             raise
         except (ValueError, RecursionError) as exc:

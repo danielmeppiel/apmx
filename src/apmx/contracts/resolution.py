@@ -1,14 +1,13 @@
 """Bounded file-derived contract closure and offline whole-graph admission."""
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from collections.abc import Mapping
 
 from ..utils.path_security import ensure_path_within, has_symlink_component, is_link_or_reparse
 from . import frontend, workspace
 from .models import ContractError, ContractLimits, ContractSource, FileEntry, LeafContract, LeafPlan
-
 
 EXCLUDED = frozenset(
     {
@@ -166,21 +165,25 @@ def _resolve_catalog(
         )
     producers: dict[str, LeafContract] = {}
     for contract in catalog:
-        key = contract.produces.casefold()
-        if key in producers:
-            raise ContractError(
-                f"Ambiguous producers for {contract.produces}: "
-                f"{producers[key].path.name}, {contract.path.name}. Select a unique source catalog.",
-                code="ambiguous_producer",
-            )
-        producers[key] = contract
-    consumed = {name.casefold() for contract in catalog for name in contract.needs}
+        for name in contract.outputs:
+            key = name.casefold()
+            if key in producers:
+                raise ContractError(
+                    f"Ambiguous producers for {name}: "
+                    f"{producers[key].path.name}, {contract.path.name}. Select a unique source catalog.",
+                    code="ambiguous_producer",
+                )
+            producers[key] = contract
+    consumed = {
+        producers[name.casefold()].path
+        for contract in catalog
+        for name in contract.needs
+        if name.casefold() in producers
+    }
     targets = (
         (selected,)
         if selected is not None
-        else tuple(
-            contract.path for contract in catalog if contract.produces.casefold() not in consumed
-        )
+        else tuple(contract.path for contract in catalog if contract.path not in consumed)
     )
     active: set[Path] = set()
     visited: set[Path] = set()
@@ -199,7 +202,7 @@ def _resolve_catalog(
         for name in sorted(contract.needs):
             producer = producers.get(name.casefold())
             if producer is not None:
-                if producer.produces != name:
+                if name not in producer.outputs:
                     raise ContractError(
                         "Producer/input case differs; use one exact file spelling.",
                         code="source_collision",
@@ -218,7 +221,7 @@ def _resolve_catalog(
         # A disconnected cyclic component has no sink; it must not disappear.
         for contract in catalog:
             visit(contract)
-    outputs = [item.produces for item in ordered]
+    outputs = [name for item in ordered for name in item.outputs]
     roots = {name for item in ordered for name in item.needs if name.casefold() not in producers}
     if len({name.casefold() for name in roots}) != len(roots):
         raise ContractError("Case-colliding caller input paths.", code="source_collision")
@@ -247,7 +250,7 @@ def preflight(
     """Admit every selected leaf's known surface without making future-input files."""
     limits = limits or ContractLimits()
     nodes = []
-    outputs = tuple(item.produces for item in graph.order)
+    outputs = tuple(name for item in graph.order for name in item.outputs)
     for contract in graph.order:
         selected_source = (
             replace(

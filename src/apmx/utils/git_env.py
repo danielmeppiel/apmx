@@ -277,7 +277,7 @@ def get_git_executable() -> str:
     try:
         _git_executable = _resolve_trusted_executable("git")
     except FileNotFoundError:
-        raise FileNotFoundError(  # noqa: B904
+        raise FileNotFoundError(
             "git executable not found on PATH. Please install git: https://git-scm.com/downloads"
         )
     return _git_executable
@@ -290,7 +290,7 @@ def get_gh_executable() -> str:
         try:
             _gh_executable = _resolve_trusted_executable("gh")
         except FileNotFoundError:
-            raise FileNotFoundError(  # noqa: B904
+            raise FileNotFoundError(
                 "GitHub CLI executable not found on PATH. "
                 "Please install it: https://cli.github.com/"
             )
@@ -314,11 +314,7 @@ def git_subprocess_env(overrides: dict[str, object] | None = None) -> dict[str, 
         if overrides is None
         else {key: value for key, value in overrides.items() if isinstance(value, str)}
     )
-    env = {
-        key: value
-        for key, value in base.items()
-        if key not in _STRIP_GIT_VARS
-    }
+    env = {key: value for key, value in base.items() if key not in _STRIP_GIT_VARS}
     env["GIT_TRACE_REDACT"] = "1"
     return env
 

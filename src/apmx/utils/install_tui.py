@@ -1,6 +1,9 @@
 """Canonical animation eligibility without an installer."""
+
 import os
+
 from .console import _get_console
+
 
 def should_animate() -> bool:
     """Return True iff the install pipeline should paint a Live region.

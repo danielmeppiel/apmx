@@ -18,7 +18,9 @@ EXAMPLE = ROOT / "examples/contracts/first-contract"
 
 def test_readme_first_command_runs_a_factory() -> None:
     """Run the factory itself, without a chain switch or terminal-step selection."""
-    snippets = re.findall(r"```(?:sh|bash)\n(.*?)\n```", (ROOT / "README.md").read_text(), re.S)
+    snippets = re.findall(
+        r"```(?:sh|bash)\n(.*?)\n```", (ROOT / "README.md").read_text(), re.DOTALL
+    )
     assert snippets
     command = shlex.split(snippets[0])
     assert command[0] == "apmx"
@@ -28,16 +30,40 @@ def test_readme_first_command_runs_a_factory() -> None:
     assert command[command.index("--on") + 1] == "copilot"
 
 
-def test_readme_teaches_the_real_build_contract_before_running() -> None:
-    """Keep the contract introduction concrete and aligned with the hero factory."""
+def test_readme_teaches_the_real_planning_contract_before_running() -> None:
+    """Introduce one ordinary artifact before the multi-output implementation."""
     readme = (ROOT / "README.md").read_text()
-    snippets = re.findall(r"```(?:markdown|yaml)\n---\n(.*?)\n---", readme, re.S)
+    snippets = re.findall(r"```(?:markdown|yaml)\n---\n(.*?)\n---", readme, re.DOTALL)
     assert len(snippets) == 1
     documented = yaml.safe_load(snippets[0])
-    build = ROOT / "examples/contracts/software-factory/contracts/build.contract.md"
-    actual = yaml.safe_load(build.read_text().split("---", 2)[1])
+    planning = ROOT / "examples/contracts/software-factory/contracts/planning.contract.md"
+    actual = yaml.safe_load(planning.read_text().split("---", 2)[1])
     assert documented == actual
     assert readme.index(snippets[0]) < readme.index("```sh")
+
+
+def test_readme_multiple_artifacts_match_the_implementation_contract() -> None:
+    """Document delivered files, never a workspace write-frame substitute."""
+    readme = (ROOT / "README.md").read_text()
+    snippets = re.findall(r"```yaml\n(.*?)\n```", readme, re.DOTALL)
+    declarations = [yaml.safe_load(snippet) for snippet in snippets]
+    outputs = [item["produces"] for item in declarations if "produces" in item]
+    build = ROOT / "examples/contracts/software-factory/contracts/build.contract.md"
+    actual = yaml.safe_load(build.read_text().split("---", 2)[1])
+    assert outputs == [actual["produces"]]
+    assert set(outputs[0]) == {"changes.diff", "implementation.md"}
+
+
+def test_readme_quotes_a_real_optional_gherkin_scenario() -> None:
+    """The optional behavior example must exist in the actual acceptance suite."""
+    readme = (ROOT / "README.md").read_text()
+    snippets = re.findall(r"```gherkin\n(.*?)\n```", readme, re.DOTALL)
+    assert len(snippets) == 1
+    quoted = "\n".join(line.strip() for line in snippets[0].strip().splitlines())
+    feature = ROOT / "examples/contracts/software-factory/checks/features/free-shipping.feature"
+    actual = "\n".join(line.strip() for line in feature.read_text().splitlines())
+    assert quoted in actual
+    assert re.search(r"Gherkin[^\n.]*optional|[Oo]ptional[^\n.]*Gherkin", readme)
 
 
 @pytest.mark.parametrize("omit_source", [False, True])
@@ -46,7 +72,9 @@ def test_readme_contract_uses_the_complete_example_checker(
     omit_source: bool,
 ) -> None:
     """Exercise the documented command, including its required positional arguments."""
-    snippets = re.findall(r"```markdown\n(.*?)\n```", (EXAMPLE / "README.md").read_text(), re.S)
+    snippets = re.findall(
+        r"```markdown\n(.*?)\n```", (EXAMPLE / "README.md").read_text(), re.DOTALL
+    )
     assert len(snippets) == 1 and snippets[0].startswith("---\n")
     documented = yaml.safe_load(snippets[0].split("---", 2)[1])
     actual = yaml.safe_load((EXAMPLE / "handoff.contract.md").read_text().split("---", 2)[1])

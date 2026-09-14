@@ -14,7 +14,11 @@ import pytest
 from rich.console import Console
 
 from apmx.contracts.events import (
-    ApmInstallEvent, ApmOutputEvent, EventEmitter, ImportsSelectedEvent, PreparationScope,
+    ApmInstallEvent,
+    ApmOutputEvent,
+    EventEmitter,
+    ImportsSelectedEvent,
+    PreparationScope,
 )
 from apmx.contracts.frontend import parse_contract
 from apmx.contracts.models import (
@@ -500,7 +504,7 @@ def test_spinner_starts_immediately_updates_and_stops(
         events.emit("finished", result=_result(tmp_path, Outcome.HALTED))
     logger.close()
     status.stop.assert_called_once()
-    assert logger._status is None
+    assert logger._display.status is None
 
 
 @pytest.mark.parametrize("disabled", ["NO_COLOR", "CI", "TERM", "APM_PROGRESS", "pipe"])
@@ -548,7 +552,7 @@ def test_public_subprocess_output_flows_while_spinner_remains_active(
     output = "\n".join(call.args[0] for call in console._rich_echo.call_args_list)
     assert "Public line" in output
     assert "Reading input" in output
-    assert "Tool started: view" in output
+    assert "Tool started: view" not in output
     assert "Copilot stderr > Native diagnostic" in output
     assert "PRIVATE_" not in output
     animated_console.status.return_value.stop.assert_not_called()
@@ -597,13 +601,16 @@ def test_closed_output_cannot_start_animation(
     logger.close()
     animated_console.status.assert_called_once()
     animated_console.status.return_value.stop.assert_called_once()
-    assert not logger._human_enabled
+    assert not logger._display.enabled
 
 
 @pytest.mark.parametrize("verbose", [False, True])
 @pytest.mark.parametrize("frozen", [False, True])
 def test_apm_lifecycle_survives_spinner_and_late_run_attachment(
-    tmp_path, animated_console, verbose, frozen,
+    tmp_path,
+    animated_console,
+    verbose,
+    frozen,
 ):
     logger = ContractLogger(verbose=verbose)
     event = ApmInstallEvent("started", "consumer", "0.30.0", frozen, False)
@@ -615,7 +622,8 @@ def test_apm_lifecycle_survives_spinner_and_late_run_attachment(
     assert not any("ready." in call.args[0] for call in calls)
     assert any("Running: apm install" in call.args[0] for call in calls) is verbose
     assert all(
-        call.kwargs["color"] == "dim" for call in calls
+        call.kwargs["color"] == "dim"
+        for call in calls
         if "Running: apm install" in call.args[0] or "APM options:" in call.args[0]
     )
     logger.on_preparation(replace(event, phase="completed"))
@@ -645,12 +653,16 @@ def test_job_heading_separates_preparation_without_leading_blank(
         event = ApmInstallEvent("started", scope, "0.30.0", scope == "consumer", False)
         logger.on_preparation(event)
         logger.on_preparation(replace(event, phase="completed"))
-        logger.on_preparation(ImportsSelectedEvent((
-            ImportedSkill("style", tmp_path / "SKILL.md", "", "digest", "lock"),
-        )))
+        logger.on_preparation(
+            ImportsSelectedEvent(
+                (ImportedSkill("style", tmp_path / "SKILL.md", "", "digest", "lock"),)
+            )
+        )
     logger.attach_run("run", tmp_path)
     EventEmitter("run", logger.on_event).emit(
-        "selected", contract="job.contract.md", produces="result.txt",
+        "selected",
+        contract="job.contract.md",
+        produces="result.txt",
     )
     logger.close()
     for text in (capsys.readouterr().out, (tmp_path / "transcript.log").read_text()):
@@ -664,17 +676,30 @@ def test_job_heading_separates_preparation_without_leading_blank(
 
 
 def test_selected_context_counts_documents_not_entire_dependency_graph(
-    tmp_path, animated_console,
+    tmp_path,
+    animated_console,
 ):
     skill = ImportedSkill(
-        "style", tmp_path / "SKILL.md", "PRIVATE_BODY", "digest", "PRIVATE_LOCK_IDENTITY",
-        context_name="concise", source_relative_path="SKILL.md",
+        "style",
+        tmp_path / "SKILL.md",
+        "PRIVATE_BODY",
+        "digest",
+        "PRIVATE_LOCK_IDENTITY",
+        context_name="concise",
+        source_relative_path="SKILL.md",
     )
     imports = (
         skill,
-        replace(skill, context_name="formatting", source_relative_path="skills/formatting/SKILL.md"),
-        replace(skill, name="rules", kind="instruction", context_name="global-rules",
-                source_relative_path=".apm/instructions/rules.instructions.md"),
+        replace(
+            skill, context_name="formatting", source_relative_path="skills/formatting/SKILL.md"
+        ),
+        replace(
+            skill,
+            name="rules",
+            kind="instruction",
+            context_name="global-rules",
+            source_relative_path=".apm/instructions/rules.instructions.md",
+        ),
     )
     logger = ContractLogger(verbose=True)
     logger.on_preparation(ImportsSelectedEvent(imports))
@@ -693,18 +718,31 @@ def test_selected_context_counts_documents_not_entire_dependency_graph(
 
 
 @pytest.mark.parametrize("package_name", [None, "friendly-style"])
-def test_context_identity_uses_package_name_without_duplicate_labels(tmp_path, capsys, package_name):
+def test_context_identity_uses_package_name_without_duplicate_labels(
+    tmp_path, capsys, package_name
+):
     logger = ContractLogger(verbose=True)
-    logger.on_preparation(ImportsSelectedEvent((
-        ImportedSkill(
-            "style", tmp_path / "SKILL.md", "", "digest", "lock",
-            package_name=package_name, context_name="style", source_relative_path="SKILL.md",
-        ),
-    )))
+    logger.on_preparation(
+        ImportsSelectedEvent(
+            (
+                ImportedSkill(
+                    "style",
+                    tmp_path / "SKILL.md",
+                    "",
+                    "digest",
+                    "lock",
+                    package_name=package_name,
+                    context_name="style",
+                    source_relative_path="SKILL.md",
+                ),
+            )
+        )
+    )
     logger.close()
     expected = (
         "Skill: style (from friendly-style; SKILL.md)"
-        if package_name else "Skill: style (SKILL.md)"
+        if package_name
+        else "Skill: style (SKILL.md)"
     )
     output = capsys.readouterr().out
     assert expected in output
@@ -716,14 +754,17 @@ def test_observed_skill_load_is_visible_and_retained(tmp_path, capsys, verbose):
     logger = ContractLogger(verbose=verbose)
     logger.attach_run("run", tmp_path)
     EventEmitter("run", logger.on_event).emit(
-        "skill_loaded", source="harness", name="handoff-style",
+        "skill_loaded",
+        source="harness",
+        name="handoff-style",
     )
     logger.close()
     output = capsys.readouterr().out
     assert "Copilot > Loaded skill: handoff-style" in output
-    assert "Copilot (untrusted) > Loaded skill: handoff-style" in (
-        tmp_path / "transcript.log"
-    ).read_text()
+    assert (
+        "Copilot (untrusted) > Loaded skill: handoff-style"
+        in (tmp_path / "transcript.log").read_text()
+    )
 
 
 @pytest.mark.parametrize("encoding", ["ascii", "cp1252", "utf-8"])
@@ -731,8 +772,11 @@ def test_observed_skill_load_is_visible_and_retained(tmp_path, capsys, verbose):
 @pytest.mark.parametrize("verbose", [False, True])
 @pytest.mark.windows_compat
 def test_native_prose_punctuation_is_readable_on_strict_terminal_encodings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    encoding: str, rich_output: bool, verbose: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    encoding: str,
+    rich_output: bool,
+    verbose: bool,
 ) -> None:
     raw = io.BytesIO()
     target = io.TextIOWrapper(raw, encoding=encoding, errors="strict", write_through=True)
@@ -747,10 +791,16 @@ def test_native_prose_punctuation_is_readable_on_strict_terminal_encodings(
     logger.attach_run("run", tmp_path)
     decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
     text = "I\u2019m reading \u201cnotes\u201d \u2014 that\u2019s ready\u2026"
-    wire = (json.dumps({
-        "type": "assistant.message",
-        "data": {"messageId": "m", "phase": "commentary", "content": text},
-    }, ensure_ascii=False) + "\n").encode()
+    wire = (
+        json.dumps(
+            {
+                "type": "assistant.message",
+                "data": {"messageId": "m", "phase": "commentary", "content": text},
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode()
     for byte in wire:
         decoder.feed("stdout", bytes([byte]))
     decoder.finish()
@@ -762,7 +812,8 @@ def test_native_prose_punctuation_is_readable_on_strict_terminal_encodings(
 
 
 def test_prose_formatting_preserves_code_paths_controls_and_literal_escapes(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     logger = ContractLogger()
     logger.attach_run("run", tmp_path)
@@ -772,14 +823,21 @@ def test_prose_formatting_preserves_code_paths_controls_and_literal_escapes(
         "```json\n"
         '{"name": "O\u2019Connor"}\n'
         "```\n"
-        "It\u2019s done\u2026\n"
-        + r"Literal I\u2019m stays literal." + "\n"
+        "It\u2019s done\u2026\n" + r"Literal I\u2019m stays literal." + "\n"
         "I\u2019m using ghp_PRIVATE_TOKEN_123456 \u2014 \x1b[31m\u202e"
     )
-    decoder.feed("stdout", (json.dumps({
-        "type": "assistant.message",
-        "data": {"messageId": "m", "phase": "final_answer", "content": text},
-    }) + "\n").encode())
+    decoder.feed(
+        "stdout",
+        (
+            json.dumps(
+                {
+                    "type": "assistant.message",
+                    "data": {"messageId": "m", "phase": "final_answer", "content": text},
+                }
+            )
+            + "\n"
+        ).encode(),
+    )
     decoder.finish()
     logger.close()
     output = capsys.readouterr().out
@@ -792,7 +850,8 @@ def test_prose_formatting_preserves_code_paths_controls_and_literal_escapes(
 
 
 def test_interleaved_native_messages_do_not_share_code_fence_state(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     logger = ContractLogger()
     decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
@@ -803,7 +862,9 @@ def test_interleaved_native_messages_do_not_share_code_fence_state(
     code = "```text\nI\u2019m literal.\n"
     emit("assistant.message_start", messageId="code", phase="final_answer")
     emit("assistant.message_delta", messageId="code", deltaContent=code)
-    emit("assistant.message", messageId="narration", phase="commentary", content="I\u2019m reading.")
+    emit(
+        "assistant.message", messageId="narration", phase="commentary", content="I\u2019m reading."
+    )
     emit("assistant.message", messageId="code", phase="final_answer", content=code + "```\n")
     emit("assistant.intent", intent="I\u2019m writing the output\u2026")
     decoder.finish()
@@ -818,27 +879,39 @@ def test_interleaved_native_messages_do_not_share_code_fence_state(
 @pytest.mark.parametrize("delimiter", ["```", "~~~~"])
 @pytest.mark.windows_compat
 def test_prose_preserves_code_delimiters_and_indented_code(
-    capsys: pytest.CaptureFixture[str], newline: str, delimiter: str,
+    capsys: pytest.CaptureFixture[str],
+    newline: str,
+    delimiter: str,
 ) -> None:
     logger = ContractLogger()
     decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
-    content = newline.join((
-        delimiter,
-        "I\u2019m literal.",
-        delimiter[:2],
-        "I\u2019m still literal.",
-        delimiter,
-        "    I\u2019m indented code.",
-        "\tI\u2019m tabbed code.",
-        "I\u2019m done\u2026",
-        "``I\u2019m `inline` code`` It\u2019s readable.",
-        "Here\u2019s O\u2019Connor.md and C:\\Users\\O\u2019Connor\\notes.",
-        "Caf\u00e9 stays escaped.",
-    ))
-    decoder.feed("stdout", (json.dumps({
-        "type": "assistant.message",
-        "data": {"messageId": "m", "phase": "final_answer", "content": content},
-    }) + "\n").encode())
+    content = newline.join(
+        (
+            delimiter,
+            "I\u2019m literal.",
+            delimiter[:2],
+            "I\u2019m still literal.",
+            delimiter,
+            "    I\u2019m indented code.",
+            "\tI\u2019m tabbed code.",
+            "I\u2019m done\u2026",
+            "``I\u2019m `inline` code`` It\u2019s readable.",
+            "Here\u2019s O\u2019Connor.md and C:\\Users\\O\u2019Connor\\notes.",
+            "Caf\u00e9 stays escaped.",
+        )
+    )
+    decoder.feed(
+        "stdout",
+        (
+            json.dumps(
+                {
+                    "type": "assistant.message",
+                    "data": {"messageId": "m", "phase": "final_answer", "content": content},
+                }
+            )
+            + "\n"
+        ).encode(),
+    )
     decoder.finish()
     logger.close()
     output = capsys.readouterr().out
@@ -852,15 +925,25 @@ def test_prose_preserves_code_delimiters_and_indented_code(
 
 def test_prose_state_is_bounded_by_native_message_admission() -> None:
     logger = ContractLogger()
-    logger._human_enabled = False
+    logger._display.enabled = False
     decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
     for identifier in range(100):
-        decoder.feed("stdout", (json.dumps({
-            "type": "assistant.message",
-            "data": {
-                "messageId": str(identifier), "phase": "final_answer", "content": "`" * 2000,
-            },
-        }) + "\n").encode())
+        decoder.feed(
+            "stdout",
+            (
+                json.dumps(
+                    {
+                        "type": "assistant.message",
+                        "data": {
+                            "messageId": str(identifier),
+                            "phase": "final_answer",
+                            "content": "`" * 2000,
+                        },
+                    }
+                )
+                + "\n"
+            ).encode(),
+        )
     decoder.finish()
     logger.close()
     assert len(logger._prose) == len(decoder._messages) == 64
@@ -870,15 +953,21 @@ def test_prose_state_is_bounded_by_native_message_admission() -> None:
 @pytest.mark.parametrize("verbose", [False, True])
 def test_preparation_uses_existing_redaction_and_ascii_escape_path(tmp_path, capsys, verbose):
     logger = ContractLogger(verbose=verbose)
-    logger.on_preparation(ImportsSelectedEvent((
-        ImportedSkill(
-            "https://user:PRIVATE_PASSWORD@example.test/style?token=PRIVATE_QUERY",
-            tmp_path / "PRIVATE_PATH",
-            "PRIVATE_BODY", "PRIVATE_DIGEST", "PRIVATE_LOCK",
-            context_name="ghp_PRIVATE_TOKEN_12345\r\x1b]52;c;injection\x07\u202e[+] forged",
-            source_relative_path="skills/[red]style[/red]/SKILL.md",
-        ),
-    )))
+    logger.on_preparation(
+        ImportsSelectedEvent(
+            (
+                ImportedSkill(
+                    "https://user:PRIVATE_PASSWORD@example.test/style?token=PRIVATE_QUERY",
+                    tmp_path / "PRIVATE_PATH",
+                    "PRIVATE_BODY",
+                    "PRIVATE_DIGEST",
+                    "PRIVATE_LOCK",
+                    context_name="ghp_PRIVATE_TOKEN_12345\r\x1b]52;c;injection\x07\u202e[+] forged",
+                    source_relative_path="skills/[red]style[/red]/SKILL.md",
+                ),
+            )
+        )
+    )
     logger.attach_run("run", tmp_path)
     logger.close()
     for text in (capsys.readouterr().out, (tmp_path / "transcript.log").read_text()):
@@ -892,7 +981,9 @@ def test_preparation_uses_existing_redaction_and_ascii_escape_path(tmp_path, cap
     assert "[red]style[/red]" in retained
 
 
-def test_preparation_broken_pipe_preserves_later_transcript(tmp_path, animated_console, monkeypatch):
+def test_preparation_broken_pipe_preserves_later_transcript(
+    tmp_path, animated_console, monkeypatch
+):
     logger = ContractLogger(verbose=True)
     logger.start_activity("Preparing package", announce=False)
     monkeypatch.setattr(console, "_rich_echo", Mock(side_effect=BrokenPipeError))
@@ -912,26 +1003,40 @@ def test_preparation_broken_pipe_preserves_later_transcript(tmp_path, animated_c
     assert "PRIVATE" not in text
     console._rich_echo.assert_called_once()
     animated_console.status.return_value.stop.assert_called_once()
-    assert not logger._human_enabled
+    assert not logger._display.enabled
 
 
 @pytest.mark.parametrize("verbose", [False, True])
-@pytest.mark.parametrize("stream,text,visible,color", [
-    ("stdout", "[>] Resolving ./style...", True, "dim cyan"),
-    ("stdout", "[!] Package access may need login", True, "yellow"),
-    ("stdout", "[x] Package download failed", True, "red"),
-    ("stdout", "Unrecognized native failure detail", True, "red"),
-    ("stdout", "Unexpected service response", True, "dim cyan"),
-    ("stderr", "Retrying connection", True, "dim cyan"),
-    ("stdout", "Phase: download -> 0.01s", False, "dim"),
-    ("stdout", "[#] Perf: 4 walks", False, "dim"),
-    ("stdout", "[i] Skipped inactive experimental resolver for target 'unused'", False, "dim"),
-    ("stdout", "Copilot native registration: unavailable (copilot target not selected)", False, "dim"),
-    ("stdout", "Phase: download failed", True, "red"),
-    ("stdout", "[+] package (local)", False, "dim"),
-])
+@pytest.mark.parametrize(
+    "stream,text,visible,color",
+    [
+        ("stdout", "[>] Resolving ./style...", True, "dim cyan"),
+        ("stdout", "[!] Package access may need login", True, "yellow"),
+        ("stdout", "[x] Package download failed", True, "red"),
+        ("stdout", "Unrecognized native failure detail", True, "red"),
+        ("stdout", "Unexpected service response", True, "dim cyan"),
+        ("stderr", "Retrying connection", True, "dim cyan"),
+        ("stdout", "Phase: download -> 0.01s", False, "dim"),
+        ("stdout", "[#] Perf: 4 walks", False, "dim"),
+        ("stdout", "[i] Skipped inactive experimental resolver for target 'unused'", False, "dim"),
+        (
+            "stdout",
+            "Copilot native registration: unavailable (copilot target not selected)",
+            False,
+            "dim",
+        ),
+        ("stdout", "Phase: download failed", True, "red"),
+        ("stdout", "[+] package (local)", False, "dim"),
+    ],
+)
 def test_native_apm_line_visibility_color_and_retention(
-    tmp_path, animated_console, verbose, stream, text, visible, color,
+    tmp_path,
+    animated_console,
+    verbose,
+    stream,
+    text,
+    visible,
+    color,
 ):
     logger = ContractLogger(verbose=verbose)
     logger.on_preparation(ApmOutputEvent(stream, text))
@@ -951,9 +1056,17 @@ def test_native_apm_line_visibility_color_and_retention(
 def test_default_native_paths_are_brief_but_full_sanitized_lines_are_retained(tmp_path, capsys):
     logger = ContractLogger()
     source = Path.cwd().parent / "package"
-    logger.on_preparation(ApmInstallEvent(
-        "started", "package", "0.30.0", False, True, tmp_path, str(source),
-    ))
+    logger.on_preparation(
+        ApmInstallEvent(
+            "started",
+            "package",
+            "0.30.0",
+            False,
+            True,
+            tmp_path,
+            str(source),
+        )
+    )
     text = f"[>] Resolving {source} in {tmp_path}"
     logger.on_preparation(ApmOutputEvent("stdout", text))
     output = capsys.readouterr().out
@@ -1134,7 +1247,8 @@ def test_analysis_phase_never_reaches_terminal_or_transcript(
     for text in (output, transcript):
         assert "PRIVATE_" not in text
         assert text.count("Public answer") == 1
-        assert "Tool started: apply_patch" in text
+    assert "Tool started: apply_patch" in transcript
+    assert ("Tool started: apply_patch" in output) is verbose
 
 
 def test_pre_engine_interrupt_reports_halted_without_claiming_child_cleanup(capsys) -> None:
@@ -1243,7 +1357,7 @@ def test_transcript_metadata_reports_counters_and_stays_frozen_after_close(
     tmp_path: Path,
 ) -> None:
     logger = ContractLogger()
-    logger._human_enabled = False
+    logger._display.enabled = False
     logger._transcript = _Transcript(512)
     logger.attach_run("run", tmp_path)
     lines = [f"entry {number:03d} " + "x" * 64 for number in range(20)]
@@ -1427,9 +1541,12 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
     output = capsys.readouterr().out
     assert output.index("Job: jobs/handoff.contract.md -> handoff.json") < output.index("Copilot >")
     assert output.index("Copilot >") < output.index("apmx: checking handoff.json")
-    assert output.index("Check handoff > Required fields present") < output.index(
-        "[+] handoff: passed"
-    )
+    if verbose:
+        assert output.index("Check handoff > Required fields present") < output.index(
+            "[+] handoff: passed"
+        )
+    else:
+        assert "Required fields present" not in output
     assert output.index("[+] handoff: passed") < output.index("[!] apmx: UNPROVEN  12.3s")
     assert "Contract checks passed; this run was not sandboxed." in output
     assert "  Output: .apm/runs/run/artifacts/handoff.json\n" in output
@@ -1666,7 +1783,7 @@ def test_native_tool_metadata_controls_emphasis_not_assistant_wording(
     styled_console: tuple[Console, Mock],
 ) -> None:
     rich_console, printed = styled_console
-    decoder = ContractStreamDecoder(EventEmitter("run", ContractLogger().on_event))
+    decoder = ContractStreamDecoder(EventEmitter("run", ContractLogger(verbose=True).on_event))
     for kind, data in (
         ("tool.execution_start", {"toolName": "view"}),
         ("tool.execution_complete", {"success": True}),
@@ -1683,7 +1800,7 @@ def test_native_tool_metadata_controls_emphasis_not_assistant_wording(
     ):
         decoder.feed("stdout", (json.dumps({"type": kind, "data": data}) + "\n").encode())
     started, completed, failed, prose = [call.args[0] for call in printed.call_args_list]
-    body = len("  Copilot > ")
+    body = len("    Copilot > ")
     assert started.get_style_at_offset(rich_console, body).dim is True
     assert completed.get_style_at_offset(rich_console, body).dim is True
     assert failed.get_style_at_offset(rich_console, body).color.name == "red"
@@ -1789,7 +1906,7 @@ def test_changed_check_subject_explanation_is_not_hidden_with_raw_zero(capsys) -
     )
     output = capsys.readouterr().out
     assert "[!] integrity: incomplete" in output
-    assert "apmx: check 'integrity': The supplied subject or check resources changed." in output
+    assert "    The supplied subject or check resources changed." in output
     assert "Check integrity >" not in output
     assert "raw exit" not in output
 
@@ -1868,8 +1985,7 @@ def test_plain_checks_have_one_heading_without_duplicate_phase_narration(capsys)
     assert "native default" not in output
     assert "[>] Checking" not in output
     assert "(saved output)" not in output
-    assert "Check format > Observed checker diagnostic." in output
-    assert "Check coverage > Observed checker diagnostic." in output
+    assert "Observed checker diagnostic." not in output
     assert "[+] format: passed" in output
     assert "[+] coverage: passed" in output
 
@@ -1908,6 +2024,6 @@ def test_incomplete_check_cause_is_visible_and_engine_owned(
     logger.close()
     output = capsys.readouterr().out
     assert "[!] criterion: incomplete" in output
-    assert f"apmx: check 'criterion': {cause}" in output
+    assert f"    {cause}" in output
     assert "Check criterion >" not in output
     assert "untrusted" not in (tmp_path / "transcript.log").read_text()

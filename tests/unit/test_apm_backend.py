@@ -2,9 +2,9 @@
 
 import hashlib
 import json
+import shutil
 import sys
 from pathlib import Path
-import shutil
 
 import pytest
 
@@ -45,15 +45,19 @@ def test_windows_backend_longpaths_is_child_scoped_and_preserves_config(monkeypa
             assert child[key] == value
 
 
-@pytest.mark.parametrize("configuration", [
-    {"GIT_CONFIG_COUNT": "sensitive-invalid"},
-    {"GIT_CONFIG_COUNT": "-1"},
-    {"GIT_CONFIG_COUNT": "9999999999999999999999"},
-    {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraheader"},
-    {"GIT_CONFIG_KEY_0": "http.extraheader", "GIT_CONFIG_VALUE_0": "sensitive-orphan"},
-])
+@pytest.mark.parametrize(
+    "configuration",
+    [
+        {"GIT_CONFIG_COUNT": "sensitive-invalid"},
+        {"GIT_CONFIG_COUNT": "-1"},
+        {"GIT_CONFIG_COUNT": "9999999999999999999999"},
+        {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraheader"},
+        {"GIT_CONFIG_KEY_0": "http.extraheader", "GIT_CONFIG_VALUE_0": "sensitive-orphan"},
+    ],
+)
 def test_windows_backend_rejects_invalid_process_config_without_disclosure(
-    monkeypatch, configuration,
+    monkeypatch,
+    configuration,
 ):
     from apmx.install.apm_backend import backend_child_env
 
@@ -70,7 +74,11 @@ def test_posix_backend_does_not_change_git_configuration(monkeypatch):
     from apmx.install.apm_backend import backend_child_env
 
     monkeypatch.setattr(sys, "platform", "darwin")
-    original = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.longpaths", "GIT_CONFIG_VALUE_0": "false"}
+    original = {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.longpaths",
+        "GIT_CONFIG_VALUE_0": "false",
+    }
     child = backend_child_env(original)
     assert {key: value for key, value in child.items() if key.startswith("GIT_CONFIG_")} == original
 
@@ -93,13 +101,17 @@ def test_backend_identity_records_exact_bytes(tmp_path, monkeypatch):
     binary = tmp_path / "apm"
     binary.write_bytes(b"backend")
     pin = tmp_path / "apm-backend.json"
-    pin.write_text(json.dumps({
-        "schema": "apmx-apm-backend/1",
-        "repository": "microsoft/apm",
-        "version": "0.30.0",
-        "source_commit": "8c2e0d9c352e2ed0e8c56b40063a63e1dd4a1937",
-        "assets": {},
-    }))
+    pin.write_text(
+        json.dumps(
+            {
+                "schema": "apmx-apm-backend/1",
+                "repository": "microsoft/apm",
+                "version": "0.30.0",
+                "source_commit": "8c2e0d9c352e2ed0e8c56b40063a63e1dd4a1937",
+                "assets": {},
+            }
+        )
+    )
     monkeypatch.setattr("apmx.install.apm_backend.PIN_PATH", pin)
     identity = backend_identity(binary)
     assert identity["executable_sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
@@ -108,9 +120,9 @@ def test_backend_identity_records_exact_bytes(tmp_path, monkeypatch):
 
 
 def test_real_backend_installs_transitive_context_without_source_writes(tmp_path, monkeypatch):
+    from apmx.contracts.models import ContractLimits
     from apmx.install.apm_backend import install, locate_backend
     from apmx.install.contract_source_validation import source_hash
-    from apmx.contracts.models import ContractLimits
 
     # Missing provisioning is a failure, never a mocked or skipped native proof.
     assert locate_backend().is_file()
@@ -124,7 +136,11 @@ def test_real_backend_installs_transitive_context_without_source_writes(tmp_path
     monkeypatch.delenv("NO_COLOR", raising=False)
     events = []
     identity = install(
-        stage, package_ref=str(source), limits=limits, verbose=True, on_preparation=events.append,
+        stage,
+        package_ref=str(source),
+        limits=limits,
+        verbose=True,
+        on_preparation=events.append,
     )
     output = [event.text for event in events if isinstance(event, ApmOutputEvent)]
     assert any("[>] Resolving " in line for line in output)
@@ -141,8 +157,8 @@ def test_real_backend_installs_transitive_context_without_source_writes(tmp_path
 
 
 def test_real_backend_replays_anchored_consumer_lock(tmp_path):
-    from apmx.install.apm_backend import install, snapshot_manifest
     from apmx.contracts.models import ContractLimits
+    from apmx.install.apm_backend import install, snapshot_manifest
 
     limits = ContractLimits()
     caller = tmp_path / "caller"
@@ -163,9 +179,15 @@ def test_real_backend_replays_anchored_consumer_lock(tmp_path):
     assert all((caller / name).read_bytes() == raw for name, raw in before.items())
 
 
-@pytest.mark.parametrize("section", [
-    "", "dependencies: null\n", "dependencies: {}\n", "dependencies: {apm: []}\n",
-])
+@pytest.mark.parametrize(
+    "section",
+    [
+        "",
+        "dependencies: null\n",
+        "dependencies: {}\n",
+        "dependencies: {apm: []}\n",
+    ],
+)
 def test_add_package_request_accepts_empty_dependencies(tmp_path, section):
     from apmx.contracts.models import ContractLimits
     from apmx.install.apm_backend import add_package_request, snapshot_manifest
@@ -185,10 +207,16 @@ def test_add_package_request_accepts_empty_dependencies(tmp_path, section):
     assert manifest.read_bytes() == before
 
 
-@pytest.mark.parametrize("section", [
-    "dependencies: invalid", "dependencies: []", "dependencies: {apm: null}",
-    "dependencies: {apm: invalid}", "dependencies: {apm: {name: invalid}}",
-])
+@pytest.mark.parametrize(
+    "section",
+    [
+        "dependencies: invalid",
+        "dependencies: []",
+        "dependencies: {apm: null}",
+        "dependencies: {apm: invalid}",
+        "dependencies: {apm: {name: invalid}}",
+    ],
+)
 def test_add_package_request_rejects_invalid_dependencies(tmp_path, section):
     from apmx.contracts.models import ContractLimits
     from apmx.install.apm_backend import add_package_request
@@ -217,10 +245,12 @@ def test_native_staging_does_not_inherit_caller_path_length(tmp_path):
 def test_native_staging_cleans_up_after_failure(tmp_path):
     from apmx.install.contract_source import _private_root
 
-    with pytest.raises(RuntimeError, match="fixture failure"):
-        with _private_root(tmp_path, None) as stage:
-            (stage / "partial-install").write_text("partial")
-            raise RuntimeError("fixture failure")
+    with (
+        pytest.raises(RuntimeError, match="fixture failure"),
+        _private_root(tmp_path, None) as stage,
+    ):
+        (stage / "partial-install").write_text("partial")
+        raise RuntimeError("fixture failure")
     assert not stage.exists()
 
 
@@ -233,9 +263,8 @@ def test_native_staging_refuses_temporary_parent_inside_originals(tmp_path, monk
     caller.mkdir()
     source.mkdir()
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / inside))
-    with pytest.raises(ContractError) as rejected:
-        with _private_root(caller, source):
-            pytest.fail("Unsafe temporary parent was accepted")
+    with pytest.raises(ContractError) as rejected, _private_root(caller, source):
+        pytest.fail("Unsafe temporary parent was accepted")
     assert rejected.value.code == "source_escape"
     assert not list(caller.iterdir())
     assert not list(source.iterdir())
@@ -277,10 +306,13 @@ def _unit_backend(tmp_path, monkeypatch, *, install_observation=None, version=b"
     return requests
 
 
-def test_native_invocation_preserves_auth_and_suppresses_activation_child_only(tmp_path, monkeypatch):
+def test_native_invocation_preserves_auth_and_suppresses_activation_child_only(
+    tmp_path, monkeypatch
+):
     import os
-    from apmx.install.apm_backend import install
+
     from apmx.contracts.models import ContractLimits
+    from apmx.install.apm_backend import install
 
     requests = _unit_backend(tmp_path, monkeypatch)
     monkeypatch.setenv("APM_NO_SCRIPTS", "original-value")
@@ -297,8 +329,15 @@ def test_native_invocation_preserves_auth_and_suppresses_activation_child_only(t
     request = requests[-1]
     assert request.cwd == tmp_path
     assert request.argv[1:] == (
-        "install", "org/repo/jobs#v1", "--root", str(tmp_path),
-        "--only", "apm", "--target", "agent-skills", "--no-trust-bin",
+        "install",
+        "org/repo/jobs#v1",
+        "--root",
+        str(tmp_path),
+        "--only",
+        "apm",
+        "--target",
+        "agent-skills",
+        "--no-trust-bin",
     )
     assert request.env["APM_NO_SCRIPTS"] == "1"
     assert request.env["APM_PROGRESS"] == "never"
@@ -313,7 +352,9 @@ def test_native_invocation_preserves_auth_and_suppresses_activation_child_only(t
 
 
 @pytest.mark.parametrize("verbose", [False, True])
-def test_verbose_requests_native_diagnostics_without_a_second_install(tmp_path, monkeypatch, verbose):
+def test_verbose_requests_native_diagnostics_without_a_second_install(
+    tmp_path, monkeypatch, verbose
+):
     from apmx.contracts.models import ContractLimits
     from apmx.install.apm_backend import install
 
@@ -349,8 +390,8 @@ def test_native_install_line_reaches_logger_before_install_returns(tmp_path, mon
 
 
 def test_frozen_native_replay_never_adds_positional_packages(tmp_path, monkeypatch):
-    from apmx.install.apm_backend import install
     from apmx.contracts.models import ContractLimits
+    from apmx.install.apm_backend import install
 
     requests = _unit_backend(tmp_path, monkeypatch)
     install(tmp_path, frozen=True, limits=ContractLimits())
@@ -362,8 +403,8 @@ def test_frozen_native_replay_never_adds_positional_packages(tmp_path, monkeypat
 
 @pytest.mark.parametrize("failure", ["exit", "timeout", "cleanup", "spawn", "cancelled"])
 def test_native_failures_halt_without_leaking_output(tmp_path, monkeypatch, failure):
-    from apmx.install.apm_backend import install
     from apmx.contracts.models import ContractLimits, ProcessObservation
+    from apmx.install.apm_backend import install
 
     observation = {
         "exit": ProcessObservation(1),
@@ -383,8 +424,8 @@ def test_native_failures_halt_without_leaking_output(tmp_path, monkeypatch, fail
 
 
 def test_wrong_backend_version_refuses_before_install(tmp_path, monkeypatch):
-    from apmx.install.apm_backend import install
     from apmx.contracts.models import ContractLimits
+    from apmx.install.apm_backend import install
 
     requests = _unit_backend(tmp_path, monkeypatch, version=b"APM wrong version\n")
     events = []
@@ -394,32 +435,63 @@ def test_wrong_backend_version_refuses_before_install(tmp_path, monkeypatch):
     assert not events
 
 
-@pytest.mark.parametrize("scope,frozen,package_ref", [
-    ("package", False, "https://user:PRIVATE_REQUEST@example.test/repo?token=PRIVATE_QUERY"),
-    ("package", False, None),
-    ("package", True, None),
-    ("consumer", False, None),
-    ("consumer", True, None),
-])
+@pytest.mark.parametrize(
+    "scope,frozen,package_ref",
+    [
+        ("package", False, "https://user:PRIVATE_REQUEST@example.test/repo?token=PRIVATE_QUERY"),
+        ("package", False, None),
+        ("package", True, None),
+        ("consumer", False, None),
+        ("consumer", True, None),
+    ],
+)
 def test_preparation_events_describe_only_validated_install_facts(
-    tmp_path, monkeypatch, scope, frozen, package_ref,
+    tmp_path,
+    monkeypatch,
+    scope,
+    frozen,
+    package_ref,
 ):
     from apmx.contracts.models import ContractLimits
-    from apmx.install.apm_backend import install
     from apmx.contracts.stream import safe_text
+    from apmx.install.apm_backend import install
 
     requests = _unit_backend(tmp_path, monkeypatch)
     monkeypatch.setenv("GITHUB_TOKEN", "PRIVATE_AUTH_SENTINEL")
     events = []
     identity = install(
-        tmp_path, package_ref=package_ref, frozen=frozen, limits=ContractLimits(), scope=scope,
+        tmp_path,
+        package_ref=package_ref,
+        frozen=frozen,
+        limits=ContractLimits(),
+        scope=scope,
         on_preparation=lambda event: events.append((event, len(requests))),
     )
     assert [(event, count) for event, count in events if isinstance(event, ApmInstallEvent)] == [
-        (ApmInstallEvent("started", scope, identity["version"], frozen, package_ref is not None,
-                         tmp_path, package_ref), 1),
-        (ApmInstallEvent("completed", scope, identity["version"], frozen, package_ref is not None,
-                         tmp_path, package_ref), 2),
+        (
+            ApmInstallEvent(
+                "started",
+                scope,
+                identity["version"],
+                frozen,
+                package_ref is not None,
+                tmp_path,
+                package_ref,
+            ),
+            1,
+        ),
+        (
+            ApmInstallEvent(
+                "completed",
+                scope,
+                identity["version"],
+                frozen,
+                package_ref is not None,
+                tmp_path,
+                package_ref,
+            ),
+            2,
+        ),
     ]
     assert "PRIVATE" not in safe_text(repr(events))
     assert len([event for event, _ in events if isinstance(event, ApmOutputEvent)]) == 2
@@ -436,9 +508,16 @@ def test_post_probe_failure_never_emits_install_completion(tmp_path, monkeypatch
         identity = apm_backend.backend_identity(apm_backend.locate_backend())
         from unittest.mock import Mock
 
-        monkeypatch.setattr(apm_backend, "backend_identity", Mock(side_effect=[
-            identity, {**identity, "executable_sha256": "changed"},
-        ]))
+        monkeypatch.setattr(
+            apm_backend,
+            "backend_identity",
+            Mock(
+                side_effect=[
+                    identity,
+                    {**identity, "executable_sha256": "changed"},
+                ]
+            ),
+        )
         exception = ContractError
     else:
         supervise = apm_backend.supervise_process
@@ -456,9 +535,16 @@ def test_post_probe_failure_never_emits_install_completion(tmp_path, monkeypatch
     assert [event.phase for event in events if isinstance(event, ApmInstallEvent)] == ["started"]
 
 
-@pytest.mark.parametrize("target", [
-    "linux-x86_64", "linux-arm64", "macos-x86_64", "macos-arm64", "windows-x86_64",
-])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "linux-x86_64",
+        "linux-arm64",
+        "macos-x86_64",
+        "macos-arm64",
+        "windows-x86_64",
+    ],
+)
 def test_version_output_is_exact_platform_pin(target):
     from apmx.install.apm_backend import expected_version_output
 
@@ -470,13 +556,14 @@ def test_version_output_is_exact_platform_pin(target):
 
 @pytest.mark.parametrize("target", ["macos-arm64", "windows-x86_64"])
 def test_other_platform_version_shape_does_not_satisfy_pin(tmp_path, monkeypatch, target):
-    from apmx.install import apm_backend
     from apmx.contracts.models import ContractLimits
+    from apmx.install import apm_backend
 
     expected = apm_backend.expected_version_output(target)
     wrong = (
         apm_backend.expected_version_output("windows-x86_64")
-        if target == "macos-arm64" else apm_backend.expected_version_output("macos-arm64")
+        if target == "macos-arm64"
+        else apm_backend.expected_version_output("macos-arm64")
     )
     requests = _unit_backend(tmp_path, monkeypatch, version=wrong.encode())
     monkeypatch.setattr(apm_backend, "expected_version_output", lambda: expected)
@@ -488,12 +575,16 @@ def test_other_platform_version_shape_does_not_satisfy_pin(tmp_path, monkeypatch
 @pytest.mark.parametrize("field", ["resolved_commit", "resolved_ref", "version", "content_hash"])
 def test_adding_root_cannot_replace_existing_consumer_pin(field):
     from dataclasses import replace
-    from apmx.deps.lockfile import LockFile, LockedDependency
+
+    from apmx.deps.lockfile import LockedDependency, LockFile
     from apmx.install.apm_backend import require_preserved_pins
 
     locked = LockedDependency(
-        repo_url="fixture/context", resolved_commit="a" * 40, resolved_ref="v1",
-        version="1.0.0", content_hash="sha256:" + "a" * 64,
+        repo_url="fixture/context",
+        resolved_commit="a" * 40,
+        resolved_ref="v1",
+        version="1.0.0",
+        content_hash="sha256:" + "a" * 64,
     )
     before = LockFile()
     before.add_dependency(locked)
@@ -505,8 +596,8 @@ def test_adding_root_cannot_replace_existing_consumer_pin(field):
 
 @pytest.mark.parametrize("padding", [" ", "\n", "arbitrary-prefix"])
 def test_version_probe_rejects_padded_output(tmp_path, monkeypatch, padding):
-    from apmx.install import apm_backend
     from apmx.contracts.models import ContractLimits
+    from apmx.install import apm_backend
 
     output = (padding + apm_backend.expected_version_output() + "\n").encode()
     requests = _unit_backend(tmp_path, monkeypatch, version=output)

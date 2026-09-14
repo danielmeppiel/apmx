@@ -118,7 +118,7 @@ def test_real_pty_streams_before_completion_and_restores_terminal(
             if slave > 2:
                 os.close(slave)
             # Fixed local interpreter and test-owned source, never shell input.
-            os.execv(  # noqa: S606
+            os.execv(
                 sys.executable,
                 [sys.executable, "-c", _ACTOR, str(tmp_path), "5" if cancel else "1"],
             )

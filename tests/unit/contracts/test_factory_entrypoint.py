@@ -10,13 +10,15 @@ from unittest.mock import Mock
 
 import pytest
 from click.testing import CliRunner
+from test_chain import caller, producer, two_nodes, write_contract
 
 from apmx.cli import main
 from apmx.contracts import resolution
 from apmx.contracts.models import ContractError
 from apmx.core.contract_logger import ContractLogger
 from apmx.install import contract_source
-from test_chain import caller as caller, producer, two_nodes, write_contract
+
+__all__ = ["caller"]
 
 pytestmark = pytest.mark.component
 
@@ -220,7 +222,7 @@ def test_unobservable_or_closed_confirmation_cannot_authorize(caller, monkeypatc
 
     def unavailable(logger):
         if fault == "hidden-prompt":
-            logger._disable_human_output()
+            logger._display.disable()
             monkeypatch.setattr(sys.stdin, "readline", Mock(side_effect=AssertionError("no read")))
         else:
             monkeypatch.setattr(sys.stdin, "readline", Mock(side_effect=EOFError()))
@@ -354,7 +356,8 @@ def test_rejected_chain_option_and_package_factory_have_no_fallback(caller):
     help_result = CliRunner().invoke(main, ["--help"])
     assert "--chain" not in help_result.output and "FACTORY_OR_CONTRACT" in help_result.output
     rejected = CliRunner().invoke(main, [str(caller), "--on", "copilot", "--chain"])
-    assert rejected.exit_code == 2 and "No such option: --chain" in rejected.output
+    assert rejected.exit_code == 2
+    assert "No such option" in rejected.output and "--chain" in rejected.output
     packaged = CliRunner().invoke(main, [".", "--from", str(caller), "--on", "copilot", "--plan"])
     assert packaged.exit_code == 2 and "leaf contracts only" in packaged.output
     assert not (caller / ".apm").exists()

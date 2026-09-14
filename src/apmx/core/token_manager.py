@@ -24,7 +24,6 @@ import logging
 import os
 import subprocess
 import sys
-from ..utils.subprocess_env import run_external
 from urllib.parse import urlparse
 
 from apmx.utils.git_env import get_gh_executable, get_git_executable
@@ -34,6 +33,8 @@ from apmx.utils.github_host import (
     is_github_hostname,
     is_valid_fqdn,
 )
+
+from ..utils.subprocess_env import run_external
 
 logger = logging.getLogger(__name__)
 
@@ -428,7 +429,7 @@ class GitHubTokenManager:
     def _get_available_tokens(self, env: dict[str, str]) -> dict[str, str]:
         """Get all available GitHub tokens from environment."""
         tokens = {}
-        for purpose, token_vars in self.TOKEN_PRECEDENCE.items():  # noqa: B007
+        for token_vars in self.TOKEN_PRECEDENCE.values():
             for token_var in token_vars:
                 if env.get(token_var):
                     tokens[token_var] = env[token_var]

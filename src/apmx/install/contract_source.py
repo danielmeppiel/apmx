@@ -1,17 +1,21 @@
 """Prepare package sources through the bundled official APM CLI."""
 
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-import tempfile
 
 from apmx.contracts.events import PreparationSink
 from apmx.contracts.frontend import admit_caller_policy, package_contract_path, parse_contract
 from apmx.contracts.imports import (
-    _read_bytes, read_lock, read_project_manifest, resolve_installed_skills,
+    _read_bytes,
+    read_lock,
+    read_project_manifest,
+    resolve_installed_skills,
 )
 from apmx.contracts.models import ContractError, ContractLimits, ContractSource, Outcome
 from apmx.contracts.native_integrity import verify_inventory_package
+from apmx.deps.lockfile import resolve_lockfile_path_for_read
 from apmx.install import apm_backend
 from apmx.install.contract_source_validation import source_hash, validate_reference
 from apmx.models.dependency.reference import DependencyReference
@@ -20,7 +24,6 @@ from apmx.models.dependency.selection import (
     select_manifest_dependency,
 )
 from apmx.utils.path_security import has_symlink_component, safe_rmtree
-from apmx.deps.lockfile import resolve_lockfile_path_for_read
 
 
 @contextmanager
@@ -57,16 +60,23 @@ def _original_bytes(root: Path, limits: ContractLimits) -> tuple[bytes, bytes | 
 
 def _selected_source(stage: Path, requested: DependencyReference, limits: ContractLimits):
     lock, _ = read_lock(stage, limits)
-    matches = [] if lock is None else [
-        entry for entry in lock.dependencies.values()
-        if entry.depth == 1 and (
-            entry.to_dependency_ref().get_identity() == requested.get_identity()
-            or (
-                requested.is_local and entry.source == "local"
-                and entry.local_path == requested.local_path
+    matches = (
+        []
+        if lock is None
+        else [
+            entry
+            for entry in lock.dependencies.values()
+            if entry.depth == 1
+            and (
+                entry.to_dependency_ref().get_identity() == requested.get_identity()
+                or (
+                    requested.is_local
+                    and entry.source == "local"
+                    and entry.local_path == requested.local_path
+                )
             )
-        )
-    ]
+        ]
+    )
     if len(matches) != 1:
         raise ContractError(
             "The requested package has no unique installed APM lock identity.",
@@ -81,7 +91,11 @@ def _selected_source(stage: Path, requested: DependencyReference, limits: Contra
     managed_metadata = ()
     if locked.content_hash:
         managed_metadata = verify_inventory_package(
-            stage, locked, lock, limits, error_code="source_changed",
+            stage,
+            locked,
+            lock,
+            limits,
+            error_code="source_changed",
         )
     return root.resolve(), locked, managed_metadata
 
@@ -91,13 +105,13 @@ def _validate_source_pin(requested, locked):
     from apmx.utils.github_host import is_full_commit_sha
 
     if detect_ref_change(requested, locked) or (
-        not requested.is_local and (
-            not is_full_commit_sha(locked.resolved_commit) or not locked.content_hash
-        )
+        not requested.is_local
+        and (not is_full_commit_sha(locked.resolved_commit) or not locked.content_hash)
     ):
         raise ContractError(
             "Requested source differs from its exact caller lock reference.",
-            code="unresolved_source", outcome=Outcome.UNPROVEN,
+            code="unresolved_source",
+            outcome=Outcome.UNPROVEN,
         )
 
 
@@ -126,7 +140,9 @@ def prepare_contract_source(
         declarations.extend((caller_package.dev_dependencies or {}).get("apm", []))
         selection = select_manifest_dependency(package_ref, declarations, caller_lock)
         if selection.status == DependencySelectionStatus.AMBIGUOUS:
-            raise ContractError("Caller package declaration is ambiguous.", code="unresolved_source")
+            raise ContractError(
+                "Caller package declaration is ambiguous.", code="unresolved_source"
+            )
         if selection.status == DependencySelectionStatus.MATCHED and caller_lock is not None:
             from apmx.models.dependency.selection import parse_dependency_entry
 
@@ -168,23 +184,32 @@ def prepare_contract_source(
                         raise
                     raise ContractError(
                         "Imported context is unresolved offline; install it explicitly first.",
-                        code="unresolved_import", outcome=Outcome.UNPROVEN,
+                        code="unresolved_import",
+                        outcome=Outcome.UNPROVEN,
                     ) from exc
                 yield ContractSource(
-                    original, contract_relative_path, package_ref,
-                    package_hash=original_hash, imports_root=original,
+                    original,
+                    contract_relative_path,
+                    package_ref,
+                    package_hash=original_hash,
+                    imports_root=original,
                 )
                 return
         elif planning:
             if selection.status != DependencySelectionStatus.MATCHED or caller_lock is None:
                 raise ContractError(
                     "Remote source is unresolved offline; install it explicitly first.",
-                    code="unresolved_source", outcome=Outcome.UNPROVEN,
+                    code="unresolved_source",
+                    outcome=Outcome.UNPROVEN,
                 )
             root, locked, managed_metadata = _selected_source(caller_root, requested, limits)
             yield ContractSource(
-                root, contract_relative_path, package_ref, locked.resolved_commit,
-                source_hash(root, limits), "locked-package-hash",
+                root,
+                contract_relative_path,
+                package_ref,
+                locked.resolved_commit,
+                source_hash(root, limits),
+                "locked-package-hash",
                 imports_root=caller_root,
                 managed_metadata=managed_metadata,
             )
@@ -201,37 +226,50 @@ def prepare_contract_source(
                     request, staged_declarations, established
                 )
                 if staged_selection.status == DependencySelectionStatus.AMBIGUOUS:
-                    raise ContractError("Caller package declaration is ambiguous.",
-                                        code="unresolved_source")
+                    raise ContractError(
+                        "Caller package declaration is ambiguous.", code="unresolved_source"
+                    )
                 if staged_selection.status != DependencySelectionStatus.MATCHED:
                     apm_backend.add_package_request(stage, request, limits)
                     frozen = False
                 identity = apm_backend.install(
-                    stage, frozen=frozen, limits=limits, on_preparation=on_preparation,
+                    stage,
+                    frozen=frozen,
+                    limits=limits,
+                    on_preparation=on_preparation,
                     verbose=verbose,
                 )
                 installed_lock, _ = read_lock(stage, limits)
                 apm_backend.require_preserved_pins(established, installed_lock)
             else:
                 if caller_lock is not None:
-                    raise ContractError("Consumer lock requires its manifest.",
-                                        code="invalid_manifest")
+                    raise ContractError(
+                        "Consumer lock requires its manifest.", code="invalid_manifest"
+                    )
                 identity = apm_backend.install(
-                    stage, package_ref=str(original) if original else package_ref, limits=limits,
-                    on_preparation=on_preparation, verbose=verbose,
+                    stage,
+                    package_ref=str(original) if original else package_ref,
+                    limits=limits,
+                    on_preparation=on_preparation,
+                    verbose=verbose,
                 )
             _, _, current_manifest = read_project_manifest(caller_root, limits, allow_missing=True)
             _, current_lock = read_lock(caller_root, limits)
             if (current_manifest, current_lock) != (caller_manifest_digest, caller_lock_digest):
-                raise ContractError("Consumer declarations changed during preparation.",
-                                    code="plan_changed")
+                raise ContractError(
+                    "Consumer declarations changed during preparation.", code="plan_changed"
+                )
             root, locked, managed_metadata = _selected_source(stage, requested, limits)
             parse_contract(package_contract_path(root, contract_relative_path), limits=limits)
             if original and source_hash(original, limits) != original_hash:
-                raise ContractError("Original package changed during preparation.",
-                                    code="source_changed")
+                raise ContractError(
+                    "Original package changed during preparation.", code="source_changed"
+                )
             yield ContractSource(
-                root, contract_relative_path, package_ref, locked.resolved_commit,
+                root,
+                contract_relative_path,
+                package_ref,
+                locked.resolved_commit,
                 original_hash or source_hash(root, limits),
                 "observed-local-source" if original else "observed-resolved-source",
                 prepared_hash=source_hash(root, limits),
@@ -280,10 +318,15 @@ def prepare_imports(
     with _private_root(caller_root, None) as stage:
         frozen = apm_backend.snapshot_manifest(caller_root, stage, limits)
         identity = apm_backend.install(
-            stage, frozen=frozen, limits=limits, on_preparation=on_preparation, scope="consumer",
+            stage,
+            frozen=frozen,
+            limits=limits,
+            on_preparation=on_preparation,
+            scope="consumer",
             verbose=verbose,
         )
         if _original_bytes(caller_root, limits) != before:
-            raise ContractError("Consumer declarations changed during preparation.",
-                                code="plan_changed")
+            raise ContractError(
+                "Consumer declarations changed during preparation.", code="plan_changed"
+            )
         yield stage, identity

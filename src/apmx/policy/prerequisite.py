@@ -12,8 +12,10 @@ def require_no_policy(root: Path, manifest: dict) -> None:
     def refuse(reason: str, *, code: str = "policy_unavailable") -> None:
         raise ContractError(
             "Native contracts require positively established no-policy governance. "
-            + reason + " Configured, disabled and unresolved governance are unsupported.",
-            code=code, outcome=Outcome.UNPROVEN,
+            + reason
+            + " Configured, disabled and unresolved governance are unsupported.",
+            code=code,
+            outcome=Outcome.UNPROVEN,
         )
 
     if os.environ.get("APM_POLICY_DISABLE") == "1":
@@ -27,14 +29,18 @@ def require_no_policy(root: Path, manifest: dict) -> None:
     if "policy" in manifest:
         policy = manifest["policy"]
         code = (
-            "policy_blocked" if isinstance(policy, dict)
-            and policy.get("fetch_failure_default") == "block" else "policy_unavailable"
+            "policy_blocked"
+            if isinstance(policy, dict) and policy.get("fetch_failure_default") == "block"
+            else "policy_unavailable"
         )
         refuse("The caller declares policy configuration.", code=code)
     has_git = any(
-        (parent / ".git").exists() or (parent / ".git").is_symlink()
-        or ((parent / "HEAD").exists() and
-            ((parent / "objects").exists() or (parent / "config").exists()))
+        (parent / ".git").exists()
+        or (parent / ".git").is_symlink()
+        or (
+            (parent / "HEAD").exists()
+            and ((parent / "objects").exists() or (parent / "config").exists())
+        )
         for parent in (root, *root.parents)
     )
     if not has_git:

@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from test_chain import caller, producer
+from test_chain_sources import package, prepared, private_preparation
 
 from apmx.contracts import engine, records, workspace
 from apmx.contracts.models import (
@@ -19,8 +21,8 @@ from apmx.contracts.models import (
 )
 from apmx.core.contract_logger import ContractLogger
 from apmx.deps.lockfile import LockFile
-from test_chain import caller as caller, producer
-from test_chain_sources import package, prepared, private_preparation as private_preparation
+
+__all__ = ["caller", "private_preparation"]
 
 pytestmark = pytest.mark.component
 
@@ -75,7 +77,9 @@ def test_every_retained_metadata_copy_is_required(
     for selected in PROVENANCE_FILES:
         observed = []
 
-        def affected(root: Path, name: str, maximum: int) -> tuple[bytes, FileEntry]:
+        def affected(
+            root: Path, name: str, maximum: int, *, selected=selected, observed=observed
+        ) -> tuple[bytes, FileEntry]:
             if root == source and name == selected:
                 observed.append(name)
                 if fault == "missing":

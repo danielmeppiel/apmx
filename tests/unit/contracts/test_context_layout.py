@@ -19,7 +19,12 @@ def test_invalid_native_names_are_not_rewritten(name: str) -> None:
 
 def test_skill_identity_is_not_its_package_alias() -> None:
     context = ImportedSkill(
-        "package-alias", Path("SKILL.md"), "", "digest", "lock", context_name="actual-skill",
+        "package-alias",
+        Path("SKILL.md"),
+        "",
+        "digest",
+        "lock",
+        context_name="actual-skill",
     )
     assert context_directory(context, 3) == ".agents/skills/actual-skill"
 
@@ -35,10 +40,16 @@ def test_discovery_roots_are_recognized_case_insensitively(root: str) -> None:
     assert not is_native_skill_path(root + "-other/file.txt")
 
 
-@pytest.mark.parametrize("output", [
-    ".agents", ".agents/skills/new/SKILL.md", ".GITHUB/skills/new/SKILL.md",
-    ".claude/skills", "_apmx_context/new.md",
-])
+@pytest.mark.parametrize(
+    "output",
+    [
+        ".agents",
+        ".agents/skills/new/SKILL.md",
+        ".GITHUB/skills/new/SKILL.md",
+        ".claude/skills",
+        "_apmx_context/new.md",
+    ],
+)
 def test_outputs_cannot_create_activation_content(tmp_path: Path, output: str) -> None:
     source = tmp_path / "job.contract.md"
     source.write_text(
@@ -51,8 +62,12 @@ def test_outputs_cannot_create_activation_content(tmp_path: Path, output: str) -
 
 def test_inputs_cannot_smuggle_a_discovery_tree(tmp_path: Path) -> None:
     contract = LeafContract(
-        tmp_path / "job.contract.md", "digest", "Write output.",
-        (".github/skills/decoy/SKILL.md",), "out.txt", (),
+        tmp_path / "job.contract.md",
+        "digest",
+        "Write output.",
+        (".github/skills/decoy/SKILL.md",),
+        "out.txt",
+        (),
     )
     plan = LeafPlan(contract, tmp_path, Path("/native/copilot"))
     with pytest.raises(ContractError, match="Inputs cannot activate project skills"):
@@ -65,10 +80,14 @@ def test_context_destinations_have_one_static_owner() -> None:
         tree = ast.parse((root / relative).read_text())
         nodes = list(ast.walk(tree))
         assert any(
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "context_directory" for node in nodes
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "context_directory"
+            for node in nodes
         )
         assert not any(
-            isinstance(node, ast.Constant) and isinstance(node.value, str)
-            and "_apmx_context/import-" in node.value for node in nodes
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and "_apmx_context/import-" in node.value
+            for node in nodes
         )

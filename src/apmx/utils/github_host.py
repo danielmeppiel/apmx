@@ -794,8 +794,7 @@ def parse_ado_repo_url(url: str | None) -> tuple[str, str, str] | None:
         return None
 
     path = parsed.path.strip("/")
-    if path.endswith(".git"):
-        path = path[: -len(".git")]
+    path = path.removesuffix(".git")
     segments = [urllib.parse.unquote(s) for s in path.split("/") if s]
     if "_git" not in segments:
         return None

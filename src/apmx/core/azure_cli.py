@@ -20,13 +20,17 @@ Usage::
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from ..utils.subprocess_env import run_external
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -170,9 +174,8 @@ class AzureCliBearerProvider:
         on any failure -- this method never raises.
         """
         # Explicit early-return when az was not resolved at __init__: avoids
-        # passing None as argv[0] to subprocess.run (which would TypeError
-        # and only be swallowed by the broad except below). Mirrors the
-        # is_available() guard that get_bearer_token() does.
+        # passing None as argv[0] to subprocess.run (which would TypeError).
+        # Mirrors the is_available() guard that get_bearer_token() does.
         if not self._az_command:
             return None
         try:
@@ -187,7 +190,9 @@ class AzureCliBearerProvider:
                 if tenant:
                     return tenant
         except Exception:
-            pass
+            # The best-effort probe must also tolerate arbitrary runner failures.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.exception("Unable to read the active Azure CLI tenant", exc_info=False)
         return None
 
     def clear_cache(self) -> None:
@@ -336,4 +341,4 @@ def _parse_expires_on(value: str) -> float | None:
     if dt.tzinfo is None:
         # az emits naive timestamps in *local* time on older versions; respect that.
         dt = dt.astimezone()
-    return dt.astimezone(timezone.utc).timestamp()
+    return dt.astimezone(UTC).timestamp()

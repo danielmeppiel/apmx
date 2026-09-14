@@ -19,7 +19,11 @@ from click.testing import CliRunner
 from apmx.cli import main
 from apmx.contracts import frontend, workspace
 from apmx.contracts.models import (
-    ContractError, ContractLimits, Outcome, ProcessObservation, ProcessRequest,
+    ContractError,
+    ContractLimits,
+    Outcome,
+    ProcessObservation,
+    ProcessRequest,
 )
 from apmx.contracts.records import AttemptStore
 from apmx.deps.lockfile import LockedDependency, LockFile
@@ -77,20 +81,29 @@ def _skill(root):
 
 def _prepare(package, caller, *, planning=False):
     return contract_source.prepare_contract_source(
-        str(package), "job.contract.md", caller_root=caller,
-        planning=planning, limits=ContractLimits(),
+        str(package),
+        "job.contract.md",
+        caller_root=caller,
+        planning=planning,
+        limits=ContractLimits(),
     )
 
 
 @pytest.fixture
 def producer(monkeypatch):
     """Real local child and checks, never native model inference."""
+
     def build_request(plan, snapshot, directory, *, timeout_seconds):
         return ProcessRequest(
-            (sys.executable, "-c",
-             "from pathlib import Path; "
-             "Path('result.txt').write_bytes(Path('notes.md').read_bytes()); "
-             """print('{"type":"result","exitCode":0,"sessionId":"fixture","usage":{}}')"""),
+            (
+                sys.executable,
+                "-c",
+                (
+                    "from pathlib import Path; "
+                    "Path('result.txt').write_bytes(Path('notes.md').read_bytes()); "
+                    """print('{"type":"result","exitCode":0,"sessionId":"fixture","usage":{}}')"""
+                ),
+            ),
             snapshot.producer,
             timeout_seconds,
         )
@@ -107,10 +120,18 @@ def producer(monkeypatch):
 def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, producer, verbose):
     package = _package(tmp_path / "job", imports=True)
     _skill(tmp_path / "style")
-    result = CliRunner().invoke(main, [
-        "--from", str(package), "job.contract.md", "--on", "copilot", "--allow-host-access",
-        *(["--verbose"] if verbose else []),
-    ])
+    result = CliRunner().invoke(
+        main,
+        [
+            "--from",
+            str(package),
+            "job.contract.md",
+            "--on",
+            "copilot",
+            "--allow-host-access",
+            *(["--verbose"] if verbose else []),
+        ],
+    )
     assert result.exit_code == Outcome.UNPROVEN, result.output
     assert "content: passed" in result.output
     producer.assert_called_once()
@@ -147,7 +168,13 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
 @pytest.mark.parametrize("frozen", [False, True])
 @pytest.mark.parametrize("verbose", [False, True])
 def test_consumer_preparation_is_separately_scoped_and_retained(
-    caller, tmp_path, producer, monkeypatch, packaged, frozen, verbose,
+    caller,
+    tmp_path,
+    producer,
+    monkeypatch,
+    packaged,
+    frozen,
+    verbose,
 ):
     from apmx.install import apm_backend
 
@@ -163,11 +190,17 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
     before = (caller / "apm.yml").read_bytes()
     install = Mock(wraps=apm_backend.install)
     monkeypatch.setattr(apm_backend, "install", install)
-    result = CliRunner().invoke(main, [
-        "job.contract.md", "--on", "copilot", "--allow-host-access",
-        *(["--from", str(package)] if packaged else []),
-        *(["--verbose"] if verbose else []),
-    ])
+    result = CliRunner().invoke(
+        main,
+        [
+            "job.contract.md",
+            "--on",
+            "copilot",
+            "--allow-host-access",
+            *(["--from", str(package)] if packaged else []),
+            *(["--verbose"] if verbose else []),
+        ],
+    )
     assert result.exit_code == Outcome.UNPROVEN, result.output
     assert "content: passed" in result.output
     producer.assert_called_once()
@@ -202,11 +235,17 @@ def test_offline_cli_never_reports_an_install(caller, tmp_path, monkeypatch, sel
     install = Mock(side_effect=AssertionError("Offline planning invoked APM"))
     monkeypatch.setattr("apmx.install.apm_backend.install", install)
     ref = str(package) if selection == "package" else "org/job#v1"
-    result = CliRunner().invoke(main, [
-        "job.contract.md", "--on", "copilot", "--plan",
-        *(["--from", ref] if selection != "local" else []),
-        *(["--verbose"] if verbose else []),
-    ])
+    result = CliRunner().invoke(
+        main,
+        [
+            "job.contract.md",
+            "--on",
+            "copilot",
+            "--plan",
+            *(["--from", ref] if selection != "local" else []),
+            *(["--verbose"] if verbose else []),
+        ],
+    )
     assert result.exit_code == (Outcome.UNPROVEN if selection == "remote" else 0), result.output
     install.assert_not_called()
     assert "with APM" not in result.output
@@ -217,15 +256,25 @@ def test_offline_cli_never_reports_an_install(caller, tmp_path, monkeypatch, sel
 
 @pytest.mark.parametrize("verbose", [False, True])
 def test_local_run_without_imports_does_not_claim_apm_ran(
-    caller, tmp_path, producer, monkeypatch, verbose,
+    caller,
+    tmp_path,
+    producer,
+    monkeypatch,
+    verbose,
 ):
     shutil.copytree(_package(tmp_path / "job"), caller, dirs_exist_ok=True)
     install = Mock(side_effect=AssertionError("No imports need APM"))
     monkeypatch.setattr("apmx.install.apm_backend.install", install)
-    result = CliRunner().invoke(main, [
-        "job.contract.md", "--on", "copilot", "--allow-host-access",
-        *(["--verbose"] if verbose else []),
-    ])
+    result = CliRunner().invoke(
+        main,
+        [
+            "job.contract.md",
+            "--on",
+            "copilot",
+            "--allow-host-access",
+            *(["--verbose"] if verbose else []),
+        ],
+    )
     assert result.exit_code == Outcome.UNPROVEN, result.output
     assert "content: passed" in result.output
     install.assert_not_called()
@@ -242,7 +291,13 @@ def test_local_run_without_imports_does_not_claim_apm_ran(
 @pytest.mark.parametrize("failure", ["exit", "version", "cancelled", "interrupt"])
 @pytest.mark.parametrize("verbose", [False, True])
 def test_failed_preparation_never_launches_producer_or_claims_success(
-    caller, tmp_path, producer, monkeypatch, packaged, failure, verbose,
+    caller,
+    tmp_path,
+    producer,
+    monkeypatch,
+    packaged,
+    failure,
+    verbose,
 ):
     from apmx.install import apm_backend
 
@@ -253,7 +308,9 @@ def test_failed_preparation_never_launches_producer_or_claims_success(
     monkeypatch.setenv("GITHUB_TOKEN", "PRIVATE_AUTH_SENTINEL")
 
     def failed(request, *, on_bytes, **kwargs):
-        on_bytes("stderr", b"Authorization: Bearer PRIVATE_STDERR_SENTINEL\x1b]52;c;injection\x07\n")
+        on_bytes(
+            "stderr", b"Authorization: Bearer PRIVATE_STDERR_SENTINEL\x1b]52;c;injection\x07\n"
+        )
         if request.argv[1] == "--version" and failure != "version":
             on_bytes("stdout", apm_backend.expected_version_output().encode() + b"\n")
             return ProcessObservation(0)
@@ -266,11 +323,17 @@ def test_failed_preparation_never_launches_producer_or_claims_success(
 
     supervisor = Mock(side_effect=failed)
     monkeypatch.setattr(apm_backend, "supervise_process", supervisor)
-    result = CliRunner().invoke(main, [
-        "job.contract.md", "--on", "copilot", "--allow-host-access",
-        *(["--from", str(package)] if packaged else []),
-        *(["--verbose"] if verbose else []),
-    ])
+    result = CliRunner().invoke(
+        main,
+        [
+            "job.contract.md",
+            "--on",
+            "copilot",
+            "--allow-host-access",
+            *(["--from", str(package)] if packaged else []),
+            *(["--verbose"] if verbose else []),
+        ],
+    )
     assert result.exit_code == Outcome.HALTED, result.output
     producer.assert_not_called()
     assert supervisor.call_count == (1 if failure == "version" else 2)
@@ -284,11 +347,17 @@ def test_failed_preparation_never_launches_producer_or_claims_success(
     assert not (caller / ".apm/runs").exists()
 
 
-@pytest.mark.parametrize("args,code", [
-    (["--help"], 0), (["--version"], 0), ([], 2),
-    (["job", "--on", "copilot"], 2), (["job.contract.md"], 2),
-    (["job.contract.md", "extra", "--on", "copilot"], 2),
-])
+@pytest.mark.parametrize(
+    "args,code",
+    [
+        (["--help"], 0),
+        (["--version"], 0),
+        ([], 2),
+        (["job", "--on", "copilot"], 2),
+        (["job.contract.md"], 2),
+        (["job.contract.md", "extra", "--on", "copilot"], 2),
+    ],
+)
 def test_cli_explicit_selection(args, code):
     result = CliRunner().invoke(main, args)
     assert result.exit_code == code, result.output
@@ -325,9 +394,17 @@ def test_manifestless_local_plan_is_read_only(caller):
 def test_malformed_caller_manifest_blocks_package(caller, tmp_path):
     package = _package(tmp_path / "job")
     (caller / "apm.yml").write_text("[invalid\n")
-    result = CliRunner().invoke(main, [
-        "--from", str(package), "job.contract.md", "--on", "copilot", "--plan",
-    ])
+    result = CliRunner().invoke(
+        main,
+        [
+            "--from",
+            str(package),
+            "job.contract.md",
+            "--on",
+            "copilot",
+            "--plan",
+        ],
+    )
     assert result.exit_code == 22
     assert "manifest" in result.output.lower()
     assert not (caller / ".apm").exists()
@@ -337,11 +414,16 @@ def test_package_plan_maps_caller_and_resources(caller, tmp_path):
     package = _package(tmp_path / "job")
     before = compute_package_hash(package)
     with _prepare(package, caller, planning=True) as source:
-        plan = frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
+        plan = frontend.plan_contract(
+            Path("job.contract.md"), caller, harness="copilot", source=source
+        )
         entries = {item.relative_path: item for item in workspace.inspect_workspace(plan)}
         assert plan.project_root == caller
         assert plan.evidence_root == caller / ".apm/runs"
-        assert entries["notes.md"].sha256 == hashlib.sha256((caller / "notes.md").read_bytes()).hexdigest()
+        assert (
+            entries["notes.md"].sha256
+            == hashlib.sha256((caller / "notes.md").read_bytes()).hexdigest()
+        )
         assert "_apmx_source/contract.contract.md" in entries
         assert "checks/check.py" in entries
         assert "apm.yml" not in entries
@@ -349,34 +431,41 @@ def test_package_plan_maps_caller_and_resources(caller, tmp_path):
     assert not (caller / ".apm").exists()
 
 
-@pytest.mark.parametrize("collision", ["checks/extra.py", "Checks/extra.py", "_apmx_source/anything"])
+@pytest.mark.parametrize(
+    "collision", ["checks/extra.py", "Checks/extra.py", "_apmx_source/anything"]
+)
 def test_caller_source_collisions_refused(caller, tmp_path, collision):
     package = _package(tmp_path / "job")
     target = caller / collision
     target.parent.mkdir()
     target.write_text("caller")
     with _prepare(package, caller) as source:
-        plan = frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
+        plan = frontend.plan_contract(
+            Path("job.contract.md"), caller, harness="copilot", source=source
+        )
         with pytest.raises(ContractError, match="collide"):
             workspace.inspect_workspace(plan)
 
 
-@pytest.mark.parametrize("path", ["../job.contract.md", "/job.contract.md", "checks/../job.contract.md"])
+@pytest.mark.parametrize(
+    "path", ["../job.contract.md", "/job.contract.md", "checks/../job.contract.md"]
+)
 def test_package_source_escape_refused(caller, tmp_path, path):
     package = _package(tmp_path / "job")
-    with pytest.raises(ContractError):
-        with contract_source.prepare_contract_source(
+    with (
+        pytest.raises(ContractError),
+        contract_source.prepare_contract_source(
             str(package), path, caller_root=caller, planning=True, limits=ContractLimits()
-        ):
-            pytest.fail("Escaping source admitted")
+        ),
+    ):
+        pytest.fail("Escaping source admitted")
 
 
 def test_package_symlink_refused(caller, tmp_path):
     package = _package(tmp_path / "job")
     (package / "escape").symlink_to(caller / "notes.md")
-    with pytest.raises(ContractError, match="symlink"):
-        with _prepare(package, caller):
-            pytest.fail("Symlink source admitted")
+    with pytest.raises(ContractError, match="symlink"), _prepare(package, caller):
+        pytest.fail("Symlink source admitted")
 
 
 @pytest.mark.parametrize("variable", ["APM_POLICY_DISABLE", "APM_NO_SCRIPTS"])
@@ -384,9 +473,17 @@ def test_no_policy_gate_precedes_remote_acquisition(caller, monkeypatch, variabl
     acquire = Mock(side_effect=AssertionError("network acquisition"))
     monkeypatch.setattr("apmx.install.apm_backend.install", acquire)
     monkeypatch.setenv(variable, "1")
-    result = CliRunner().invoke(main, [
-        "--from", "org/job", "job.contract.md", "--on", "copilot", "--allow-host-access",
-    ])
+    result = CliRunner().invoke(
+        main,
+        [
+            "--from",
+            "org/job",
+            "job.contract.md",
+            "--on",
+            "copilot",
+            "--allow-host-access",
+        ],
+    )
     assert result.exit_code == 21, result.output
     acquire.assert_not_called()
 
@@ -394,9 +491,17 @@ def test_no_policy_gate_precedes_remote_acquisition(caller, monkeypatch, variabl
 def test_remote_plan_never_initializes_backend(caller, monkeypatch):
     acquire = Mock(side_effect=AssertionError("offline network"))
     monkeypatch.setattr("apmx.install.apm_backend.install", acquire)
-    result = CliRunner().invoke(main, [
-        "--from", "org/job#v1", "job.contract.md", "--on", "copilot", "--plan",
-    ])
+    result = CliRunner().invoke(
+        main,
+        [
+            "--from",
+            "org/job#v1",
+            "job.contract.md",
+            "--on",
+            "copilot",
+            "--plan",
+        ],
+    )
     assert result.exit_code == 21, result.output
     assert "unresolved" in result.output.lower()
     acquire.assert_not_called()
@@ -408,7 +513,9 @@ def test_missing_direct_local_skill_materializes_native_transitive(caller, tmp_p
     _skill(tmp_path / "style")
     original = compute_package_hash(package)
     with _prepare(package, caller) as source:
-        plan = frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
+        plan = frontend.plan_contract(
+            Path("job.contract.md"), caller, harness="copilot", source=source
+        )
         assert len(plan.imported_skills) == 1
         assert plan.imported_skills[0].name == "style"
         lock = LockFile.read(source.imports_root / "apm.lock.yaml")
@@ -417,7 +524,10 @@ def test_missing_direct_local_skill_materializes_native_transitive(caller, tmp_p
         store = AttemptStore.create(plan)
         retained = json.loads(store.record_path.read_text())["source"]["retained"]
         assert Path(retained["apm.yml"]).read_bytes() == (package / "apm.yml").read_bytes()
-        assert Path(retained["apm.lock.yaml"]).read_bytes() == (source.imports_root / "apm.lock.yaml").read_bytes()
+        assert (
+            Path(retained["apm.lock.yaml"]).read_bytes()
+            == (source.imports_root / "apm.lock.yaml").read_bytes()
+        )
         prepared = source.root
     assert not prepared.exists()
     assert Path(retained["contract.contract.md"]).is_file()
@@ -429,9 +539,8 @@ def test_missing_direct_local_skill_materializes_native_transitive(caller, tmp_p
 def test_missing_direct_skill_plan_is_unresolved(caller, tmp_path):
     package = _package(tmp_path / "job", imports=True)
     _skill(tmp_path / "style")
-    with pytest.raises(ContractError) as error:
-        with _prepare(package, caller, planning=True):
-            pytest.fail("Missing import planned")
+    with pytest.raises(ContractError) as error, _prepare(package, caller, planning=True):
+        pytest.fail("Missing import planned")
     assert error.value.outcome == Outcome.UNPROVEN
 
 
@@ -444,7 +553,9 @@ def test_unselected_companions_are_not_context(caller, tmp_path, extra):
     path.parent.mkdir(exist_ok=True)
     path.write_text("UNSELECTED_SENTINEL")
     with _prepare(package, caller) as source:
-        plan = frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
+        plan = frontend.plan_contract(
+            Path("job.contract.md"), caller, harness="copilot", source=source
+        )
         assert len(plan.imported_skills) == 1
         assert "UNSELECTED_SENTINEL" not in plan.imported_skills[0].content
         assert not plan.imported_skills[0].resources
@@ -453,7 +564,9 @@ def test_unselected_companions_are_not_context(caller, tmp_path, extra):
 def test_package_drift_revalidated_before_capture(caller, tmp_path):
     package = _package(tmp_path / "job")
     with _prepare(package, caller) as source:
-        plan = frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
+        plan = frontend.plan_contract(
+            Path("job.contract.md"), caller, harness="copilot", source=source
+        )
         (package / "checks/check.py").write_text("raise SystemExit(0)\n")
         with pytest.raises(ContractError, match="changed"):
             workspace.inspect_workspace(plan)
@@ -462,7 +575,9 @@ def test_package_drift_revalidated_before_capture(caller, tmp_path):
 def test_evidence_root_cannot_be_rebound(caller, tmp_path):
     package = _package(tmp_path / "job")
     with _prepare(package, caller) as source:
-        plan = frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
+        plan = frontend.plan_contract(
+            Path("job.contract.md"), caller, harness="copilot", source=source
+        )
         with pytest.raises(ContractError, match="caller-owned"):
             AttemptStore.create(replace(plan, evidence_root=package / ".apm/runs"))
 
@@ -498,8 +613,12 @@ def test_installed_remote_plan_is_exact_and_read_only(caller, locked_remote_sour
 
 
 @pytest.mark.parametrize("planning", [True, False])
-@pytest.mark.parametrize("tamper", ["installed_hash", "declared_ref", "requested_ref", "lock_commit", "lock_missing"])
-def test_remote_caller_pin_drift_never_falls_back(caller, locked_remote_source, monkeypatch, planning, tamper):
+@pytest.mark.parametrize(
+    "tamper", ["installed_hash", "declared_ref", "requested_ref", "lock_commit", "lock_missing"]
+)
+def test_remote_caller_pin_drift_never_falls_back(
+    caller, locked_remote_source, monkeypatch, planning, tamper
+):
     installed, lock = locked_remote_source
     requested = "org/repo#v1"
     if tamper == "installed_hash":
@@ -517,11 +636,17 @@ def test_remote_caller_pin_drift_never_falls_back(caller, locked_remote_source, 
     backend = Mock(side_effect=AssertionError("Drift cannot trigger fresh acquisition"))
     monkeypatch.setattr("apmx.install.apm_backend.install", backend)
     before = compute_package_hash(caller)
-    with pytest.raises(ContractError):
-        with contract_source.prepare_contract_source(
-            requested, "job.contract.md", caller_root=caller, planning=planning, limits=ContractLimits()
-        ):
-            pytest.fail("Caller source drift admitted")
+    with (
+        pytest.raises(ContractError),
+        contract_source.prepare_contract_source(
+            requested,
+            "job.contract.md",
+            caller_root=caller,
+            planning=planning,
+            limits=ContractLimits(),
+        ),
+    ):
+        pytest.fail("Caller source drift admitted")
     backend.assert_not_called()
     assert compute_package_hash(caller) == before
 
@@ -532,7 +657,9 @@ def test_package_activation_is_not_forwarded(caller, tmp_path, extra):
     with (package / "apm.yml").open("a") as stream:
         stream.write(extra + "\n")
     with _prepare(package, caller) as source:
-        plan = frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
+        plan = frontend.plan_contract(
+            Path("job.contract.md"), caller, harness="copilot", source=source
+        )
         assert not plan.imported_skills
         assert not (source.imports_root / ".mcp.json").exists()
         assert not (source.imports_root / ".github").exists()
@@ -542,31 +669,33 @@ def test_package_activation_is_not_forwarded(caller, tmp_path, extra):
 def test_missing_package_manifest_refuses(caller, tmp_path):
     package = _package(tmp_path / "job")
     (package / "apm.yml").unlink()
-    with pytest.raises(ContractError, match=r"apm\.yml"):
-        with _prepare(package, caller):
-            pytest.fail("Manifestless package admitted")
+    with pytest.raises(ContractError, match=r"apm\.yml"), _prepare(package, caller):
+        pytest.fail("Manifestless package admitted")
 
 
 def test_local_import_symlink_refuses(caller, tmp_path):
     package = _package(tmp_path / "job", imports=True)
     _skill(tmp_path / "real-style")
     (tmp_path / "style").symlink_to(tmp_path / "real-style", target_is_directory=True)
-    with pytest.raises(ContractError, match="symlink"):
-        with _prepare(package, caller) as source:
-            frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
+    with pytest.raises(ContractError, match="symlink"), _prepare(package, caller) as source:
+        frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
 
 
 def test_package_lock_is_not_rewritten_as_consumer_lock(caller, tmp_path):
     package = _package(tmp_path / "job", imports=True)
     _skill(tmp_path / "style")
     lock = LockFile()
-    lock.add_dependency(LockedDependency.from_dependency_ref(
-        DependencyReference.parse("../style"), None, depth=2, resolved_by="parent/repo"
-    ))
+    lock.add_dependency(
+        LockedDependency.from_dependency_ref(
+            DependencyReference.parse("../style"), None, depth=2, resolved_by="parent/repo"
+        )
+    )
     lock.write(package / "apm.lock.yaml")
     original = compute_package_hash(package)
     with _prepare(package, caller) as source:
-        plan = frontend.plan_contract(Path("job.contract.md"), caller, harness="copilot", source=source)
+        plan = frontend.plan_contract(
+            Path("job.contract.md"), caller, harness="copilot", source=source
+        )
         assert plan.imported_skills
     assert compute_package_hash(package) == original
 
@@ -575,14 +704,26 @@ def test_package_cleanup_failure_halts_after_completed_invocation(caller, tmp_pa
     package = _package(tmp_path / "package", imports=True)
     _skill(tmp_path / "style")
     invoked = []
+
     def completed(ctx, *args, **kwargs):
         invoked.append(kwargs["source"].root)
         ctx.exit(int(Outcome.UNPROVEN))
+
     monkeypatch.setattr("apmx.cli.invoke_contract", completed)
-    monkeypatch.setattr(contract_source, "safe_rmtree", Mock(side_effect=PermissionError("private fixture path")))
-    result = CliRunner().invoke(main, [
-        "job.contract.md", "--from", str(package), "--on", "copilot", "--allow-host-access",
-    ])
+    monkeypatch.setattr(
+        contract_source, "safe_rmtree", Mock(side_effect=PermissionError("private fixture path"))
+    )
+    result = CliRunner().invoke(
+        main,
+        [
+            "job.contract.md",
+            "--from",
+            str(package),
+            "--on",
+            "copilot",
+            "--allow-host-access",
+        ],
+    )
     assert invoked
     assert result.exit_code == Outcome.HALTED, result.output
     assert "Temporary package source cleanup failed" in result.output

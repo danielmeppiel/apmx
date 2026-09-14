@@ -4,7 +4,7 @@ import json
 import math
 import os
 from dataclasses import fields, is_dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import IntEnum
 from pathlib import Path
 from uuid import uuid4
@@ -14,17 +14,19 @@ from ..utils.git_env import redact_git_diagnostic
 from ..utils.path_security import has_symlink_component
 from .models import (
     Artifact,
+    ArtifactSet,
+    ArtifactView,
+    ChainResult,
     CheckObservation,
     ContractError,
     ContractLimits,
+    FileEntry,
     LeafPlan,
     Outcome,
     ProcessObservation,
-    RunResult,
     RetainedInput,
-    ChainResult,
-    ArtifactView,
-    FileEntry,
+    RunResult,
+    artifact_files,
 )
 
 
@@ -36,7 +38,7 @@ def normalize_check(process: ProcessObservation, *, integrity_ok: bool = True) -
 
 
 def reduce_outcome(
-    artifact: Artifact | None,
+    artifact: Artifact | ArtifactSet | None,
     checks: tuple[CheckObservation, ...],
     stop_reason: str | None,
 ) -> Outcome:
@@ -74,7 +76,15 @@ def _json_value(value: object) -> object:
     if isinstance(value, Path):
         return str(value)
     if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _json_value(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: _json_value(getattr(value, field.name))
+            for field in fields(value)
+            if not (
+                isinstance(value, RunResult)
+                and field.name == "native_exports"
+                and not value.native_exports
+            )
+        }
     if isinstance(value, dict):
         return {str(key): _json_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -82,12 +92,29 @@ def _json_value(value: object) -> object:
     return value
 
 
+def _limit_identity(plan: LeafPlan) -> dict:
+    """Preserve the scalar v0.1 limit shape when new inventory limits are inapplicable."""
+    defaults = ContractLimits()
+    omitted = (
+        {"output_files", "output_total_bytes"}
+        if isinstance(plan.contract.produces, str)
+        and plan.limits.output_files == defaults.output_files
+        and plan.limits.output_total_bytes == defaults.output_total_bytes
+        else set()
+    )
+    return {
+        field.name: getattr(plan.limits, field.name)
+        for field in fields(plan.limits)
+        if field.name not in omitted
+    }
+
+
 def _allocate_directory(caller: Path, family: str) -> tuple[str, Path]:
     parent = caller / ".apm" / family
     if has_symlink_component(caller, parent):
         raise ContractError("Evidence storage contains a symlink.", code="unsafe_run_directory")
     parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    identity = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid4().hex[:12]
+    identity = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ-") + uuid4().hex[:12]
     directory = parent / identity
     directory.mkdir(mode=0o700)
     os.chmod(directory, 0o700)
@@ -216,9 +243,119 @@ def _validate_retained_provenance(
         ) from exc
 
 
+def _retained_artifacts(
+    data: dict, directory: Path, limits: ContractLimits
+) -> tuple[Artifact, ...]:
+    """Validate every member and the whole result, even for a subset consumer."""
+    from .workspace import _path, _read, artifact_inventory_digest
+
+    try:
+        raw = data["artifact"]
+        if not _same_json(raw, data["result"]["artifact"]):
+            raise ValueError("Recorded output observations disagree.")
+        if data["schema"] == "apm-contract-run/0.1":
+            rows = [raw]
+        elif data["schema"] == "apm-contract-run/0.2":
+            if set(raw) != {"files", "sha256"}:
+                raise ValueError("Unknown artifact inventory shape.")
+            rows = raw["files"]
+        else:
+            raise ContractError("Unsupported retained record version.", code="record_version")
+        if not isinstance(rows, list) or not 1 <= len(rows) <= limits.output_files:
+            raise ValueError("Invalid retained artifact inventory.")
+        if any(
+            not isinstance(row, dict)
+            or set(row) != {"relative_path", "path", "sha256", "size"}
+            or any(not isinstance(row.get(key), str) for key in ("relative_path", "path", "sha256"))
+            for row in rows
+        ):
+            raise ValueError("Invalid retained artifact identity.")
+        files = tuple(Artifact(**{**row, "path": Path(row["path"])}) for row in rows)
+        if not 1 <= len(files) <= limits.output_files:
+            raise ValueError("Invalid retained artifact count.")
+        names = [item.relative_path.casefold() for item in files]
+        if len(set(names)) != len(names) or any(
+            left.startswith(right + "/") or right.startswith(left + "/")
+            for index, left in enumerate(names)
+            for right in names[index + 1 :]
+        ):
+            raise ValueError("Retained artifact names collide.")
+        if any(
+            type(item.size) is not int or not 0 <= item.size <= limits.output_bytes
+            for item in files
+        ):
+            raise ValueError("Invalid retained artifact size.")
+        if sum(item.size for item in files) > limits.output_total_bytes:
+            raise ValueError("Retained output inventory exceeds its byte limit.")
+        if data["schema"] == "apm-contract-run/0.2" and raw["sha256"] != artifact_inventory_digest(
+            files
+        ):
+            raise ValueError("Retained inventory digest changed.")
+        for item in files:
+            if item.path != _path(directory / "artifacts", item.relative_path):
+                raise ValueError("Retained artifact location changed.")
+            _, observed = _read(directory / "artifacts", item.relative_path, item.size)
+            if (observed.sha256, observed.size) != (item.sha256, item.size):
+                raise ValueError("Retained artifact bytes changed.")
+        return files
+    except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+        if isinstance(exc, ContractError):
+            raise
+        raise ContractError(
+            "Retained output inventory changed. Inspect its record.", code="artifact_changed"
+        ) from exc
+
+
+def _validate_native_exports(
+    data: dict, directory: Path, files: tuple[Artifact, ...], limits: ContractLimits
+) -> None:
+    """Export observations are ordinary retained evidence, separate from source provenance."""
+    from .workspace import _read
+
+    try:
+        rows = data["result"].get("native_exports", [])
+        if not isinstance(rows, list) or len(rows) > limits.output_files:
+            raise ValueError("Invalid native export inventory.")
+        outputs = {item.relative_path: item for item in files}
+        seen = set()
+        for index, row in enumerate(rows, 1):
+            entry = FileEntry(**row)
+            if (
+                entry.relative_path != f"observations/export-{index}.json"
+                or type(entry.size) is not int
+                or not 0 <= entry.size <= limits.file_bytes
+                or entry.mode != 0o400
+            ):
+                raise ValueError("Invalid retained native export identity.")
+            _, observed = _read(directory, entry.relative_path, entry.size)
+            if not _same_json(_json_value(entry), replace(observed, mode=0o400)):
+                raise ValueError("Native export evidence changed.")
+            receipt, digest = _record_bytes(directory / entry.relative_path, limits)
+            name = receipt.get("output")
+            if (
+                digest != entry.sha256
+                or receipt.get("schema") != "apmx-git-export/0.1"
+                or not isinstance(name, str)
+                or name not in outputs
+                or name in seen
+                or receipt.get("baseline_digest") != data["baseline"]["digest"]
+                or receipt.get("patch_sha256") != outputs[name].sha256
+                or type(receipt.get("patch_size")) is not int
+                or receipt["patch_size"] != outputs[name].size
+            ):
+                raise ValueError("Export observation does not identify the admitted delivery.")
+            seen.add(name)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        if isinstance(exc, ContractError):
+            raise
+        raise ContractError(
+            "Retained export evidence is missing or changed.", code="export_evidence_changed"
+        ) from exc
+
+
 def validate_binding(binding: RetainedInput, caller: Path, limits: ContractLimits) -> None:
     """Re-read the exact finalized record and retained bytes; never select another run."""
-    from .workspace import _read, _path
+    from .workspace import _path
 
     record = binding.record_path
     directory = record.parent
@@ -236,12 +373,13 @@ def validate_binding(binding: RetainedInput, caller: Path, limits: ContractLimit
     if identity != binding.record_sha256:
         raise ContractError("Finalized predecessor record changed.", code="record_changed")
     _validate_retained_provenance(directory, data, limits)
-    _, artifact = _read(directory / "artifacts", binding.artifact.relative_path, limits.file_bytes)
-    if (artifact.sha256, artifact.size) != (binding.artifact.sha256, binding.artifact.size):
+    files = _retained_artifacts(data, directory, limits)
+    _validate_native_exports(data, directory, files, limits)
+    if not any(_same_json(_json_value(binding.artifact), item) for item in files):
         raise ContractError("Retained predecessor output changed.", code="artifact_changed")
 
 
-def finalized_input(plan: LeafPlan, result: RunResult) -> RetainedInput:
+def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, ...]:
     """Validate this owner's persisted assessment against the direct typed leaf result.
 
     This proves completed observations, not a downstream assurance policy. The
@@ -255,7 +393,12 @@ def finalized_input(plan: LeafPlan, result: RunResult) -> RetainedInput:
             raise ValueError("Run identity differs from the caller.")
         data, digest = _record_bytes(directory / "record.json", plan.limits)
         if not (
-            data["schema"] == "apm-contract-run/0.1"
+            data["schema"]
+            == (
+                "apm-contract-run/0.1"
+                if isinstance(plan.contract.produces, str)
+                else "apm-contract-run/0.2"
+            )
             and data["profile"] == "native-advisory"
             and data["complete"] is True
             and data["phase"] == "finished"
@@ -280,7 +423,7 @@ def finalized_input(plan: LeafPlan, result: RunResult) -> RetainedInput:
             "requested_model": plan.model,
             "input_bindings": plan.input_bindings,
             "imports": _import_identities(plan),
-            "limits": plan.limits,
+            "limits": _limit_identity(plan),
             "attempt_id": result.run_id + "/1",
             "evidence_root": str(plan.project_root / ".apm/runs"),
             "executable_version": plan.executable_version,
@@ -315,8 +458,11 @@ def finalized_input(plan: LeafPlan, result: RunResult) -> RetainedInput:
         if actual != expected:
             raise ValueError("Unexpected or duplicated required check identities.")
         artifact = result.artifact
-        if artifact.relative_path != plan.contract.produces:
+        files = artifact_files(artifact)
+        if tuple(item.relative_path for item in files) != plan.contract.outputs:
             raise ValueError("Output differs from the declaration.")
+        if isinstance(plan.contract.produces, str) != isinstance(artifact, Artifact):
+            raise ValueError("Output version differs from the declaration.")
         if not _same_json(data["checks"], result.checks) or not _same_json(
             data["artifact"], artifact
         ):
@@ -371,9 +517,9 @@ def finalized_input(plan: LeafPlan, result: RunResult) -> RetainedInput:
             data["transcript"], inspect_retained_log(directory, plan.limits.transcript_bytes)
         ):
             raise ValueError("Finalized transcript changed.")
-        binding = RetainedInput(artifact, directory / "record.json", digest)
-        validate_binding(binding, plan.project_root, plan.limits)
-        return binding
+        bindings = tuple(RetainedInput(item, directory / "record.json", digest) for item in files)
+        validate_binding(bindings[0], plan.project_root, plan.limits)
+        return bindings
     except (ValueError, KeyError, TypeError, RecursionError) as exc:
         if isinstance(exc, ContractError):
             raise
@@ -382,19 +528,35 @@ def finalized_input(plan: LeafPlan, result: RunResult) -> RetainedInput:
         ) from exc
 
 
-def admit_handoff(plan: LeafPlan, result: RunResult, *, allow_unproven: bool) -> RetainedInput:
+def admit_handoffs(
+    plan: LeafPlan, result: RunResult, *, allow_unproven: bool
+) -> tuple[RetainedInput, ...]:
     """ASF strict gate, with a separately authorized native-assurance exception."""
-    binding = finalized_input(plan, result)
+    bindings = finalized_inputs(plan, result)
     if result.outcome == Outcome.VERIFIED:
-        return binding
+        return bindings
     if allow_unproven and native_assurance_limited(result):
-        return binding
+        return bindings
     raise ContractError(
         "UNPROVEN input blocked by the strict VERIFIED-only handoff policy. For trusted local "
         "development, explicitly select --allow-unproven-inputs; this does not certify isolation.",
         code="unproven_input",
         outcome=Outcome.UNPROVEN,
     )
+
+
+def finalized_input(plan: LeafPlan, result: RunResult) -> RetainedInput:
+    """Preserve the scalar receipt API; never select the first multi-file artifact."""
+    if not isinstance(plan.contract.produces, str):
+        raise ContractError("Multiple artifacts require finalized_inputs.", code="record_version")
+    return finalized_inputs(plan, result)[0]
+
+
+def admit_handoff(plan: LeafPlan, result: RunResult, *, allow_unproven: bool) -> RetainedInput:
+    """Preserve scalar handoffs through the complete-result authority."""
+    if not isinstance(plan.contract.produces, str):
+        raise ContractError("Multiple artifacts require admit_handoffs.", code="record_version")
+    return admit_handoffs(plan, result, allow_unproven=allow_unproven)[0]
 
 
 class AttemptStore:
@@ -438,10 +600,12 @@ class AttemptStore:
             run_id,
             directory,
             {
-                "schema": "apm-contract-run/0.1",
+                "schema": "apm-contract-run/0.1"
+                if isinstance(plan.contract.produces, str)
+                else "apm-contract-run/0.2",
                 "run_id": run_id,
                 "attempt_id": run_id + "/1",
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "profile": "native-advisory",
                 "advisory_consent": consent_source,
                 "handoff_policy": handoff_policy,
@@ -469,7 +633,7 @@ class AttemptStore:
                 "observed_models": [],
                 "input_bindings": plan.input_bindings,
                 "imports": _import_identities(plan),
-                "limits": plan.limits,
+                "limits": _limit_identity(plan),
                 "controls": {
                     "isolation": "unavailable",
                     "spend_cap": "unavailable",
@@ -515,7 +679,7 @@ class AttemptStore:
             child_pid=None,
             child_pgid=None,
             active_check=None,
-            finished_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=datetime.now(UTC).isoformat(),
             result=result,
         )
         try:
@@ -591,7 +755,7 @@ class ChainStore(AttemptStore):
         return store
 
     def finish_chain(self, result: ChainResult, nodes: list[dict]) -> None:
-        from .workspace import inspect_retained_log, inspect_artifact_view
+        from .workspace import inspect_artifact_view, inspect_retained_log
 
         try:
             if result.complete:

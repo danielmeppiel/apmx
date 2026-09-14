@@ -1,46 +1,34 @@
 ---
 needs:
-  - request.json
-  - plan.json
-produces: spec.json
+  - request.md
+  - plan.md
+  - src/pricing.py
+  - src/checkout.py
+  - checks/features/free-shipping.feature
+produces: specification.md
 verify:
-  contract: python3 -I -B checks/verify.py specification
+  document: python3 -I -B checks/documents.py specification specification.md
 ---
-Turn the admitted plan into a precise specification for the shipping library.
-Target: native Copilot through apmx. Read request.json and plan.json. The fixed
-request wins if generated plan text conflicts with it. Do not implement code.
+Turn the admitted plan into a precise, concise specification for the checkout
+feature. Read request.md, plan.md, the source and supplied Gherkin. The request
+and supplied acceptance examples win if the plan conflicts with them.
 
-Write spec.json with exactly these fields and the fixed interface values:
+Write specification.md with these nonempty Markdown sections:
 
-```json
-{
-  "function": "shipping_cost",
-  "parameter": "weight_grams",
-  "returns": "integer cents",
-  "accepted_type": "int excluding bool",
-  "range": [1, 5000],
-  "tiers": [
-    {"through": 1000, "cents": 500},
-    {"through": 2000, "cents": 700},
-    {"through": 3000, "cents": 900},
-    {"through": 4000, "cents": 1100},
-    {"through": 5000, "cents": 1300}
-  ],
-  "errors": {"wrong_type": "TypeError", "out_of_range": "ValueError"},
-  "requirements": ["types", "range", "rates", "errors", "purity"],
-  "cases": [
-    {"id": "minimum", "input": 1, "expected": {"returns": 500}, "requirements": ["range", "rates"], "reason": "The smallest supported integer weight"}
-  ]
-}
-```
+## Behavior
+Define the inclusive free-delivery threshold, the unchanged delivery fee below
+it, zero handling and the relation between delivery and the checkout total.
 
-The one illustrated case is insufficient. Derive 7-32 concrete examples,
-including inputs 1, 1000, 1001, 5000, 0, 5001, and true. Explain the boundary
-or requirement each case establishes. All case objects have exactly the five
-illustrated fields; expected is either {"returns": integer} or
-{"raises": "TypeError"} / {"raises": "ValueError"}. Case IDs use lowercase
-letters, digits and hyphens, begin with a letter, are unique and <=40 characters.
-Reasons are nonempty and <=800 characters. Distinguish booleans from integers.
+## Interface
+Record the two public functions, their existing argument and return shapes,
+integer-cent semantics, and the required exceptions for negative and invalid
+inputs, explicitly including booleans.
 
-Do not change supplied files, execute checks/commands, install, or delegate.
-Use the permitted file tools to write only spec.json, under 32 KiB.
+## Acceptance
+Explain the supplied boundary and invalid-input examples and the new
+unittest regression coverage. Do not replace or weaken the supplied feature.
+
+Target native Copilot through APMX. Write the artifact with the permitted file
+tools. Do not modify inputs, implement code, run commands/checks, install or
+delegate. Do not claim observed executions. Keep ASCII Markdown under 16 KiB.
+The document check validates sections; actual candidate checks decide behavior.

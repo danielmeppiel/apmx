@@ -1,11 +1,11 @@
 """Build the distribution and import it without editable source resolution."""
 
 import json
-from pathlib import Path
 import site
 import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 
 def test_wheel_runs_without_checkout_or_apm(tmp_path):
@@ -14,21 +14,29 @@ def test_wheel_runs_without_checkout_or_apm(tmp_path):
     wheels.mkdir()
     built = subprocess.run(
         [
-            sys.executable, "-B", "-c",
-            "from setuptools.build_meta import build_wheel; "
-            "import sys; build_wheel(sys.argv[1])",
+            sys.executable,
+            "-B",
+            "-c",
+            "from setuptools.build_meta import build_wheel; import sys; build_wheel(sys.argv[1])",
             str(wheels),
         ],
-        cwd=root, capture_output=True, text=True, timeout=120,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
     assert built.returncode == 0, built.stderr
-    wheel, = wheels.glob("*.whl")
+    (wheel,) = wheels.glob("*.whl")
     installed = tmp_path / "installed"
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         assert any(name == "apmx/__main__.py" for name in names)
         assert "apmx/apm-backend.json" in names
-        assert archive.read("apmx/apm-backend.json") == (root / "src/apmx/apm-backend.json").read_bytes()
+        assert (
+            archive.read("apmx/apm-backend.json")
+            == (root / "src/apmx/apm-backend.json").read_bytes()
+        )
         assert not any(name.startswith("apm_cli/") for name in names)
         assert any(name.endswith("/LICENSE") for name in names)
         assert any(name.endswith("/NOTICE") for name in names)
@@ -69,10 +77,20 @@ runpy.run_module("apmx", run_name="__main__")
 """
     result = subprocess.run(
         [
-            sys.executable, "-B", "-I", "-S", "-c", script, str(installed),
+            sys.executable,
+            "-B",
+            "-I",
+            "-S",
+            "-c",
+            script,
+            str(installed),
             json.dumps(site.getsitepackages()),
         ],
-        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "apmx, version 0.2.0"

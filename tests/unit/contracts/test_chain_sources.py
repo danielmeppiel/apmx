@@ -9,13 +9,15 @@ from unittest.mock import Mock
 
 import pytest
 from click.testing import CliRunner
+from test_chain import caller, producer, two_nodes
 
 from apmx.cli import main
 from apmx.contracts import chain, engine, resolution
 from apmx.contracts.models import ContractError, ContractLimits
 from apmx.core.contract_logger import ContractLogger
 from apmx.install import apm_backend, contract_source
-from test_chain import caller as caller, producer, two_nodes
+
+__all__ = ["caller"]
 
 pytestmark = pytest.mark.component
 

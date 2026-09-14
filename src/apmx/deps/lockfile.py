@@ -1,11 +1,19 @@
 """APM-compatible direct dependency lock records (no deployment engine)."""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
 from ..core.host_providers import accepted_host_types
-from ..models.dependency.reference import DependencyReference, build_canonical_dependency_string, build_dependency_unique_key
 from ..models.dependency.identity import normalize_package_repo_url
+from ..models.dependency.reference import (
+    DependencyReference,
+    build_canonical_dependency_string,
+    build_dependency_unique_key,
+)
+
 _ALLOWED_HOST_TYPES = set(accepted_host_types())
 _ALLOWED_EXEC_STATUS = {"deployed", "gated_pending_approval", "denied", "absent"}
 SUPPORTED_LOCKFILE_VERSIONS = frozenset({"1", "2"})
@@ -52,12 +60,14 @@ class LockFile:
     def to_yaml(self) -> str:
         from ..utils.yaml_io import yaml_to_str
 
-        return yaml_to_str({
-            "lockfile_version": self.lockfile_version,
-            "dependencies": [dep.to_dict() for dep in self.get_all_dependencies()],
-            "mcp_servers": self.mcp_servers,
-            "lsp_servers": self.lsp_servers,
-        })
+        return yaml_to_str(
+            {
+                "lockfile_version": self.lockfile_version,
+                "dependencies": [dep.to_dict() for dep in self.get_all_dependencies()],
+                "mcp_servers": self.mcp_servers,
+                "lsp_servers": self.lsp_servers,
+            }
+        )
 
     def write(self, path: Path) -> None:
         from ..utils.atomic_io import atomic_write_text
@@ -77,6 +87,7 @@ def resolve_lockfile_path_for_read(root: Path, *, read_only: bool = False) -> Pa
     canonical = get_lockfile_path(root)
     legacy = root / "apm.lock"
     return legacy if not canonical.exists() and legacy.exists() else canonical
+
 
 class LockfileFormatError(ValueError):
     """Raised when a lockfile container does not match its schema."""

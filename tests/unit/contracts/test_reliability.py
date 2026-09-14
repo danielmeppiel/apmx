@@ -278,8 +278,10 @@ def test_truly_lingering_child_still_halts_within_cleanup_window(tmp_path: Path)
             (
                 sys.executable,
                 "-c",
-                "import subprocess,sys; subprocess.Popen([sys.executable,'-c',"
-                "'import time; time.sleep(30)'])",
+                (
+                    "import subprocess,sys; subprocess.Popen([sys.executable,'-c',"
+                    "'import time; time.sleep(30)'])"
+                ),
             ),
             tmp_path,
             10,
@@ -372,9 +374,7 @@ def test_local_git_applies_only_process_scoped_native_path_option(
 ) -> None:
     requests = []
     monkeypatch.setattr(process, "get_git_executable", lambda: "/trusted/git")
-    monkeypatch.setattr(
-        process, "git_long_paths_args", lambda: ["-c", "core.longpaths=true"]
-    )
+    monkeypatch.setattr(process, "git_long_paths_args", lambda: ["-c", "core.longpaths=true"])
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.extraheader")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "sensitive-fixture")
@@ -418,7 +418,7 @@ def test_native_local_git_preserves_long_workspace_bytes(
             return native_supervise(request, on_bytes=capture, **kwargs)
 
         with monkeypatch.context() as flagless:
-            flagless.setattr(process, "git_long_paths_args", lambda: [])
+            flagless.setattr(process, "git_long_paths_args", list)
             flagless.setattr(process, "supervise_process", observe)
             with pytest.raises(ContractError, match="Local Git baseline operation failed"):
                 process.local_git(root, "init", "--quiet", "--template=")

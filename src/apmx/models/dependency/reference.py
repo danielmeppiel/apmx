@@ -619,8 +619,7 @@ class DependencyReference(ProviderCoordinateMixin):
             path, alias_part = path.rsplit("@", 1)
             alias = alias_part.strip() or None
 
-        if path.endswith(".git"):
-            path = path[:-4]
+        path = path.removesuffix(".git")
 
         repo_url = path.strip()
 
@@ -888,7 +887,8 @@ class DependencyReference(ProviderCoordinateMixin):
         ref_override = entry.get("ref")
         allow_insecure = entry.get("allow_insecure", False)
         if not isinstance(allow_insecure, bool):
-            raise ValueError("'allow_insecure' field must be a boolean")
+            # This is a malformed manifest value; preserve the parser's ValueError API.
+            raise ValueError("'allow_insecure' field must be a boolean")  # noqa: TRY004
 
         # Validate sub_path if provided
         if sub_path is not None:
@@ -1528,8 +1528,7 @@ class DependencyReference(ProviderCoordinateMixin):
         presentation_path_parts = list(raw_path_parts)
         if path_parts[-1].endswith(".git"):
             path_parts[-1] = path_parts[-1][:-4]
-            if presentation_path_parts[-1].endswith(".git"):
-                presentation_path_parts[-1] = presentation_path_parts[-1][:-4]
+            presentation_path_parts[-1] = presentation_path_parts[-1].removesuffix(".git")
         path = "/".join(path_parts)
         had_git_marker = "_git" in path_parts
         if "_git" in path_parts:

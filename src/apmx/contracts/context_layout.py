@@ -11,7 +11,8 @@ NATIVE_SKILL_ROOTS = (".agents/skills", ".github/skills", ".claude/skills")
 def is_native_skill_name(name: object) -> TypeGuard[str]:
     """Recognize the same bounded identifier in imports and native observations."""
     return (
-        isinstance(name, str) and len(name) <= 64
+        isinstance(name, str)
+        and len(name) <= 64
         and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) is not None
     )
 

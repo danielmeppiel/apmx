@@ -38,8 +38,13 @@ def _windows_open(path: Path) -> int:
         raise OSError("Capture path contains a Windows reparse point.")
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.CreateFileW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
-        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
     ]
     kernel.CreateFileW.restype = wintypes.HANDLE
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -47,7 +52,10 @@ def _windows_open(path: Path) -> int:
     kernel.GetFileType.argtypes = [wintypes.HANDLE]
     kernel.GetFileType.restype = wintypes.DWORD
     kernel.GetFileInformationByHandleEx.argtypes = [
-        wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
     ]
     kernel.GetFileInformationByHandleEx.restype = wintypes.BOOL
 
@@ -58,13 +66,21 @@ def _windows_open(path: Path) -> int:
     # capture handle is open. OPEN_REPARSE_POINT inspects rather than follows the
     # final component; ancestor reparses are independently refused.
     handle = kernel.CreateFileW(
-        str(absolute), 0x80000000, 1, None, 3, 0x00200000, None,
+        str(absolute),
+        0x80000000,
+        1,
+        None,
+        3,
+        0x00200000,
+        None,
     )
     if handle == wintypes.HANDLE(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
     try:
         info = AttributeTag()
-        if not kernel.GetFileInformationByHandleEx(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+        if not kernel.GetFileInformationByHandleEx(
+            handle, 9, ctypes.byref(info), ctypes.sizeof(info)
+        ):
             raise ctypes.WinError(ctypes.get_last_error())
         if info.attributes & (0x400 | 0x10) or kernel.GetFileType(handle) != 1:
             raise OSError("Capture requires a regular non-reparse disk file.")

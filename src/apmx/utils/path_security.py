@@ -64,7 +64,7 @@ def parse_url_path_segments(
     if not isinstance(raw_path, str):
         raise PathTraversalError(f"Invalid {context}: URL path must be a string")
 
-    path = raw_path[1:] if raw_path.startswith("/") else raw_path
+    path = raw_path.removeprefix("/")
     if not path:
         raise PathTraversalError(f"Invalid {context}: path segments must not be empty")
 
@@ -188,7 +188,8 @@ def validate_windows_segments(path_str: str) -> None:
         if part == path.anchor or part in {".", ".."}:
             continue
         if (
-            ":" in part or part.endswith((" ", "."))
+            ":" in part
+            or part.endswith((" ", "."))
             or part.split(".", 1)[0].casefold() in reserved
             or any(ord(character) < 32 for character in part)
         ):

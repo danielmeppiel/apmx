@@ -61,9 +61,14 @@ def managed(monkeypatch):
 
     monkeypatch.setattr(windows, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(windows, "_JobProcess", create)
-    monkeypatch.setattr(windows, "time", SimpleNamespace(
-        monotonic=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds)
-    ))
+    monkeypatch.setattr(
+        windows,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: clock[0],
+            sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        ),
+    )
     return jobs, clock
 
 
@@ -74,8 +79,10 @@ def request(timeout=1.0):
 def test_success_preserves_streams_and_observation_interface(managed):
     output, starts, events = [], [], []
     observation = windows.supervise_process(
-        request(), on_bytes=lambda *args: output.append(args),
-        on_started=lambda *args: starts.append(args), events=EventEmitter("run", events.append),
+        request(),
+        on_bytes=lambda *args: output.append(args),
+        on_started=lambda *args: starts.append(args),
+        events=EventEmitter("run", events.append),
     )
     assert output == [("stdout", b"out"), ("stderr", b"err")]
     assert starts == [(123, None)]
@@ -110,7 +117,8 @@ def test_callback_exception_cleans_job_before_propagating(managed, callback):
 
     with pytest.raises(RuntimeError, match="observer failed"):
         windows.supervise_process(
-            request(), on_bytes=fail if callback == "bytes" else lambda *args: None,
+            request(),
+            on_bytes=fail if callback == "bytes" else lambda *args: None,
             on_started=fail if callback == "started" else None,
             events=EventEmitter("run", fail) if callback == "event" else None,
         )
@@ -136,8 +144,10 @@ def test_bounded_stop_lifecycle(managed, monkeypatch, reason):
             raise KeyboardInterrupt
 
     observation = windows.supervise_process(
-        request(0.1 if reason == "timeout" else 1), on_bytes=lambda *args: None,
-        on_started=started, events=EventEmitter("run", events.append),
+        request(0.1 if reason == "timeout" else 1),
+        on_bytes=lambda *args: None,
+        on_started=started,
+        events=EventEmitter("run", events.append),
         limits=ContractLimits(cleanup_seconds=0.1),
     )
     assert observation.stop_reason == reason
@@ -163,7 +173,9 @@ def test_unconfirmed_cleanup_stays_unconfirmed(managed, monkeypatch):
 
     monkeypatch.setattr(windows, "_JobProcess", create)
     observation = windows.supervise_process(
-        request(0.1), on_bytes=lambda *args: None, limits=ContractLimits(cleanup_seconds=0.1),
+        request(0.1),
+        on_bytes=lambda *args: None,
+        limits=ContractLimits(cleanup_seconds=0.1),
     )
     assert not observation.cleanup_confirmed
     assert managed[0][0].closed
@@ -201,7 +213,9 @@ def test_heartbeat_callback_failure_cleans_running_job(managed, monkeypatch):
     monkeypatch.setattr(windows, "_JobProcess", create)
     with pytest.raises(RuntimeError, match="heartbeat failed"):
         windows.supervise_process(
-            request(10), on_bytes=lambda *args: None, events=EventEmitter("run", emit),
+            request(10),
+            on_bytes=lambda *args: None,
+            events=EventEmitter("run", emit),
         )
     assert managed[0][0].terminated
     assert managed[0][0].closed
@@ -218,7 +232,9 @@ def test_stop_callback_failure_occurs_after_termination(managed):
 
     with pytest.raises(RuntimeError, match="stop failed"):
         windows.supervise_process(
-            request(0.1), on_bytes=lambda *args: None, on_started=started,
+            request(0.1),
+            on_bytes=lambda *args: None,
+            on_started=started,
             events=EventEmitter("run", emit),
         )
     assert managed[0][0].closed
@@ -258,9 +274,14 @@ def test_command_length_counts_utf16_units(monkeypatch):
 
 def test_explicit_environment_is_not_inherited(monkeypatch):
     monkeypatch.setattr(windows.shutil, "which", lambda selected: selected)
-    _, _, environment = windows._command(ProcessRequest(
-        ("python.exe",), Path.cwd(), 1, env={"Z": "last", "A": "first"},
-    ))
+    _, _, environment = windows._command(
+        ProcessRequest(
+            ("python.exe",),
+            Path.cwd(),
+            1,
+            env={"Z": "last", "A": "first"},
+        )
+    )
     assert environment == "A=first\0Z=last\0\0"
 
 
@@ -460,8 +481,9 @@ def test_frozen_spawn_restores_dll_directory_before_resume(native_mock, frozen_w
 
 
 @pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
-def test_frozen_spawn_failure_restores_dll_directory(native_mock, frozen_windows, monkeypatch,
-                                                   failure):
+def test_frozen_spawn_failure_restores_dll_directory(
+    native_mock, frozen_windows, monkeypatch, failure
+):
     def fail(*args):
         raise failure("spawn failed")
 
@@ -469,12 +491,15 @@ def test_frozen_spawn_failure_restores_dll_directory(native_mock, frozen_windows
     with pytest.raises(failure, match="spawn failed"):
         windows._JobProcess(request())
     assert [call for call in native_mock.calls if call[0] == "dll_directory"] == [
-        ("dll_directory", None), ("dll_directory", sys._MEIPASS),
+        ("dll_directory", None),
+        ("dll_directory", sys._MEIPASS),
     ]
     assert not any(call[0] == "resume" for call in native_mock.calls)
 
 
-def test_frozen_dll_restore_failure_cleans_suspended_child(native_mock, frozen_windows, monkeypatch):
+def test_frozen_dll_restore_failure_cleans_suspended_child(
+    native_mock, frozen_windows, monkeypatch
+):
     def set_directory(directory):
         return directory is None
 
@@ -506,15 +531,18 @@ def test_frozen_dll_search_lock_wait_is_bounded(native_mock, frozen_windows, mon
             pytest.fail("Unacquired lock must not be released")
 
     monkeypatch.setattr(windows, "_DLL_SEARCH_LOCK", BusyLock())
-    with pytest.raises(OSError, match="Timed out waiting"):
-        with windows._external_dll_search(native_mock, 0.25):
-            pytest.fail("Busy DLL-search lock must prevent spawning")
+    with (
+        pytest.raises(OSError, match="Timed out waiting"),
+        windows._external_dll_search(native_mock, 0.25),
+    ):
+        pytest.fail("Busy DLL-search lock must prevent spawning")
     assert attempts == [0.25]
     assert not any(call[0] == "dll_directory" for call in native_mock.calls)
 
 
-def test_frozen_dll_clear_failure_releases_lock_without_spawning(native_mock, frozen_windows,
-                                                              monkeypatch):
+def test_frozen_dll_clear_failure_releases_lock_without_spawning(
+    native_mock, frozen_windows, monkeypatch
+):
     acquired = []
 
     class TrackedLock:
@@ -560,10 +588,12 @@ def test_native_drains_both_large_pipes_and_returns_exit_code():
         assert len(chunk) <= windows._CHUNK_BYTES
         totals[stream] += len(chunk)
 
-    observation = windows.supervise_process(native_request(
-        "import os; [(os.write(1, b'x'*65536), os.write(2, b'y'*65536)) "
-        "for _ in range(32)]"
-    ), on_bytes=receive)
+    observation = windows.supervise_process(
+        native_request(
+            "import os; [(os.write(1, b'x'*65536), os.write(2, b'y'*65536)) for _ in range(32)]"
+        ),
+        on_bytes=receive,
+    )
     assert observation.error is None
     assert observation.returncode == 0
     assert observation.cleanup_confirmed
@@ -576,14 +606,17 @@ def test_native_arguments_are_literal_and_stdin_is_closed():
     output = bytearray()
     req = ProcessRequest(
         (
-            sys.executable, "-c",
-            "import json, sys; assert sys.stdin.read() == ''; "
-            "print(json.dumps(sys.argv[1:]))",
+            sys.executable,
+            "-c",
+            "import json, sys; assert sys.stdin.read() == ''; print(json.dumps(sys.argv[1:]))",
             *arguments,
         ),
-        Path.cwd(), 5,
+        Path.cwd(),
+        5,
     )
-    observation = windows.supervise_process(req, on_bytes=lambda stream, chunk: output.extend(chunk))
+    observation = windows.supervise_process(
+        req, on_bytes=lambda stream, chunk: output.extend(chunk)
+    )
     assert observation.returncode == 0 and observation.cleanup_confirmed
     assert json.loads(output) == list(arguments)
 
@@ -591,7 +624,8 @@ def test_native_arguments_are_literal_and_stdin_is_closed():
 @windows_only
 def test_native_exit_code_259_is_not_misidentified_as_running():
     observation = windows.supervise_process(
-        native_request("import sys; sys.exit(259)"), on_bytes=lambda *args: None,
+        native_request("import sys; sys.exit(259)"),
+        on_bytes=lambda *args: None,
     )
     assert observation.returncode == 259
     assert observation.cleanup_confirmed
@@ -602,7 +636,8 @@ def test_native_exit_code_259_is_not_misidentified_as_running():
 def test_native_timeout_kills_owned_job():
     observation = windows.supervise_process(
         native_request("import time; time.sleep(60)", timeout=0.1),
-        on_bytes=lambda *args: None, limits=ContractLimits(cleanup_seconds=2),
+        on_bytes=lambda *args: None,
+        limits=ContractLimits(cleanup_seconds=2),
     )
     assert observation.stop_reason == "timeout"
     assert observation.cleanup_confirmed
@@ -611,10 +646,14 @@ def test_native_timeout_kills_owned_job():
 
 @windows_only
 def test_native_leader_exit_with_descendant_is_cleaned():
-    observation = windows.supervise_process(native_request(
-        "import subprocess, sys; subprocess.Popen("
-        "[sys.executable, '-c', 'import time; time.sleep(60)'])"
-    ), on_bytes=lambda *args: None, limits=ContractLimits(cleanup_seconds=2))
+    observation = windows.supervise_process(
+        native_request(
+            "import subprocess, sys; subprocess.Popen("
+            "[sys.executable, '-c', 'import time; time.sleep(60)'])"
+        ),
+        on_bytes=lambda *args: None,
+        limits=ContractLimits(cleanup_seconds=2),
+    )
     assert observation.returncode == 0
     assert observation.stop_reason == "lingering_children"
     assert observation.cleanup_confirmed

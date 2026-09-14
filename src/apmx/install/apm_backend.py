@@ -31,8 +31,9 @@ def locate_backend() -> Path:
         root = Path(sys.executable).resolve().parent
         candidate = root / "libexec" / "apm" / name
         if has_symlink_component(root, candidate):
-            raise ContractError("The bundled APM path contains a symlink.",
-                                code="apm_backend_missing")
+            raise ContractError(
+                "The bundled APM path contains a symlink.", code="apm_backend_missing"
+            )
     elif override := os.environ.get("APMX_APM_BACKEND"):
         candidate = Path(override)
         if not candidate.is_absolute():
@@ -83,8 +84,12 @@ def expected_version_output(target: str | None = None) -> str:
     if target is None:
         system = {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}.get(platform.system())
         machine = platform.machine().lower()
-        architecture = {"arm64": "arm64", "aarch64": "arm64",
-                        "x86_64": "x86_64", "amd64": "x86_64"}.get(machine)
+        architecture = {
+            "arm64": "arm64",
+            "aarch64": "arm64",
+            "x86_64": "x86_64",
+            "amd64": "x86_64",
+        }.get(machine)
         target = f"{system}-{architecture}"
     try:
         pin = json.loads(PIN_PATH.read_bytes())
@@ -109,18 +114,26 @@ def backend_child_env(environ: dict[str, str]) -> dict[str, str]:
     if sys.platform == "win32":
         raw_count = env.get("GIT_CONFIG_COUNT", "0")
         if not raw_count.isascii() or not raw_count.isdecimal():
-            raise ContractError("Invalid process Git configuration.", code="apm_backend_environment")
+            raise ContractError(
+                "Invalid process Git configuration.", code="apm_backend_environment"
+            )
         digits = raw_count.lstrip("0") or "0"
         if len(digits) > len(str(len(env))):
-            raise ContractError("Invalid process Git configuration.", code="apm_backend_environment")
+            raise ContractError(
+                "Invalid process Git configuration.", code="apm_backend_environment"
+            )
         count = int(digits)
         if count > len(env) // 2 or any(
             f"GIT_CONFIG_KEY_{index}" not in env or f"GIT_CONFIG_VALUE_{index}" not in env
             for index in range(count)
         ):
-            raise ContractError("Incomplete process Git configuration.", code="apm_backend_environment")
+            raise ContractError(
+                "Incomplete process Git configuration.", code="apm_backend_environment"
+            )
         if f"GIT_CONFIG_KEY_{count}" in env or f"GIT_CONFIG_VALUE_{count}" in env:
-            raise ContractError("Inconsistent process Git configuration.", code="apm_backend_environment")
+            raise ContractError(
+                "Inconsistent process Git configuration.", code="apm_backend_environment"
+            )
         env[f"GIT_CONFIG_KEY_{count}"] = "core.longpaths"
         env[f"GIT_CONFIG_VALUE_{count}"] = "true"
         env["GIT_CONFIG_COUNT"] = str(count + 1)
@@ -150,10 +163,17 @@ def install(
     argv = [str(executable), "install"]
     if package_ref is not None:
         argv.append(package_ref)
-    argv.extend((
-        "--root", str(stage), "--only", "apm",
-        "--target", "agent-skills", "--no-trust-bin",
-    ))
+    argv.extend(
+        (
+            "--root",
+            str(stage),
+            "--only",
+            "apm",
+            "--target",
+            "agent-skills",
+            "--no-trust-bin",
+        )
+    )
     if frozen:
         argv.append("--frozen")
     if verbose:
@@ -182,8 +202,11 @@ def install(
     )
     expected = expected_version_output()
     if (
-        version.returncode != 0 or version.stop_reason or version.error
-        or not version.cleanup_confirmed or oversized
+        version.returncode != 0
+        or version.stop_reason
+        or version.error
+        or not version.cleanup_confirmed
+        or oversized
         or version_output.decode("utf-8", errors="replace").removesuffix("\n").removesuffix("\r")
         != expected
     ):
@@ -192,10 +215,18 @@ def install(
             code="apm_backend_identity",
         )
     if on_preparation is not None:
-        on_preparation(ApmInstallEvent(
-            "started", scope, identity["version"], frozen, package_ref is not None,
-            stage, package_ref, verbose,
-        ))
+        on_preparation(
+            ApmInstallEvent(
+                "started",
+                scope,
+                identity["version"],
+                frozen,
+                package_ref is not None,
+                stage,
+                package_ref,
+                verbose,
+            )
+        )
     decoder = ApmStreamDecoder(on_preparation, limits=limits)
     try:
         observed = supervise_process(
@@ -219,10 +250,18 @@ def install(
     if backend_identity(executable) != identity:
         raise ContractError("APM backend changed during preparation.", code="apm_backend_changed")
     if on_preparation is not None:
-        on_preparation(ApmInstallEvent(
-            "completed", scope, identity["version"], frozen, package_ref is not None,
-            stage, package_ref, verbose,
-        ))
+        on_preparation(
+            ApmInstallEvent(
+                "completed",
+                scope,
+                identity["version"],
+                frozen,
+                package_ref is not None,
+                stage,
+                package_ref,
+                verbose,
+            )
+        )
     return identity
 
 
@@ -290,11 +329,27 @@ def require_preserved_pins(before: LockFile | None, after: LockFile | None) -> N
     if before is None:
         return
     fields = (
-        "repo_url", "host", "host_type", "port", "registry_prefix", "source",
-        "virtual_path", "is_virtual", "resolved_commit", "resolved_ref",
-        "version", "name", "content_hash", "constraint", "resolved_tag",
-        "resolved_url", "resolved_hash", "local_path", "anchored_local_path",
-        "skill_subset", "target_subset",
+        "repo_url",
+        "host",
+        "host_type",
+        "port",
+        "registry_prefix",
+        "source",
+        "virtual_path",
+        "is_virtual",
+        "resolved_commit",
+        "resolved_ref",
+        "version",
+        "name",
+        "content_hash",
+        "constraint",
+        "resolved_tag",
+        "resolved_url",
+        "resolved_hash",
+        "local_path",
+        "anchored_local_path",
+        "skill_subset",
+        "target_subset",
     )
     for key, established in before.dependencies.items():
         observed = after.get_dependency(key) if after else None

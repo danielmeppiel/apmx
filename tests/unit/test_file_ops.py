@@ -9,7 +9,10 @@ from apmx.utils import file_ops, path_security
 @pytest.mark.parametrize("failure", ["chmod", "remove"])
 @pytest.mark.parametrize("ignore_errors", [False, True])
 def test_cleanup_exhaustion_obeys_explicit_error_policy(
-    tmp_path, monkeypatch, failure, ignore_errors,
+    tmp_path,
+    monkeypatch,
+    failure,
+    ignore_errors,
 ):
     directory = tmp_path / "owned"
     directory.mkdir()
@@ -77,6 +80,8 @@ def test_readonly_retry_removes_owned_regular_file(tmp_path):
     target.write_bytes(b"owned")
     target.chmod(0o400)
     file_ops._on_readonly_retry(
-        file_ops.os.unlink, str(target), (PermissionError, PermissionError("readonly"), None),
+        file_ops.os.unlink,
+        str(target),
+        (PermissionError, PermissionError("readonly"), None),
     )
     assert not target.exists()

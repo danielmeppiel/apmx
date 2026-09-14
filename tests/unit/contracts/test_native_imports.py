@@ -16,8 +16,7 @@ import pytest
 from apmx.contracts.frontend import parse_contract, plan_contract
 from apmx.contracts.models import ContractError, ContractLimits
 from apmx.contracts.records import AttemptStore
-from apmx.contracts.workspace import capture_workspace
-from apmx.contracts.workspace import local_git
+from apmx.contracts.workspace import capture_workspace, local_git
 from apmx.install.apm_backend import backend_child_env, install, locate_backend
 from apmx.install.contract_source import prepare_contract_source, prepare_imports
 from apmx.install.contract_source_validation import source_hash
@@ -84,8 +83,12 @@ def test_consumer_lock_wins_for_packaged_contract(fixture, tmp_path):
         ) as (root, identity):
             assert not root.is_relative_to(caller)
             plan = plan_contract(
-                Path(_contract(package)), caller, harness="copilot", source=source,
-                imports_root=root, apm_backend=identity,
+                Path(_contract(package)),
+                caller,
+                harness="copilot",
+                source=source,
+                imports_root=root,
+                apm_backend=identity,
             )
             assert {item.version for item in plan.imported_skills} == {"9.0.0"}
             assert all("override" in item.lock_identity for item in plan.imported_skills)
@@ -107,15 +110,19 @@ def test_multiple_package_context_and_resources_exclude_decoys(fixture, tmp_path
     (style / "hooks").mkdir()
     (style / "hooks/decoy.json").write_text('{"not":"selected"}')
     (caller / "apm.yml").write_text(
-        f"name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n"
-        f"    - {style}\n    - {rules}\n"
+        f"name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n    - {style}\n    - {rules}\n"
     )
     source = caller / "work.contract.md"
     original = (package / _contract(package)).read_text()
     source.write_text(original.replace("  - handoff-style", "  - handoff-style\n  - house-rules"))
     assert len(parse_contract(source).imports) == 2
-    with prepare_imports(caller, source, source=None, planning=False, limits=LIMITS) as (root, backend):
-        plan = plan_contract(source, caller, harness="copilot", imports_root=root, apm_backend=backend)
+    with prepare_imports(caller, source, source=None, planning=False, limits=LIMITS) as (
+        root,
+        backend,
+    ):
+        plan = plan_contract(
+            source, caller, harness="copilot", imports_root=root, apm_backend=backend
+        )
         assert {item.kind for item in plan.imported_skills} == {"skill", "instruction"}
         store = AttemptStore.create(plan)
         snapshot = capture_workspace(plan, store.directory)
@@ -127,30 +134,40 @@ def test_multiple_package_context_and_resources_exclude_decoys(fixture, tmp_path
         assert plan.imported_skills[0].resources[0].relative_path == "references/marker.txt"
 
 
-@pytest.mark.parametrize("imports", ["[missing]", "[handoff-style@^1]", "[handoff-style, handoff-style]"])
+@pytest.mark.parametrize(
+    "imports", ["[missing]", "[handoff-style@^1]", "[handoff-style, handoff-style]"]
+)
 def test_missing_versioned_duplicate_context_refuses_before_producer(fixture, imports):
     caller, package = fixture
     source = package / _contract(package)
-    source.write_text(source.read_text().replace("imports:\n  - handoff-style", f"imports: {imports}"))
-    with pytest.raises(ContractError):
-        with prepare_contract_source(
+    source.write_text(
+        source.read_text().replace("imports:\n  - handoff-style", f"imports: {imports}")
+    )
+    with (
+        pytest.raises(ContractError),
+        prepare_contract_source(
             str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
-        ) as prepared:
-            plan_contract(Path(_contract(package)), caller, harness="copilot", source=prepared)
+        ) as prepared,
+    ):
+        plan_contract(Path(_contract(package)), caller, harness="copilot", source=prepared)
     assert not (caller / ".apm/runs").exists()
 
 
 def test_malformed_consumer_lock_never_invokes_backend(fixture, monkeypatch):
     caller, package = fixture
     (caller / "apm.lock.yaml").write_text("dependencies: [\n")
+
     def forbidden(*args, **kwargs):
         pytest.fail("native acquisition ran before lock admission")
+
     monkeypatch.setattr("apmx.install.apm_backend.install", forbidden)
-    with pytest.raises(ContractError, match="malformed"):
-        with prepare_contract_source(
+    with (
+        pytest.raises(ContractError, match="malformed"),
+        prepare_contract_source(
             str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
-        ):
-            pytest.fail("invalid lock admitted")
+        ),
+    ):
+        pytest.fail("invalid lock admitted")
 
 
 def test_package_name_not_skill_symbol_is_the_import_binding(fixture):
@@ -164,7 +181,9 @@ def test_package_name_not_skill_symbol_is_the_import_binding(fixture):
         assert plan.imported_skills[0].name == "handoff-style"
         assert plan.imported_skills[0].context_name == "separate-skill-name"
         contract = source.root / _contract(package)
-        contract.write_text(contract.read_text().replace("  - handoff-style", "  - separate-skill-name"))
+        contract.write_text(
+            contract.read_text().replace("  - handoff-style", "  - separate-skill-name")
+        )
         updated = replace(source, prepared_hash=source_hash(source.root, LIMITS))
         with pytest.raises(ContractError, match="one installed APM package"):
             plan_contract(Path(_contract(package)), caller, harness="copilot", source=updated)
@@ -192,8 +211,13 @@ def test_unselected_local_packages_are_not_copied_from_tracked_caller(fixture):
     contract.write_bytes((package / _contract(package)).read_bytes())
     local_git(caller, "init", "--quiet")
     local_git(caller, "add", ".")
-    with prepare_imports(caller, contract, source=None, planning=False, limits=LIMITS) as (root, backend):
-        plan = plan_contract(contract, caller, harness="copilot", imports_root=root, apm_backend=backend)
+    with prepare_imports(caller, contract, source=None, planning=False, limits=LIMITS) as (
+        root,
+        backend,
+    ):
+        plan = plan_contract(
+            contract, caller, harness="copilot", imports_root=root, apm_backend=backend
+        )
         store = AttemptStore.create(plan)
         snapshot = capture_workspace(plan, store.directory)
         assert not (snapshot.producer / "packages").exists()
@@ -208,26 +232,37 @@ def test_aggregate_resources_are_bounded(fixture):
     references.mkdir()
     for name in ("one.txt", "two.txt"):
         (references / name).write_text("data")
-    with prepare_contract_source(
-        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
-    ) as source:
-        with pytest.raises(ContractError, match="limit"):
-            plan_contract(
-                Path(_contract(package)), caller, harness="copilot", source=source,
-                limits=replace(LIMITS, resource_files=2),
-            )
+    with (
+        prepare_contract_source(
+            str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+        ) as source,
+        pytest.raises(ContractError, match="limit"),
+    ):
+        plan_contract(
+            Path(_contract(package)),
+            caller,
+            harness="copilot",
+            source=source,
+            limits=replace(LIMITS, resource_files=2),
+        )
 
 
-@pytest.mark.parametrize("metadata", ["model: other", "context: fork", "allowed-tools: shell", "hooks: [unsafe]"])
+@pytest.mark.parametrize(
+    "metadata", ["model: other", "context: fork", "allowed-tools: shell", "hooks: [unsafe]"]
+)
 def test_selected_unsupported_activation_refuses(fixture, metadata):
     caller, package = fixture
     skill = package / "skills/handoff-style/SKILL.md"
-    skill.write_text(skill.read_text().replace("name: handoff-style", f"name: handoff-style\n{metadata}"))
-    with prepare_contract_source(
-        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
-    ) as source:
-        with pytest.raises(ContractError, match="unsupported activation"):
-            plan_contract(Path(_contract(package)), caller, harness="copilot", source=source)
+    skill.write_text(
+        skill.read_text().replace("name: handoff-style", f"name: handoff-style\n{metadata}")
+    )
+    with (
+        prepare_contract_source(
+            str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+        ) as source,
+        pytest.raises(ContractError, match="unsupported activation"),
+    ):
+        plan_contract(Path(_contract(package)), caller, harness="copilot", source=source)
 
 
 def test_declared_relative_contract_source_has_one_native_identity(fixture):
@@ -275,13 +310,15 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
     url = "ssh://git@localhost/fixtures/handoff-style.git"
     transport = subprocess.run(
         [git, "ls-remote", url, "refs/tags/v9"],
-        capture_output=True, text=True, timeout=30, check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     assert transport.returncode == 0, redact_git_diagnostic(transport.stderr)
     assert revision in transport.stdout
     (caller / "apm.yml").write_text(
-        "name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n"
-        f"    - git: {url}\n      ref: v9\n"
+        f"name: consumer\nversion: 1.0.0\ndependencies:\n  apm:\n    - git: {url}\n      ref: v9\n"
     )
     trace = tmp_path / "native-git-trace.jsonl"
     with tempfile.TemporaryDirectory(prefix="apmx-fixture-") as temporary:
@@ -289,12 +326,22 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
         shutil.copy2(caller / "apm.yml", generation_root / "apm.yml")
         generated = subprocess.run(
             [
-                str(locate_backend()), "install", "--root", str(generation_root),
-                "--only", "apm", "--target", "agent-skills", "--no-trust-bin",
+                str(locate_backend()),
+                "install",
+                "--root",
+                str(generation_root),
+                "--only",
+                "apm",
+                "--target",
+                "agent-skills",
+                "--no-trust-bin",
             ],
             cwd=generation_root,
             env={**backend_child_env(dict(os.environ)), "GIT_TRACE2_EVENT": str(trace)},
-            capture_output=True, text=True, timeout=120, check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
         )
         errors = []
         if trace.exists():
@@ -325,8 +372,12 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
             assert not root.is_relative_to(caller)
             assert root.name.startswith("apmx-")
             plan = plan_contract(
-                Path(_contract(package)), caller, harness="copilot", source=source,
-                imports_root=root, apm_backend=identity,
+                Path(_contract(package)),
+                caller,
+                harness="copilot",
+                source=source,
+                imports_root=root,
+                apm_backend=identity,
             )
             assert len(plan.imported_skills) == 1
             assert plan.imported_skills[0].resolved_commit == revision
@@ -338,6 +389,7 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
 
 def test_native_source_bootstrap_accepts_null_consumer_dependencies(fixture, monkeypatch):
     from contextlib import contextmanager
+
     import apmx.install.contract_source as preparation
 
     caller, package = fixture
@@ -347,11 +399,13 @@ def test_native_source_bootstrap_accepts_null_consumer_dependencies(fixture, mon
     source_before = source_hash(package, LIMITS)
     stages = []
     private_root = preparation._private_root
+
     @contextmanager
     def observe_root(*args):
         with private_root(*args) as root:
             stages.append(root)
             yield root
+
     monkeypatch.setattr(preparation, "_private_root", observe_root)
     with prepare_contract_source(
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS

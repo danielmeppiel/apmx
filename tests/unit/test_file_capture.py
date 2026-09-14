@@ -7,10 +7,13 @@ import pytest
 
 from apmx.contracts.models import ContractError
 from apmx.contracts.workspace import _read
-from apmx.utils.file_capture import open_readonly_nofollow
 from apmx.utils import file_capture
+from apmx.utils.file_capture import open_readonly_nofollow
 from apmx.utils.path_security import (
-    PathTraversalError, has_symlink_component, is_link_or_reparse, validate_windows_segments,
+    PathTraversalError,
+    has_symlink_component,
+    is_link_or_reparse,
+    validate_windows_segments,
 )
 
 
@@ -35,19 +38,33 @@ def test_windows_named_identity_uses_a_second_nofollow_handle(tmp_path, monkeypa
     path = tmp_path / "selected"
     path.write_bytes(b"selected bytes")
     expected = path.stat()
-    monkeypatch.setattr(file_capture, "os", SimpleNamespace(
-        name="nt", fstat=os.fstat, fdopen=os.fdopen,
-    ))
-    monkeypatch.setattr(file_capture, "open_readonly_nofollow", lambda selected: os.open(
-        selected, os.O_RDONLY | getattr(os, "O_BINARY", 0),
-    ))
     monkeypatch.setattr(
-        Path, "stat",
+        file_capture,
+        "os",
+        SimpleNamespace(
+            name="nt",
+            fstat=os.fstat,
+            fdopen=os.fdopen,
+        ),
+    )
+    monkeypatch.setattr(
+        file_capture,
+        "open_readonly_nofollow",
+        lambda selected: os.open(
+            selected,
+            os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        ),
+    )
+    monkeypatch.setattr(
+        Path,
+        "stat",
         lambda *args, **kwargs: pytest.fail("Do not mix path-stat and descriptor-stat APIs"),
     )
     actual = file_capture.capture_path_stat(path)
     assert (actual.st_dev, actual.st_ino, actual.st_size) == (
-        expected.st_dev, expected.st_ino, expected.st_size,
+        expected.st_dev,
+        expected.st_ino,
+        expected.st_size,
     )
 
 
@@ -63,9 +80,16 @@ def test_capture_preserves_identity_and_bytes_across_timestamp_updates(tmp_path)
         assert entry.size == len(data)
 
 
-@pytest.mark.parametrize("field", [
-    "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns",
-])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "st_dev",
+        "st_ino",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+    ],
+)
 def test_every_named_identity_component_still_blocks_drift(tmp_path, monkeypatch, field):
     path = tmp_path / "selected"
     path.write_bytes(b"same bytes")
@@ -130,17 +154,19 @@ def test_windows_handles_distinguish_same_byte_files_and_prevent_replacement(tmp
     for path in (first, second):
         path.write_bytes(b"identical bytes")
         os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
-    with os.fdopen(open_readonly_nofollow(first), "rb") as one:
-        with os.fdopen(open_readonly_nofollow(second), "rb") as two:
-            first_info, second_info = os.fstat(one.fileno()), os.fstat(two.fileno())
-            first_identity = (first_info.st_dev, first_info.st_ino)
-            second_identity = (second_info.st_dev, second_info.st_ino)
-            assert first_info.st_ino != 0 and second_info.st_ino != 0
-            assert first_identity != second_identity
-            named = file_capture.capture_path_stat(first)
-            assert (named.st_dev, named.st_ino) == first_identity
-            named = file_capture.capture_path_stat(second)
-            assert (named.st_dev, named.st_ino) == second_identity
-            with pytest.raises(OSError):
-                os.replace(second, first)
+    with (
+        os.fdopen(open_readonly_nofollow(first), "rb") as one,
+        os.fdopen(open_readonly_nofollow(second), "rb") as two,
+    ):
+        first_info, second_info = os.fstat(one.fileno()), os.fstat(two.fileno())
+        first_identity = (first_info.st_dev, first_info.st_ino)
+        second_identity = (second_info.st_dev, second_info.st_ino)
+        assert first_info.st_ino != 0 and second_info.st_ino != 0
+        assert first_identity != second_identity
+        named = file_capture.capture_path_stat(first)
+        assert (named.st_dev, named.st_ino) == first_identity
+        named = file_capture.capture_path_stat(second)
+        assert (named.st_dev, named.st_ino) == second_identity
+        with pytest.raises(OSError):
+            os.replace(second, first)
     assert first.read_bytes() == second.read_bytes() == b"identical bytes"

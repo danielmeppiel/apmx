@@ -4,8 +4,8 @@ from dataclasses import replace
 
 from ..core.contract_logger import ContractLogger
 from . import engine, frontend, records, resolution, workspace
-from .models import ChainResult, ContractError, LeafPlan, Outcome, RetainedInput
 from .events import ImportsSelectedEvent
+from .models import ChainResult, ContractError, LeafPlan, Outcome, RetainedInput
 from .resolution import ChainPlan, Node
 
 
@@ -121,7 +121,11 @@ def run_chain(
             store.update("execution", nodes=states)
             executable = _bound(node, admitted)
             logger.chain_node(current + 1, len(plan.nodes), node.plan.contract.path)
-            leaf_logger = logger.new_leaf()
+            leaf_logger = logger.new_leaf(
+                index=current + 1,
+                count=len(plan.nodes),
+                contract=node.plan.contract.path,
+            )
             try:
                 leaf_logger.on_preparation(ImportsSelectedEvent(executable.imported_skills))
                 result = engine.run_contract(
@@ -137,18 +141,31 @@ def run_chain(
             states[current]["result"] = result
             _revalidate(plan)
             if any(edge.producer == node.plan.contract.path for edge in plan.graph.edges):
-                binding = records.admit_handoff(
-                    executable,
-                    result,
-                    allow_unproven=plan.allow_unproven_inputs,
-                )
-                admitted[node.plan.contract.produces] = binding
+                if isinstance(node.plan.contract.produces, str):
+                    bindings = (
+                        records.admit_handoff(
+                            executable,
+                            result,
+                            allow_unproven=plan.allow_unproven_inputs,
+                        ),
+                    )
+                else:
+                    bindings = records.admit_handoffs(
+                        executable,
+                        result,
+                        allow_unproven=plan.allow_unproven_inputs,
+                    )
+                admitted.update((binding.artifact.relative_path, binding) for binding in bindings)
                 states[current]["input_exception"] = result.outcome == Outcome.UNPROVEN
             else:
-                binding = records.finalized_input(executable, result)
-            finalized.append(binding)
+                bindings = (
+                    (records.finalized_input(executable, result),)
+                    if isinstance(node.plan.contract.produces, str)
+                    else records.finalized_inputs(executable, result)
+                )
+            finalized.extend(bindings)
             completed.append((executable, result))
-            states[current]["record_sha256"] = binding.record_sha256
+            states[current]["record_sha256"] = bindings[0].record_sha256
             states[current]["state"] = "completed"
             store.update("execution", nodes=states)
         for binding in finalized:
@@ -171,7 +188,7 @@ def run_chain(
         )
         for state in states[current + 1 :]:
             state.update(state="blocked", reason=stop_reason)
-        logger.chain_stopped(states[current]["reason"])
+        logger.chain_stopped(states[current]["reason"], outcome=outcome, code=stop_reason)
     result = ChainResult(
         store.run_id, store.record_path, outcome, complete, tuple(runs), stop_reason
     )

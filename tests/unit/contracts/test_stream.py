@@ -12,6 +12,33 @@ from apmx.contracts.stream import ApmStreamDecoder, ContractStreamDecoder, safe_
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("completion", [True, False, None, "absent"])
+def test_artifact_tool_outcomes_cannot_be_hidden_by_a_failed_journal_write(completion):
+    events = []
+    decoder = ContractStreamDecoder(EventEmitter("artifact-test", events.append))
+    decoder.feed(
+        "stdout",
+        _frame(
+            "tool.execution_start",
+            toolName="apmx_artifacts-write_file",
+            toolCallId="write-1",
+        ),
+    )
+    if completion != "absent":
+        decoder.feed(
+            "stdout",
+            _frame(
+                "tool.execution_complete",
+                toolCallId="write-1",
+                success=completion,
+            ),
+        )
+    decoder.feed("stdout", _result_frame())
+    decoder.finish()
+    assert decoder.completion_seen
+    assert (decoder.protocol_error is None) is (completion is True)
+
+
 def test_apm_frames_both_streams_before_redaction_and_flushes_eof_once():
     events = []
     decoder = ApmStreamDecoder(events.append, limits=ContractLimits())
@@ -102,10 +129,15 @@ def _text(events) -> str:
 
 def test_only_public_assistant_text_is_tagged_as_prose_without_native_ids() -> None:
     decoder, events = _decoder()
-    decoder.feed("stdout", _frame(
-        "assistant.message", messageId="PRIVATE_NATIVE_ID", phase="commentary",
-        content="I\u2019m reading.",
-    ))
+    decoder.feed(
+        "stdout",
+        _frame(
+            "assistant.message",
+            messageId="PRIVATE_NATIVE_ID",
+            phase="commentary",
+            content="I\u2019m reading.",
+        ),
+    )
     decoder.feed("stderr", "O\u2019Connor.md\n".encode())
     decoder.feed("stdout", _frame("tool.execution_start", toolName="view"))
     activities = [event for event in events if event.kind == "activity"]
@@ -118,19 +150,34 @@ def test_only_public_assistant_text_is_tagged_as_prose_without_native_ids() -> N
 @pytest.mark.parametrize("success", [True, False, None])
 def test_native_skill_is_loaded_only_after_correlated_success(success: bool | None) -> None:
     decoder, events = _decoder()
-    decoder.feed("stdout", _frame(
-        "tool.execution_start", toolName="skill", toolCallId="native-call",
-        arguments={"skill": "handoff-style", "extra": "PRIVATE_ARGUMENT"},
-    ))
+    decoder.feed(
+        "stdout",
+        _frame(
+            "tool.execution_start",
+            toolName="skill",
+            toolCallId="native-call",
+            arguments={"skill": "handoff-style", "extra": "PRIVATE_ARGUMENT"},
+        ),
+    )
     assert not any(event.kind == "skill_loaded" for event in events)
-    decoder.feed("stdout", _frame(
-        "tool.execution_complete", toolCallId="unrelated", success=True,
-    ))
+    decoder.feed(
+        "stdout",
+        _frame(
+            "tool.execution_complete",
+            toolCallId="unrelated",
+            success=True,
+        ),
+    )
     assert not any(event.kind == "skill_loaded" for event in events)
-    decoder.feed("stdout", _frame(
-        "tool.execution_complete", toolCallId="native-call", success=success,
-        result={"content": "PRIVATE_SKILL_BODY"},
-    ))
+    decoder.feed(
+        "stdout",
+        _frame(
+            "tool.execution_complete",
+            toolCallId="native-call",
+            success=success,
+            result={"content": "PRIVATE_SKILL_BODY"},
+        ),
+    )
     loaded = [event.data["name"] for event in events if event.kind == "skill_loaded"]
     assert loaded == (["handoff-style"] if success is True else [])
     assert "PRIVATE" not in str(events)
@@ -139,14 +186,26 @@ def test_native_skill_is_loaded_only_after_correlated_success(success: bool | No
 
 def test_structured_and_tool_skill_receipts_do_not_duplicate_or_expose_content() -> None:
     decoder, events = _decoder()
-    decoder.feed("stdout", _frame(
-        "tool.execution_start", toolName="skill", toolCallId="call",
-        arguments={"skill": "handoff-style"},
-    ))
-    decoder.feed("stdout", _frame(
-        "skill.invoked", name="handoff-style", content="PRIVATE_BODY", path="PRIVATE_PATH",
-        allowedTools=["shell"], pluginName="PRIVATE_PLUGIN",
-    ))
+    decoder.feed(
+        "stdout",
+        _frame(
+            "tool.execution_start",
+            toolName="skill",
+            toolCallId="call",
+            arguments={"skill": "handoff-style"},
+        ),
+    )
+    decoder.feed(
+        "stdout",
+        _frame(
+            "skill.invoked",
+            name="handoff-style",
+            content="PRIVATE_BODY",
+            path="PRIVATE_PATH",
+            allowedTools=["shell"],
+            pluginName="PRIVATE_PLUGIN",
+        ),
+    )
     decoder.feed("stdout", _frame("tool.execution_complete", toolCallId="call", success=True))
     assert [event.data["name"] for event in events if event.kind == "skill_loaded"] == [
         "handoff-style",
@@ -158,10 +217,15 @@ def test_structured_and_tool_skill_receipts_do_not_duplicate_or_expose_content()
 def test_skill_observation_state_and_identifiers_are_bounded() -> None:
     decoder, events = _decoder()
     for index in range(100):
-        decoder.feed("stdout", _frame(
-            "tool.execution_start", toolName="skill", toolCallId=f"call-{index}",
-            arguments={"skill": f"skill-{index}"},
-        ))
+        decoder.feed(
+            "stdout",
+            _frame(
+                "tool.execution_start",
+                toolName="skill",
+                toolCallId=f"call-{index}",
+                arguments={"skill": f"skill-{index}"},
+            ),
+        )
         decoder.feed("stdout", _frame("skill.invoked", name=f"skill-{index}"))
     for value in (None, [], {}, "bad\nname", "x" * 65):
         decoder.feed("stdout", _frame("skill.invoked", name=value))

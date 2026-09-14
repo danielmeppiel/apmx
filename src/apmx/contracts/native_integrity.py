@@ -7,10 +7,13 @@ from typing import NoReturn
 from apmx.deps.lockfile import LockedDependency, LockFile
 from apmx.install.contract_source_validation import bounded_tree
 from apmx.utils.content_hash import (
-    _EXCLUDED_DIRS, _EXCLUDED_ROOT_FILES, _hash_package_entries,
+    _EXCLUDED_DIRS,
+    _EXCLUDED_ROOT_FILES,
+    _hash_package_entries,
 )
 from apmx.utils.github_host import is_full_commit_sha
 from apmx.utils.path_security import has_symlink_component
+
 from .imports import _read_bytes
 from .models import ContractError, ContractLimits
 
@@ -29,6 +32,7 @@ def verify_inventory_package(
     A nested virtual package's marker therefore changes its ancestor's tree.
     Ordinary package bytes and the original native expected hashes stay authoritative.
     """
+
     def reject() -> NoReturn:
         raise ContractError("Installed package hash differs from its native lock.", code=error_code)
 
@@ -68,7 +72,7 @@ def verify_inventory_package(
         def entries():
             for relative, raw in files.items():
                 if relative.startswith(prefix):
-                    local = relative[len(prefix):]
+                    local = relative[len(prefix) :]
                     if local not in _EXCLUDED_ROOT_FILES:
                         yield local, raw
 
@@ -91,15 +95,22 @@ def verify_inventory_package(
             captured_path = prefix + relative
             if captured_path not in files:
                 continue
-            expected_marker = json.dumps({
-                "schema_version": 1, "resolved_commit": child.resolved_commit,
-            }).encode("utf-8")
+            expected_marker = json.dumps(
+                {
+                    "schema_version": 1,
+                    "resolved_commit": child.resolved_commit,
+                }
+            ).encode("utf-8")
             if files[captured_path] != expected_marker:
                 reject()
             managed.add(relative)
-        if not managed or _hash_package_entries(
-            (relative, raw) for relative, raw in entries() if relative not in managed
-        ) != entry.content_hash:
+        if (
+            not managed
+            or _hash_package_entries(
+                (relative, raw) for relative, raw in entries() if relative not in managed
+            )
+            != entry.content_hash
+        ):
             reject()
         checked[key] = tuple(sorted(managed))
         return checked[key]

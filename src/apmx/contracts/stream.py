@@ -32,7 +32,8 @@ def safe_text(text: str, *, limit: int = _DISPLAY_CHARS) -> str:
     """
     redacted = redact_git_diagnostic(text)
     escaped = (
-        redacted.encode("unicode_escape", errors="backslashreplace").decode("ascii")
+        redacted.encode("unicode_escape", errors="backslashreplace")
+        .decode("ascii")
         .replace("\\\\", "\\")
     )
     # unicode_escape leaves a few ASCII controls (notably DEL) literal.
@@ -112,10 +113,14 @@ class ApmStreamDecoder:
     def _overflow(self, stream: Literal["stdout", "stderr"]) -> None:
         self.omitted_lines += 1
         if self.omitted_lines == 1 and self.sink is not None:
-            self.sink(ApmOutputEvent(
-                stream, "Some APM output lines were too long to display and were omitted. "
-                "Remaining output is still being read.", overflow=True,
-            ))
+            self.sink(
+                ApmOutputEvent(
+                    stream,
+                    "Some APM output lines were too long to display and were omitted. "
+                    "Remaining output is still being read.",
+                    overflow=True,
+                )
+            )
 
     def feed(self, stream: str, chunk: bytes) -> None:
         if stream not in self._streams:
@@ -178,6 +183,7 @@ class ContractStreamDecoder:
         self._models: list[str] = []
         self._messages: dict[str, _Message] = {}
         self._skill_calls: dict[str, str] = {}
+        self._artifact_calls: set[str] = set()
         self._loaded_skills: set[str] = set()
         self._unknown: set[str] = set()
         self._omission_notices: set[str] = set()
@@ -220,6 +226,8 @@ class ContractStreamDecoder:
             return
         self._stdout.finish()
         self._stderr.finish()
+        if self._artifact_calls:
+            self._protocol_failure("A native artifact tool did not report completion.")
         for message in self._messages.values():
             if message.phase in _PUBLIC_PHASES and not message.suppressed:
                 message.lines.finish()
@@ -229,8 +237,13 @@ class ContractStreamDecoder:
         self.events.emit(kind, source=self.source, label=self.label, **data)
 
     def _activity(
-        self, text: str, stream: str = "stdout", *, tool_status: str | None = None,
-        prose: bool = False, prose_group: int | None = None,
+        self,
+        text: str,
+        stream: str = "stdout",
+        *,
+        tool_status: str | None = None,
+        prose: bool = False,
+        prose_group: int | None = None,
     ) -> None:
         if text:
             # Both consumers use safe_text; keep raw bounded text in the
@@ -254,13 +267,19 @@ class ContractStreamDecoder:
             )
 
     def _text_lines(
-        self, stream: str, *, prose: bool = False, prose_group: int | None = None,
+        self,
+        stream: str,
+        *,
+        prose: bool = False,
+        prose_group: int | None = None,
     ) -> _Lines:
         return _Lines(
             _TEXT_BYTES,
             lambda value: self._activity(
-                value.decode("utf-8", errors="backslashreplace"), stream,
-                prose=prose, prose_group=prose_group,
+                value.decode("utf-8", errors="backslashreplace"),
+                stream,
+                prose=prose,
+                prose_group=prose_group,
             ),
             lambda: self._notice_once(
                 "long-text",
@@ -330,7 +349,9 @@ class ContractStreamDecoder:
             self._unknown.add(kind)
             # No arbitrary data, keys, tool results, prompts or reasoning.
             self._emit(
-                "metadata", text=f"Native event not interpreted: {kind}", retained_only=True,
+                "metadata",
+                text=f"Native event not interpreted: {kind}",
+                retained_only=True,
             )
 
     def _native_result(self, envelope: dict) -> None:
@@ -481,7 +502,20 @@ class ContractStreamDecoder:
             self._activity(text, prose=True)
 
     def _tool_started(self, data: dict) -> None:
+        from ..runtime.artifact_tools import NATIVE_TOOL_NAMES
+
         name = data.get("toolName")
+        if name in NATIVE_TOOL_NAMES:
+            identifier = data.get("toolCallId")
+            if (
+                not isinstance(identifier, str)
+                or not 0 < len(identifier) <= 256
+                or identifier in self._artifact_calls
+                or len(self._artifact_calls) >= 64
+            ):
+                self._protocol_failure("Native artifact tool identity is missing or inconsistent.")
+            else:
+                self._artifact_calls.add(identifier)
         if name == "skill":
             identifier = data.get("toolCallId")
             arguments = data.get("arguments")
@@ -489,7 +523,8 @@ class ContractStreamDecoder:
             from .context_layout import is_native_skill_name
 
             if (
-                isinstance(identifier, str) and 0 < len(identifier) <= 256
+                isinstance(identifier, str)
+                and 0 < len(identifier) <= 256
                 and is_native_skill_name(skill)
             ):
                 if len(self._skill_calls) < 32:
@@ -503,6 +538,12 @@ class ContractStreamDecoder:
 
     def _tool_finished(self, data: dict) -> None:
         identifier = data.get("toolCallId")
+        if isinstance(identifier, str) and identifier in self._artifact_calls:
+            self._artifact_calls.remove(identifier)
+            if data.get("success") is not True:
+                self._protocol_failure(
+                    "Native artifact tool failed or its result was not observed."
+                )
         skill = self._skill_calls.pop(identifier, None) if isinstance(identifier, str) else None
         if skill is not None and data.get("success") is True:
             self._skill_invoked({"name": skill})

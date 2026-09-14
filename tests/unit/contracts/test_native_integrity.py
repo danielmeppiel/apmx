@@ -12,8 +12,8 @@ import pytest
 from apmx.contracts.imports import read_lock
 from apmx.contracts.models import ContractError, ContractLimits
 from apmx.contracts.native_integrity import verify_inventory_package
-from apmx.deps.lockfile import LockedDependency, LockFile
 from apmx.contracts.workspace import local_git
+from apmx.deps.lockfile import LockedDependency, LockFile
 from apmx.install.apm_backend import install
 from apmx.install.contract_source import _selected_source
 from apmx.models.dependency.reference import DependencyReference
@@ -54,10 +54,14 @@ def native_virtual_inventory(tmp_path_factory):
         environment.setenv("GIT_SSH_VARIANT", "ssh")
         with tempfile.TemporaryDirectory(prefix="ax-") as temporary:
             stage = Path(temporary)
-            dump_yaml({
-                "name": "virtual-consumer", "version": "1.0.0",
-                "dependencies": {"apm": [declaration]},
-            }, stage / "apm.yml")
+            dump_yaml(
+                {
+                    "name": "virtual-consumer",
+                    "version": "1.0.0",
+                    "dependencies": {"apm": [declaration]},
+                },
+                stage / "apm.yml",
+            )
             install(stage, limits=LIMITS)
             yield stage, declaration
 
@@ -82,19 +86,24 @@ def test_genuine_virtual_inventory_preserves_native_hash_authority(inventory):
     assert verify_inventory_package(stage, parent, lock, LIMITS) == expected
     assert verify_inventory_package(stage, child, lock, LIMITS) == ()
     selected, locked, metadata = _selected_source(
-        stage, DependencyReference.parse_from_dict(declaration), LIMITS,
+        stage,
+        DependencyReference.parse_from_dict(declaration),
+        LIMITS,
     )
     assert selected == root
     assert locked.content_hash == parent.content_hash
     assert metadata == expected
 
 
-@pytest.mark.parametrize("relative", [
-    "contracts/handoff.contract.md",
-    "checks/check_handoff.py",
-    "skills/handoff-style/SKILL.md",
-    "unlisted/.apm-pin",
-])
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "contracts/handoff.contract.md",
+        "checks/check_handoff.py",
+        "skills/handoff-style/SKILL.md",
+        "unlisted/.apm-pin",
+    ],
+)
 def test_native_marker_projection_rejects_changed_package_bytes(inventory, relative):
     stage, _, lock, parent, _, root = inventory
     target = root / relative
@@ -135,8 +144,10 @@ def test_nested_metadata_projection_captures_payload_once(tmp_path, monkeypatch)
     packages = []
     for depth in range(12):
         dependency = LockedDependency(
-            repo_url="fixtures/nested", host="localhost",
-            virtual_path="/".join(["package"] * (depth + 1)), is_virtual=True,
+            repo_url="fixtures/nested",
+            host="localhost",
+            virtual_path="/".join(["package"] * (depth + 1)),
+            is_virtual=True,
             resolved_commit="a" * 40,
         )
         root = dependency.to_dependency_ref().get_install_path(tmp_path / "apm_modules")
@@ -147,16 +158,23 @@ def test_nested_metadata_projection_captures_payload_once(tmp_path, monkeypatch)
         dependency.content_hash = compute_package_hash(root)
         lock.dependencies[dependency.get_unique_key()] = dependency
     for dependency, root in packages:
-        (root / ".apm-pin").write_text(json.dumps({
-            "schema_version": 1, "resolved_commit": dependency.resolved_commit,
-        }))
+        (root / ".apm-pin").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "resolved_commit": dependency.resolved_commit,
+                }
+            )
+        )
 
     captured = []
     reader = integrity._read_bytes
+
     def read(path, **kwargs):
         raw = reader(path, **kwargs)
         captured.append((path, len(raw)))
         return raw
+
     monkeypatch.setattr(integrity, "_read_bytes", read)
     managed = verify_inventory_package(tmp_path, packages[0][0], lock, LIMITS)
     assert len(managed) == 11

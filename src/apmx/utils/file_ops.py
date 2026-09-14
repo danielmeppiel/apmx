@@ -27,9 +27,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
-
-T = TypeVar("T")
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Defaults -- tuned for AV scan locks (sub-second to ~3 s total wait)
@@ -74,7 +72,7 @@ def _is_transient_lock_error(exc: OSError) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _retry_on_lock(
+def _retry_on_lock[T](
     operation: Callable[[], T],
     description: str,
     *,
@@ -129,7 +127,7 @@ def _retry_on_lock(
                 f"retrying in {delay:.2f}s"
             )
             if before_retry is not None:
-                try:  # noqa: SIM105
+                try:
                     before_retry()
                 except OSError:
                     pass
@@ -222,10 +220,9 @@ def _reflink_copy_file(src: str, dst: str, *, follow_symlinks: bool = True) -> s
     from .reflink import clone_file
 
     try:
-        if follow_symlinks and not os.path.islink(src):
-            if clone_file(src, dst):
-                shutil.copystat(src, dst, follow_symlinks=follow_symlinks)
-                return dst
+        if follow_symlinks and not os.path.islink(src) and clone_file(src, dst):
+            shutil.copystat(src, dst, follow_symlinks=follow_symlinks)
+            return dst
     except OSError:
         # Defensive: clone_file is documented as never-raises but the
         # underlying ctypes/ioctl path could surface an os-level error.
@@ -283,7 +280,7 @@ def robust_copytree(
 
     def _cleanup_partial() -> None:
         if not dirs_exist_ok and os.path.isdir(dst_s):
-            try:  # noqa: SIM105
+            try:
                 shutil.rmtree(dst_s, onerror=_on_readonly_retry)
             except OSError:
                 pass

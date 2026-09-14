@@ -1,5 +1,6 @@
-import pytest
 from types import SimpleNamespace
+
+import pytest
 
 from apmx.contracts import check_command
 from apmx.contracts.models import ContractError
@@ -32,5 +33,7 @@ def test_windows_discovers_git_shell_when_only_git_cmd_is_on_path(tmp_path, monk
     shell.parent.mkdir(parents=True)
     git.touch()
     shell.touch()
-    monkeypatch.setattr(check_command.shutil, "which", lambda value: str(git) if value == "git.exe" else None)
+    monkeypatch.setattr(
+        check_command.shutil, "which", lambda value: str(git) if value == "git.exe" else None
+    )
     assert check_command.check_argv("true") == (str(shell), "-c", "true")

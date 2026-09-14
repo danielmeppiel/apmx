@@ -10,9 +10,7 @@ from apmx.policy.prerequisite import require_no_policy
 
 @pytest.mark.parametrize("policy", ["", "null", "false", "{source: org:acme}", "{sha256: bad}"])
 def test_any_governed_caller_refuses_offline(tmp_path, monkeypatch, policy):
-    (tmp_path / "apm.yml").write_text(
-        "name: governed\nversion: 1.0.0\npolicy: " + policy + "\n"
-    )
+    (tmp_path / "apm.yml").write_text("name: governed\nversion: 1.0.0\npolicy: " + policy + "\n")
     transport = Mock(side_effect=AssertionError("Policy admission cannot fetch"))
     monkeypatch.setattr("requests.Session.request", transport)
     with pytest.raises(ContractError) as error:
@@ -43,15 +41,18 @@ def test_script_disable_still_refuses_checks(tmp_path, monkeypatch):
     assert error.value.code == "scripts_disabled"
 
 
-@pytest.mark.parametrize("policy,code", [
-    (None, "policy_unavailable"),
-    ({}, "policy_unavailable"),
-    ({"fetch_failure_default": "block"}, "policy_blocked"),
-    ({"hash": "sha256:" + "a" * 64}, "policy_blocked"),
-    ({"hash": "invalid"}, "policy_blocked"),
-    ({"hash_algorithm": "sha1"}, "policy_blocked"),
-    (False, "policy_blocked"),
-])
+@pytest.mark.parametrize(
+    "policy,code",
+    [
+        (None, "policy_unavailable"),
+        ({}, "policy_unavailable"),
+        ({"fetch_failure_default": "block"}, "policy_blocked"),
+        ({"hash": "sha256:" + "a" * 64}, "policy_blocked"),
+        ({"hash": "invalid"}, "policy_blocked"),
+        ({"hash_algorithm": "sha1"}, "policy_blocked"),
+        (False, "policy_blocked"),
+    ],
+)
 def test_policy_outcome_codes_precede_any_git_probe(tmp_path, monkeypatch, policy, code):
     git = Mock(side_effect=AssertionError("Configured policy must refuse before probing"))
     monkeypatch.setattr("apmx.policy.prerequisite.local_git", git)

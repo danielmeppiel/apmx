@@ -23,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.12"]
+factory = ["behave==1.3.3"]
 build = ["pyinstaller==6.16.0", "build>=1.2"]
 
 [project.scripts]

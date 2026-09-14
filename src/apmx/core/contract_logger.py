@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 import re
-import stat
 import sys
 from collections import deque
+from dataclasses import dataclass, replace
+from enum import Enum, IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
 from apmx.contracts import records
 from apmx.contracts.events import (
@@ -18,6 +19,7 @@ from apmx.contracts.events import (
     PreparationEvent,
 )
 from apmx.contracts.models import (
+    ChainResult,
     CheckObservation,
     ContractError,
     ContractLimits,
@@ -26,15 +28,15 @@ from apmx.contracts.models import (
     Outcome,
     RunEvent,
     RunResult,
-    ChainResult,
+    artifact_files,
 )
 from apmx.contracts.stream import safe_text
 from apmx.utils import console
 from apmx.utils.paths import portable_link_relpath, portable_relpath
 
-
 if TYPE_CHECKING:
     from rich.status import Status
+
     from apmx.contracts.resolution import ChainPlan, Graph
 
 
@@ -142,8 +144,7 @@ class _Transcript:
             self.omitted_lines += 1
 
     def write(self, target: BinaryIO) -> None:
-        for line in self.head:
-            target.write(line)
+        target.writelines(self.head)
         if self.omitted_lines:
             target.write(
                 (
@@ -151,29 +152,370 @@ class _Transcript:
                     f"{self.omitted_bytes} bytes omitted between beginning and tail.\n"
                 ).encode("ascii")
             )
-        for line in self.tail:
-            target.write(line)
+        target.writelines(self.tail)
+
+
+class _Role(str, Enum):
+    START = "start"
+    INFO = "info"
+    NOTICE = "notice"
+    HEADING = "heading"
+    WARNING = "warning"
+    ERROR = "error"
+    SUCCESS = "success"
+    DETAIL = "detail"
+    EXTERNAL = "external"
+
+
+class _Visibility(Enum):
+    ALWAYS = "always"
+    VERBOSE = "verbose"
+    RETAINED = "retained"
+
+
+class _Layout(Enum):
+    LITERAL = "literal"
+    PROSE = "prose"
+
+
+class _Level(IntEnum):
+    HEADING = 0
+    BODY = 2
+    DETAIL = 4
+
+
+class _Boundary(Enum):
+    EMPTY = "empty"
+    CONTENT = "content"
+    GAP = "gap"
+
+
+@dataclass(frozen=True)
+class _StepContext:
+    index: int
+    count: int
+    contract: Path
+
+
+@dataclass(frozen=True)
+class _StopContext:
+    outcome: Outcome
+    reason: str
+    code: str
+
+
+@dataclass(frozen=True)
+class _DisplayLine:
+    """Sanitized human text, independent of retention and visibility policy."""
+
+    text: str
+    role: _Role = _Role.INFO
+    source: str = ""
+    level: _Level = _Level.BODY
+    accent: str = ""
+    layout: _Layout = _Layout.LITERAL
+    dim_remainder: bool = False
+
+
+@dataclass(frozen=True)
+class _RoleStyle:
+    symbol: str
+    color: str
+
+
+class _ContractDisplay:
+    """Invocation-scoped screen state only; never reads or derives run evidence."""
+
+    _roles: ClassVar[dict[_Role, _RoleStyle]] = {
+        _Role.START: _RoleStyle("running", "cyan"),
+        _Role.INFO: _RoleStyle("", "default"),
+        _Role.NOTICE: _RoleStyle("info", "blue"),
+        _Role.HEADING: _RoleStyle("", "default"),
+        _Role.WARNING: _RoleStyle("warning", "yellow"),
+        _Role.ERROR: _RoleStyle("error", "red"),
+        _Role.SUCCESS: _RoleStyle("check", "green"),
+        _Role.DETAIL: _RoleStyle("", "dim"),
+        _Role.EXTERNAL: _RoleStyle("", "dim cyan"),
+    }
+    _outcomes: ClassVar[dict[Outcome, _Role]] = {
+        Outcome.VERIFIED: _Role.SUCCESS,
+        Outcome.UNPROVEN: _Role.WARNING,
+        Outcome.REJECTED: _Role.ERROR,
+        Outcome.HALTED: _Role.ERROR,
+    }
+
+    def __init__(self) -> None:
+        self.enabled = True
+        self.status: Status | None = None
+        self.revision = 0
+        self._boundary = _Boundary.EMPTY
+
+    @classmethod
+    def outcome_role(cls, outcome: Outcome) -> _Role:
+        return cls._outcomes[outcome]
+
+    @classmethod
+    def marker(cls, role: _Role, source: str = "") -> str:
+        symbol = cls._roles[role].symbol
+        return console.STATUS_SYMBOLS[symbol] + " " if symbol and not source else ""
+
+    def gap(self) -> None:
+        if self._boundary is _Boundary.CONTENT:
+            self._echo(_DisplayLine("", level=_Level.HEADING))
+
+    def emit(
+        self,
+        line: _DisplayLine,
+        *,
+        visibility: _Visibility = _Visibility.ALWAYS,
+        verbose: bool = False,
+    ) -> None:
+        if visibility is _Visibility.RETAINED or (
+            visibility is _Visibility.VERBOSE and not verbose
+        ):
+            return
+        if not line.text and not line.source:
+            self.gap()
+            return
+        self._echo(line)
+
+    def _echo(self, line: _DisplayLine) -> None:
+        if not self.enabled:
+            return
+        role = _Role.EXTERNAL if line.source and line.role is _Role.INFO else line.role
+        style = self._roles[role]
+        prefix = " " * line.level + self.marker(role, line.source)
+        if line.source:
+            prefix += f"{line.source} > "
+        text = prefix + line.text
+        accent_length = len(prefix) + len(line.accent)
+        if role in {_Role.DETAIL, _Role.HEADING}:
+            accent_length = len(text)
+        capabilities = console.terminal_capabilities()
+        try:
+            console._rich_echo(
+                text,
+                color=style.color,
+                bold=role is _Role.HEADING or bool(line.accent),
+                propagate_broken_pipe=True,
+                plain=not capabilities.styled,
+                natural_wrap=True,
+                accent_length=accent_length,
+                body_style="dim" if line.dim_remainder else "default",
+                hanging_indent=len(prefix) if line.layout is _Layout.PROSE else None,
+                capabilities=capabilities,
+            )
+        except BrokenPipeError:
+            self.disable()
+            return
+        self.revision += 1
+        self._boundary = _Boundary.CONTENT if line.text or line.source else _Boundary.GAP
+
+    def animates(self) -> bool:
+        from apmx.utils.install_tui import should_animate
+
+        rich_console = console._get_console()
+        return (
+            self.enabled
+            and console.terminal_capabilities().styled
+            and should_animate()
+            and rich_console is not None
+            and rich_console.is_terminal
+        )
+
+    def start_activity(self, message: str) -> None:
+        if not self.animates():
+            self.stop_activity()
+            return
+        from rich.text import Text
+
+        label = Text(
+            message + "...",
+            style=self._roles[_Role.INFO].color,
+            no_wrap=True,
+            overflow="ellipsis",
+        )
+        try:
+            if self.status is None:
+                self.status = console._get_console().status(
+                    label,
+                    spinner="line",
+                    spinner_style=self._roles[_Role.START].color,
+                    refresh_per_second=8,
+                )
+                self.status.start()
+            else:
+                self.status.update(label)
+            self.revision += 1
+        except BrokenPipeError:
+            self.disable()
+
+    def stop_activity(self) -> None:
+        status, self.status = self.status, None
+        if status is not None:
+            try:
+                status.stop()
+            except BrokenPipeError:
+                self.disable()
+
+    def disable(self) -> None:
+        self.enabled = False
+        self.stop_activity()
+        console.silence_broken_pipe()
+
+
+@dataclass(frozen=True)
+class _EvidenceFragment:
+    line: int
+    offset: int
+    text: str
+    line_bytes: int
+
+
+@dataclass(frozen=True)
+class _EvidenceExcerpt:
+    fragments: tuple[_EvidenceFragment, ...]
+    omitted_bytes: int
+    omitted_lines: int
+    partial_lines: int
+
+
+class _CheckEvidence:
+    """Bounded sanitized stdout, including the beginning/tail of one huge line.
+
+    Budgets count ASCII diagnostic bytes including logical newlines. Source
+    prefixes, omission notices and terminal wrapping are not diagnostic bytes.
+    """
+
+    PENDING_BYTES = 8192
+    PENDING_LINES = 32
+    EXCERPT_BYTES = 1024
+    EXCERPT_LINES = 8
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.total_bytes = 0
+        self.total_lines = 0
+        self._head: list[_EvidenceFragment] = []
+        self._tail: deque[_EvidenceFragment] = deque()
+        self._head_bytes = 0
+        self._tail_bytes = 0
+        self._head_full = False
+
+    def append(self, sanitized: str) -> None:
+        text = sanitized + "\n"
+        size = len(text)
+        number = self.total_lines
+        self.total_lines += 1
+        self.total_bytes += size
+        taken = 0
+        half_bytes, half_lines = self.PENDING_BYTES // 2, self.PENDING_LINES // 2
+        if not self._head_full:
+            taken = min(size, half_bytes - self._head_bytes)
+            if taken:
+                self._head.append(_EvidenceFragment(number, 0, text[:taken], size))
+                self._head_bytes += taken
+            self._head_full = (
+                taken < size or self._head_bytes == half_bytes or len(self._head) == half_lines
+            )
+        if taken < size:
+            offset = max(taken, size - half_bytes)
+            fragment = _EvidenceFragment(number, offset, text[offset:], size)
+            self._tail.append(fragment)
+            self._tail_bytes += len(fragment.text)
+        while len(self._tail) > half_lines:
+            self._tail_bytes -= len(self._tail.popleft().text)
+        while self._tail_bytes > half_bytes:
+            first = self._tail.popleft()
+            removed = min(len(first.text), self._tail_bytes - half_bytes)
+            self._tail_bytes -= removed
+            if removed < len(first.text):
+                self._tail.appendleft(
+                    replace(first, offset=first.offset + removed, text=first.text[removed:])
+                )
+
+    @property
+    def pending_bytes(self) -> int:
+        return self._head_bytes + self._tail_bytes
+
+    @property
+    def pending_lines(self) -> int:
+        return len(self._head) + len(self._tail)
+
+    @staticmethod
+    def _take(fragments: tuple[_EvidenceFragment, ...], *, tail: bool) -> list[_EvidenceFragment]:
+        budget = _CheckEvidence.EXCERPT_BYTES // 2
+        selected = []
+        for fragment in reversed(fragments) if tail else fragments:
+            size = min(budget, len(fragment.text))
+            offset = len(fragment.text) - size if tail else 0
+            selected.append(
+                replace(
+                    fragment,
+                    offset=fragment.offset + offset,
+                    text=fragment.text[offset : offset + size],
+                )
+            )
+            budget -= size
+            if not budget or len(selected) == _CheckEvidence.EXCERPT_LINES // 2:
+                break
+        return list(reversed(selected)) if tail else selected
+
+    def excerpt(self) -> _EvidenceExcerpt:
+        pending = tuple(self._head) + tuple(self._tail)
+        if self.pending_bytes <= self.EXCERPT_BYTES and len(pending) <= self.EXCERPT_LINES:
+            chosen = list(pending)
+        else:
+            chosen = self._take(pending, tail=False) + self._take(pending, tail=True)
+        merged: list[_EvidenceFragment] = []
+        for fragment in sorted(chosen, key=lambda item: (item.line, item.offset)):
+            if merged and fragment.line == merged[-1].line:
+                previous = merged[-1]
+                overlap = previous.offset + len(previous.text) - fragment.offset
+                if overlap >= 0:
+                    merged[-1] = replace(previous, text=previous.text + fragment.text[overlap:])
+                    continue
+            merged.append(fragment)
+        line_sizes: dict[int, tuple[int, int]] = {}
+        for fragment in merged:
+            kept, total = line_sizes.get(fragment.line, (0, fragment.line_bytes))
+            line_sizes[fragment.line] = kept + len(fragment.text), total
+        return _EvidenceExcerpt(
+            tuple(merged),
+            self.total_bytes - sum(len(item.text) for item in merged),
+            self.total_lines - len(line_sizes),
+            sum(kept < total for kept, total in line_sizes.values()),
+        )
 
 
 class ContractLogger:
-    """The only human renderer for plans, supervised observations and results.
+    """Semantic/evidence owner, composing the invocation's human presenter.
 
     close() freezes the transcript *before* the record owner hashes it. A later
     finished event renders the already-recorded result without touching logs.
     """
 
-    def __init__(self, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        verbose: bool = False,
+        *,
+        _display: _ContractDisplay | None = None,
+        _step: _StepContext | None = None,
+    ) -> None:
         self.verbose = verbose
+        self._display = _display if _display is not None else _ContractDisplay()
+        self._step = _step
+        self._check_evidence: _CheckEvidence | None = None
+        self._chain_stop: _StopContext | None = None
         self._transcript = _Transcript(ContractLimits().transcript_bytes)
         self._file: BinaryIO | None = None
         self._run_id: str | None = None
         self._run_directory: Path | None = None
         self._closed = False
         self._finished = False
-        self._human_enabled = True
         self._last_phase: str | None = None
-        self._last_activity = 0.0
-        self._status: Status | None = None
+        self._last_evidence_activity = 0.0
+        self._last_human_activity = 0.0
         self._caller_root = Path.cwd()
         self._display_root: Path | None = None
         self._produces = "saved output"
@@ -189,45 +531,14 @@ class ContractLogger:
         if self._closed:
             return
         self._activity_label = message
-        if not self._human_enabled:
-            if announce:
-                self._write(message, severity="start")
-            return
-        from apmx.utils.install_tui import should_animate
-
-        rich_console = console._get_console()
-        animate = (
-            not self._plain_output()
-            and should_animate()
-            and rich_console is not None
-            and rich_console.is_terminal
-        )
+        animate = self._display.animates()
         if announce:
             self._write(message, severity="start", detail=animate)
-        if not animate or not self._human_enabled:
-            return
-        from rich.text import Text
-
-        label = Text(safe_text(message) + "...", style="default", no_wrap=True, overflow="ellipsis")
-        try:
-            if self._status is None:
-                self._status = rich_console.status(
-                    label, spinner="line", spinner_style="cyan", refresh_per_second=8
-                )
-                self._status.start()
-            else:
-                self._status.update(label)
-        except BrokenPipeError:
-            self._disable_human_output()
+        self._display.start_activity(safe_text(message))
 
     def stop_activity(self) -> None:
         """Restore the terminal before reporting an error or a final result."""
-        status, self._status = self._status, None
-        if status is not None:
-            try:
-                status.stop()
-            except BrokenPipeError:
-                self._disable_human_output()
+        self._display.stop_activity()
 
     @property
     def transcript_metadata(self) -> dict[str, int | str]:
@@ -259,6 +570,7 @@ class ContractLogger:
             return
         self._closed = True
         self.stop_activity()
+        self._flush_check_evidence(completion_observed=False)
         if self._file is not None:
             try:
                 self._transcript.write(self._file)
@@ -279,69 +591,45 @@ class ContractLogger:
         dim_remainder: bool = False,
         retained_only: bool = False,
         display_message: str | None = None,
+        display: _DisplayLine | None = None,
+        layout: _Layout = _Layout.LITERAL,
     ) -> None:
+        """Retain the canonical logical line before any human-only transformation."""
         text = safe_text(message)
         source = safe_text(attribution, limit=256) if attribution else ""
-        prefix = f"{source} > " if source else ""
-        symbol, color = {
-            "start": ("running", "cyan"),
-            "info": ("", "default"),
-            "notice": ("info", "blue"),
-            "heading": ("", "default"),
-            "warning": ("warning", "yellow"),
-            "error": ("error", "red"),
-            "success": ("check", "green"),
-            "detail": ("", "dim"),
-        }[severity]
-        if source and severity == "info":
-            color = "dim cyan"
-        # Native diagnostics retain their source, never an engine status symbol.
-        marker = console.STATUS_SYMBOLS[symbol] + " " if symbol and not source else ""
-        line = " " * indent + marker + prefix + text
+        role = _Role(severity)
+        marker = self._display.marker(role, source)
         if not self._closed:
             retained_prefix = f"{source} (untrusted) > " if source else ""
             self._transcript.append(" " * indent + marker + retained_prefix + text)
-        if not self._human_enabled or retained_only or (detail and not self.verbose):
-            return
-        if display_message is not None:
-            line = " " * indent + marker + prefix + safe_text(display_message)
-        prefix_length = indent + len(marker) + len(prefix)
-        accent_length = prefix_length + len(safe_text(accent)) if accent else prefix_length
-        if severity in {"detail", "heading"}:
-            accent_length = len(line)
-        try:
-            # Only attributed prose receives hanging indentation. Saved paths
-            # and plain output keep their original, copyable logical lines.
-            console._rich_echo(
-                line,
-                color=color,
-                bold=severity == "heading" or bool(accent),
-                propagate_broken_pipe=True,
-                plain=self._plain_output(),
-                natural_wrap=True,
-                accent_length=accent_length,
-                body_style="dim" if dim_remainder else "default",
-                hanging_indent=prefix_length if source else None,
-            )
-        except BrokenPipeError:
-            # Do not recursively try to print an error into the closed pipe.
-            # Observation, stream draining, recording and process cleanup remain.
-            self._disable_human_output()
+        visibility = (
+            _Visibility.RETAINED
+            if retained_only
+            else _Visibility.VERBOSE
+            if detail
+            else _Visibility.ALWAYS
+        )
+        self._display.emit(
+            display
+            if display is not None
+            else _DisplayLine(
+                safe_text(display_message) if display_message is not None else text,
+                role=role,
+                source=source,
+                level=_Level.DETAIL if role is _Role.DETAIL else _Level(indent),
+                accent=safe_text(accent),
+                layout=layout,
+                dim_remainder=dim_remainder,
+            ),
+            visibility=visibility,
+            verbose=self.verbose,
+        )
 
-    @staticmethod
-    def _plain_output() -> bool:
-        """Keep noninteractive output escape-free, even with forced progress."""
-        if (
-            "NO_COLOR" in os.environ
-            or os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"}
-            or os.environ.get("TERM", "").strip().lower() in {"", "dumb"}
-        ):
-            return True
-        rich_console = console._get_console()
-        if rich_console is not None:
-            return not rich_console.is_terminal
-        stream = sys.stderr if console._console_stderr else sys.stdout
-        return not stream.isatty()
+    def _retained_gap(self) -> None:
+        """Preserve existing transcript separators; screen spacing is deduplicated."""
+        if not self._closed:
+            self._transcript.append("")
+        self._display.gap()
 
     def _path(self, path: Path | str) -> str:
         """Keep saved paths copyable relative to the original caller, not cwd."""
@@ -349,31 +637,6 @@ class ContractLogger:
         if not path.is_absolute():
             path = self._caller_root / path
         return portable_relpath(path, self._display_root or self._caller_root)
-
-    def _disable_human_output(self) -> None:
-        self._human_enabled = False
-        self.stop_activity()
-        # TextIO may retain a failed write and retry it during interpreter
-        # shutdown. Silence only the already-broken human descriptor (stderr
-        # in machine mode), without changing the healthy machine-output stream.
-        stream = sys.stderr if console._console_stderr else sys.stdout
-        try:
-            descriptor = stream.fileno()
-            mode = os.fstat(descriptor).st_mode
-            if not (stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)):
-                return
-        except (AttributeError, OSError, ValueError):
-            return
-        try:
-            null = os.open(os.devnull, os.O_WRONLY)
-            try:
-                os.dup2(null, descriptor)
-            finally:
-                os.close(null)
-        except OSError:
-            # Cleanup/recording still take precedence if the descriptor is
-            # already closed or a process has exhausted its open-file limit.
-            pass
 
     def on_event(self, event: RunEvent) -> None:
         """Consume the conductor's ordered stream; never derive an outcome."""
@@ -394,10 +657,14 @@ class ContractLogger:
         }
         handler = handlers.get(event.kind)
         if handler is not None:
+            revision = self._display.revision
             handler(event)
-            hidden_detail = event.kind in {"metadata", "process_started"} and not self.verbose
-            if event.kind != "heartbeat" and not hidden_detail:
-                self._last_activity = event.elapsed_seconds
+            if event.kind != "heartbeat":
+                # Retained liveness never depends on verbosity, terminal or animation.
+                if event.kind not in {"metadata", "process_started"}:
+                    self._last_evidence_activity = event.elapsed_seconds
+                if self._display.revision != revision:
+                    self._last_human_activity = event.elapsed_seconds
 
     def on_preparation(self, event: PreparationEvent) -> None:
         """Retain pre-run facts in the same bounded transcript later attached by the engine."""
@@ -461,11 +728,13 @@ class ContractLogger:
     def _apm_output(self, event: ApmOutputEvent) -> None:
         text = event.text.strip()
         if text.startswith("[x]") or re.search(
-            r"\b(error|failed|failure|fatal|denied)\b", text, re.I
+            r"\b(error|failed|failure|fatal|denied)\b", text, re.IGNORECASE
         ):
             severity = "error"
         elif (
-            event.overflow or text.startswith("[!]") or re.search(r"\b(warning|warn)\b", text, re.I)
+            event.overflow
+            or text.startswith("[!]")
+            or re.search(r"\b(warning|warn)\b", text, re.IGNORECASE)
         ):
             severity = "warning"
         else:
@@ -537,8 +806,17 @@ class ContractLogger:
         identity = self._job_identity(source, relative)
         model = self._field(event, "model", "default model")
         if self._preparation_notice_shown:
-            self._write("", indent=0)
-        self._write(f"Job: {identity} -> {self._produces}", severity="heading", indent=0)
+            self._retained_gap()
+        self._write(
+            f"Job: {identity} -> {self._produces}",
+            severity="heading",
+            indent=0,
+            display=(
+                _DisplayLine(safe_text(f"Output: {self._produces}"))
+                if self._step is not None
+                else None
+            ),
+        )
         self._write(f"Copilot / {model}", severity="detail")
         self._write("Running on your machine (not sandboxed).")
         self._write(f"Source: {self._path(source)}", severity="detail", detail=True)
@@ -551,7 +829,7 @@ class ContractLogger:
             severity="detail",
             detail=True,
         )
-        self._write("", indent=0)
+        self._retained_gap()
 
     def _phase(self, event: RunEvent) -> None:
         phase = self._field(event, "name")
@@ -592,6 +870,22 @@ class ContractLogger:
         text = self._field(event, "text", "")
         tool_status = self._field(event, "tool_status", "")
         severity = "error" if tool_status == "failed" else "detail" if tool_status else "info"
+        stderr = self._field(event, "stream", "") == "stderr"
+        checker_stdout = event.source == "checker" and not stderr
+        source = self._attribution(event)
+        if checker_stdout:
+            name = self._field(event, "label", "")
+            if self._check_evidence is not None and self._check_evidence.name != name:
+                self._flush_check_evidence(completion_observed=False)
+            if self._check_evidence is None:
+                self._check_evidence = _CheckEvidence(name)
+            if not self._check_evidence.total_lines:
+                self._display.emit(
+                    _DisplayLine(safe_text(f"Check {name} stdout:"), role=_Role.DETAIL),
+                    visibility=_Visibility.VERBOSE,
+                    verbose=self.verbose,
+                )
+            self._check_evidence.append(safe_text(text))
         displayed = None
         if event.data.get("prose") is True:
             identifier = event.data.get("prose_group")
@@ -605,9 +899,21 @@ class ContractLogger:
         self._write(
             text,
             severity=severity,
-            attribution=self._attribution(event),
+            attribution=source,
             accent=text if tool_status == "failed" else "",
             display_message=displayed,
+            detail=not stderr and (checker_stdout or bool(tool_status and tool_status != "failed")),
+            layout=_Layout.PROSE if not tool_status else _Layout.LITERAL,
+            display=(
+                _DisplayLine(
+                    safe_text(text),
+                    role=_Role.DETAIL,
+                    source=safe_text(source, limit=256),
+                    level=_Level.DETAIL,
+                )
+                if checker_stdout
+                else None
+            ),
         )
 
     def _metadata(self, event: RunEvent) -> None:
@@ -664,6 +970,8 @@ class ContractLogger:
             )
 
     def _check_started(self, event: RunEvent) -> None:
+        self._flush_check_evidence(completion_observed=False)
+        self._check_evidence = _CheckEvidence(self._field(event, "name"))
         self._checks_heading()
         self.start_activity(
             f"Checking {self._produces} ({self._field(event, 'name')})",
@@ -673,13 +981,15 @@ class ContractLogger:
     def _checks_heading(self) -> None:
         if not self._checks_heading_shown:
             self._checks_heading_shown = True
-            self._write("", indent=0)
+            self._retained_gap()
             self._write(f"apmx: checking {self._produces}", severity="heading", indent=0)
 
     def _check_finished(self, event: RunEvent) -> None:
         observation = event.data.get("observation")
         if not isinstance(observation, CheckObservation):
             raise TypeError("check_finished requires a CheckObservation.")
+        if self._check_evidence is not None and self._check_evidence.name != observation.name:
+            self._flush_check_evidence(completion_observed=False)
         status, severity = {
             0: ("passed", "success"),
             1: ("failed", "error"),
@@ -692,12 +1002,64 @@ class ContractLogger:
         if observation.normalized != 0:
             if observation.normalized == 2:
                 self._write(
-                    f"apmx: check '{observation.name}': {self._incomplete_check_reason(observation)}"
+                    f"apmx: check '{observation.name}': {self._incomplete_check_reason(observation)}",
+                    display=_DisplayLine(
+                        safe_text(self._incomplete_check_reason(observation)),
+                        level=_Level.DETAIL,
+                        layout=_Layout.PROSE,
+                    ),
                 )
             self._write(
                 f"apmx: check '{observation.name}': {observation.reason}",
                 severity="detail",
                 detail=True,
+            )
+        if observation.normalized != 0:
+            self._flush_check_evidence(completion_observed=True)
+        else:
+            self._check_evidence = None
+
+    def _flush_check_evidence(self, *, completion_observed: bool) -> None:
+        """Replay stdout to the terminal only; stderr was already visible."""
+        evidence, self._check_evidence = self._check_evidence, None
+        if evidence is None or not evidence.total_lines:
+            return
+        name = safe_text(evidence.name, limit=256)
+        if not completion_observed:
+            self._display.emit(
+                _DisplayLine(f"Check {name}: completion was not observed.", level=_Level.DETAIL)
+            )
+        if self.verbose:
+            return
+        excerpt = evidence.excerpt()
+        self._display.emit(_DisplayLine(f"Check {name} stdout excerpt:", role=_Role.DETAIL))
+        if excerpt.omitted_bytes:
+            self._display.emit(
+                _DisplayLine(
+                    f"[... sanitized bytes omitted: {excerpt.omitted_bytes}; "
+                    f"whole lines omitted: {excerpt.omitted_lines}; "
+                    f"partial lines: {excerpt.partial_lines}; beginning/tail follow ...]",
+                    role=_Role.DETAIL,
+                    level=_Level.DETAIL,
+                    layout=_Layout.PROSE,
+                )
+            )
+        for fragment in excerpt.fragments:
+            self._display.emit(
+                _DisplayLine(
+                    fragment.text.removesuffix("\n"),
+                    source=f"Check {name}",
+                    level=_Level.DETAIL,
+                    layout=_Layout.LITERAL,
+                )
+            )
+        if self._run_directory is not None:
+            self._display.emit(
+                _DisplayLine(
+                    safe_text(f"Logs: {self._path(self._run_directory / 'transcript.log')}"),
+                    role=_Role.DETAIL,
+                    level=_Level.DETAIL,
+                )
             )
 
     @staticmethod
@@ -724,14 +1086,20 @@ class ContractLogger:
 
     def _heartbeat(self, event: RunEvent) -> None:
         elapsed = event.data.get("elapsed_seconds", event.elapsed_seconds)
-        if (
-            self._status is not None
-            or not isinstance(elapsed, (int, float))
-            or elapsed - self._last_activity < HEARTBEAT_SECONDS
-        ):
+        if not isinstance(elapsed, (int, float)):
             return
-        self._write(f"{self._activity_label} -- still running; {elapsed:.0f}s elapsed.")
-        self._last_activity = elapsed
+        message = f"{self._activity_label} -- still running; {elapsed:.0f}s elapsed."
+        if elapsed - self._last_evidence_activity >= HEARTBEAT_SECONDS:
+            self._write(message, retained_only=True)
+            self._last_evidence_activity = elapsed
+        # Hidden metadata/tool/stdout events must not starve the human heartbeat.
+        # This display-only clock cannot change transcript bytes or record hashes.
+        if (
+            self._display.status is None
+            and elapsed - self._last_human_activity >= HEARTBEAT_SECONDS
+        ):
+            self._display.emit(_DisplayLine(safe_text(message)))
+            self._last_human_activity = elapsed
 
     def _result(self, event: RunEvent) -> None:
         if self._finished:
@@ -741,24 +1109,20 @@ class ContractLogger:
             raise TypeError("finished requires a recorded RunResult.")
         self._finished = True
         self.stop_activity()
-        self._write("", indent=0)
+        self._flush_check_evidence(completion_observed=False)
+        self._retained_gap()
         headline = f"apmx: {result.outcome.name}"
-        severity = {
-            Outcome.VERIFIED: "success",
-            Outcome.UNPROVEN: "warning",
-            Outcome.REJECTED: "error",
-            Outcome.HALTED: "error",
-        }[result.outcome]
         self._write(
             f"{headline}  {event.elapsed_seconds:.1f}s",
-            severity=severity,
+            severity=self._display.outcome_role(result.outcome),
             accent=headline,
             indent=0,
             dim_remainder=True,
         )
         self._result_explanation(result)
         if result.artifact is not None:
-            self._write(f"Output: {self._path(result.artifact.path)}")
+            for item in artifact_files(result.artifact):
+                self._write(f"Output: {self._path(item.path)}")
         else:
             self._write("No output was saved.")
         self._write(f"Record: {self._path(result.run_directory / 'record.json')}")
@@ -854,7 +1218,7 @@ class ContractLogger:
         )
         identity = self._job_identity(source, relative)
         self._write(
-            f"Preview: {identity} -> {plan.contract.produces}", severity="heading", indent=0
+            f"Preview: {identity} -> {plan.contract.output_label}", severity="heading", indent=0
         )
         self._write(f"Copilot / {plan.model or 'default model'}", severity="detail")
         self._write("Nothing will execute or download.")
@@ -900,10 +1264,12 @@ class ContractLogger:
     def render_error(self, error: ContractError) -> None:
         """Render a pre-admission refusal without inventing a run or a success."""
         self.stop_activity()
+        self._flush_check_evidence(completion_observed=False)
+        self._display.gap()
         headline = f"apmx: {error.outcome.name}"
         self._write(
             headline,
-            severity="warning" if error.outcome == Outcome.UNPROVEN else "error",
+            severity=self._display.outcome_role(error.outcome),
             accent=headline,
             indent=0,
         )
@@ -914,9 +1280,13 @@ class ContractLogger:
                 f"Source: {self._path(error.location.path)}:{error.location.line}:{error.location.column}"
             )
 
-    def new_leaf(self) -> ContractLogger:
-        """Each leaf owns its transcript and finalization lifecycle."""
-        leaf = ContractLogger(verbose=self.verbose)
+    def new_leaf(self, *, index: int, count: int, contract: Path) -> ContractLogger:
+        """Share only the screen; each leaf gets immutable context and private evidence."""
+        leaf = ContractLogger(
+            verbose=self.verbose,
+            _display=self._display,
+            _step=_StepContext(index, count, contract),
+        )
         leaf._display_root = self._display_root
         return leaf
 
@@ -926,7 +1296,7 @@ class ContractLogger:
 
     def can_confirm_factory(self) -> bool:
         """The prompt uses stdout; both it and stdin must be interactive."""
-        return not os.environ.get("CI") and sys.stdin.isatty() and sys.stdout.isatty()
+        return console.can_confirm_factory()
 
     def render_factory_work(self, graph: Graph) -> None:
         self.stop_activity()
@@ -936,10 +1306,15 @@ class ContractLogger:
         )
         for index, contract in enumerate(graph.order, start=1):
             self._write(
-                f"{index}. {contract.path.relative_to(graph.root).as_posix()} -> {contract.produces}"
+                f"{index}. {contract.path.relative_to(graph.root).as_posix()} -> {contract.output_label}"
             )
             self._write("Checks: " + ", ".join(check.name for check in contract.checks), indent=4)
-        outputs = [contract.produces for contract in graph.order if contract.path in graph.targets]
+        outputs = [
+            name
+            for contract in graph.order
+            if contract.path in graph.targets
+            for name in contract.outputs
+        ]
         self._write("Final outputs: " + ", ".join(outputs))
 
     def confirm_factory(self) -> bool:
@@ -950,7 +1325,7 @@ class ContractLogger:
         self._write("Local execution is not isolated; results remain UNPROVEN.")
         self._write("Model calls may incur charges under your configured account.")
         self._write("Run this factory locally? [y/N]", indent=0)
-        if not self._human_enabled:
+        if not self._display.enabled:
             return False
         try:
             answer = sys.stdin.readline(32)
@@ -959,6 +1334,7 @@ class ContractLogger:
         return answer.endswith("\n") and answer.strip().casefold() in {"y", "yes"}
 
     def chain_node(self, index: int, count: int, contract: Path) -> None:
+        self._display.gap()
         self._write(f"Step {index}/{count}: {self._path(contract)}", severity="heading", indent=0)
 
     def render_chain_plan(self, plan: ChainPlan) -> None:
@@ -972,7 +1348,7 @@ class ContractLogger:
         )
         self._write(f"Handoff policy: {policy}")
         terminals = [
-            node.plan.contract.produces
+            node.plan.contract.output_label
             for node in plan.nodes
             if node.plan.contract.path in plan.graph.targets
         ]
@@ -980,7 +1356,7 @@ class ContractLogger:
         for index, node in enumerate(plan.nodes, start=1):
             contract = node.plan.contract
             name = contract.path.relative_to(plan.graph.root).as_posix()
-            self._write(f"{index}. {name} -> {contract.produces}")
+            self._write(f"{index}. {name} -> {contract.output_label}")
             for value in contract.needs:
                 kind = (
                     "from an earlier step"
@@ -1005,20 +1381,74 @@ class ContractLogger:
                 "Native results remain UNPROVEN."
             )
 
-    def chain_stopped(self, reason: str) -> None:
-        self._write(reason, severity="warning", indent=0)
+    def chain_stopped(self, reason: str, *, outcome: Outcome, code: str) -> None:
+        self._chain_stop = _StopContext(outcome, reason, code)
+        self.stop_activity()
+        self._display.gap()
+        self._write(
+            reason,
+            severity="warning",
+            indent=0,
+            display=_DisplayLine(
+                safe_text(reason),
+                role=self._display.outcome_role(outcome),
+                level=_Level.HEADING,
+                layout=_Layout.PROSE,
+            ),
+        )
 
     def render_chain_result(self, result: ChainResult) -> None:
+        self.stop_activity()
+        self._display.gap()
+        headline = f"apmx factory: {result.outcome.name}"
         self._write(
-            f"apmx factory: {result.outcome.name} ({'complete' if result.complete else 'stopped'})",
-            severity="warning" if result.outcome == Outcome.UNPROVEN else "error",
+            f"{headline} ({'complete' if result.complete else 'stopped'})",
+            severity=self._display.outcome_role(result.outcome),
+            accent=headline,
+            dim_remainder=True,
             indent=0,
         )
         if result.complete:
-            self._write("All selected checks completed; no isolation or production certification.")
+            completed = len(result.runs)
+            passed = sum(check.normalized == 0 for run in result.runs for check in run.checks)
+            self._display.emit(
+                _DisplayLine(
+                    f"{completed} contract{'s' if completed != 1 else ''} completed; "
+                    f"{passed} check{'s' if passed != 1 else ''} passed."
+                )
+            )
+            self._write(
+                "All selected checks completed; no isolation or production certification.",
+                display_message="Local execution was not isolated. No production certification.",
+                layout=_Layout.PROSE,
+            )
             self._write(f"Artifacts: {self._path(result.record_path.parent / 'artifacts')}")
         else:
+            context = self._chain_stop
+            reason = (
+                context.reason
+                if context is not None and context.code == result.stop_reason
+                else "Factory stopped before all selected steps completed."
+            )
             self._write(
-                f"Stop: {result.stop_reason}. Inspect the record before starting another run."
+                f"Stop: {result.stop_reason}. Inspect the record before starting another run.",
+                display_message=reason,
+                layout=_Layout.PROSE,
+            )
+            self._display.emit(
+                _DisplayLine(
+                    "Inspect the factory record and reported diagnostics before starting another run.",
+                    layout=_Layout.PROSE,
+                )
+            )
+            self._display.emit(
+                _DisplayLine(
+                    safe_text(f"Stop reason: {result.stop_reason}"),
+                    role=_Role.DETAIL,
+                    level=_Level.DETAIL,
+                ),
+                visibility=_Visibility.VERBOSE,
+                verbose=self.verbose,
             )
         self._write(f"Factory record: {self._path(result.record_path)}")
+        self._display.gap()

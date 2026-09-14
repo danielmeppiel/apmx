@@ -32,11 +32,12 @@ Typical use::
 from __future__ import annotations
 
 import os
-import sys
 import subprocess
+import sys
 import threading
-from contextlib import contextmanager
 from collections.abc import Mapping
+from contextlib import contextmanager
+from typing import Any
 
 # Runtime-library search-path variables that PyInstaller's bootloader
 # rewrites at launch.  Each has a sibling ``<NAME>_ORIG`` holding the
@@ -85,11 +86,13 @@ def external_dll_search():
                 raise ctypes.WinError(ctypes.get_last_error())
 
 
-def run_external(*args, **kwargs):
+def run_external(
+    *args: Any, check: bool = False, **kwargs: Any
+) -> subprocess.CompletedProcess[Any]:
     """Run bounded authentication probes with external loader state."""
     kwargs["env"] = external_process_env(kwargs.get("env"))
     with external_dll_search():
-        return subprocess.run(*args, **kwargs)
+        return subprocess.run(*args, check=check, **kwargs)
 
 
 def popen_external(*args, **kwargs):

@@ -5,18 +5,20 @@ import json
 import os
 import shutil
 import stat
-from ..utils.file_capture import capture_path_stat, open_readonly_nofollow
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
+from ..utils.file_capture import capture_path_stat, open_readonly_nofollow
 from ..utils.path_security import (
     PathTraversalError,
     ensure_path_within,
     has_symlink_component,
     validate_path_segments,
 )
+from .context_layout import context_directory, is_native_skill_path
 from .models import (
     Artifact,
+    ArtifactSet,
     ArtifactView,
     BaselineSnapshot,
     CapturedInput,
@@ -26,9 +28,9 @@ from .models import (
     LeafPlan,
     RetainedInput,
     RunResult,
+    artifact_files,
 )
 from .process import local_git
-from .context_layout import context_directory, is_native_skill_path
 
 
 def _path(root: Path, name: str) -> Path:
@@ -79,6 +81,16 @@ def _read(root: Path, name: str, maximum: int) -> tuple[bytes, FileEntry]:
 def _digest(entries: tuple[FileEntry, ...]) -> str:
     content = [[item.relative_path, item.sha256, item.size, item.mode] for item in entries]
     return hashlib.sha256(json.dumps(content, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def artifact_inventory_digest(files: tuple[Artifact, ...]) -> str:
+    """Bind sorted path/hash/size entries with the canonical retained read-only mode."""
+    return _digest(
+        tuple(
+            FileEntry(item.relative_path, item.sha256, item.size, 0o400)
+            for item in sorted(files, key=lambda item: item.relative_path)
+        )
+    )
 
 
 def inspect_retained_log(run_directory: Path, maximum_bytes: int) -> FileEntry:
@@ -142,8 +154,7 @@ def _selected_names(plan: LeafPlan) -> tuple[str, ...]:
             if len(names) > plan.limits.baseline_files:
                 raise ContractError("Baseline file count exceeds the limit.", code="baseline_limit")
     names.update(_check_names(root, plan.limits))
-    names.discard(plan.contract.produces)
-    produced = {name.casefold() for name in plan.chain_outputs}
+    produced = {name.casefold() for name in (*plan.chain_outputs, *plan.contract.outputs)}
     names = {name for name in names if name.casefold() not in produced}
     names.difference_update(plan.deferred_inputs)
     names.difference_update(binding.artifact.relative_path for binding in plan.input_bindings)
@@ -500,7 +511,9 @@ def capture_chain_view(
     """Project only admitted outputs and captured root inputs/checks, never caller files."""
     from .records import validate_binding
 
-    if not completed or len(completed) != len(bindings):
+    if not completed or sum(len(artifact_files(result.artifact)) for _, result in completed) != len(
+        bindings
+    ):
         raise ContractError(
             "Aggregate view requires every selected leaf's admission.", code="incomplete_chain"
         )
@@ -513,15 +526,18 @@ def capture_chain_view(
             raise ContractError("Aggregate source identities disagree.", code="source_collision")
         selected.setdefault(name, captured)
 
-    for (plan, result), binding in zip(completed, bindings, strict=True):
-        validate_binding(binding, plan.project_root, plan.limits)
-        if (
-            result.artifact != binding.artifact
-            or binding.record_path.parent != result.run_directory
-        ):
+    remaining = list(bindings)
+    for plan, result in completed:
+        receipts = tuple(
+            item for item in remaining if item.record_path.parent == result.run_directory
+        )
+        if tuple(item.artifact for item in receipts) != artifact_files(result.artifact):
             raise ContractError(
                 "Aggregate leaf receipt differs from its result.", code="invalid_binding"
             )
+        for binding in receipts:
+            validate_binding(binding, plan.project_root, plan.limits)
+            remaining.remove(binding)
         if plan.deferred_inputs or plan.input_inventory is None:
             raise ContractError(
                 "Aggregate inputs must have been captured.", code="unresolved_inputs"
@@ -531,12 +547,12 @@ def capture_chain_view(
         for entry in plan.input_inventory:
             if entry.relative_path in roots or entry.relative_path.startswith("checks/"):
                 select(CapturedInput(baseline, entry.relative_path, entry))
-        artifact = binding.artifact
         origin = result.run_directory / "artifacts"
-        _, entry = _read(origin, artifact.relative_path, plan.limits.output_bytes)
-        if (entry.sha256, entry.size) != (artifact.sha256, artifact.size):
-            raise ContractError("Assessed aggregate output changed.", code="artifact_changed")
-        select(CapturedInput(origin, artifact.relative_path, entry))
+        for artifact in artifact_files(result.artifact):
+            _, entry = _read(origin, artifact.relative_path, plan.limits.output_bytes)
+            if (entry.sha256, entry.size) != (artifact.sha256, artifact.size):
+                raise ContractError("Assessed aggregate output changed.", code="artifact_changed")
+            select(CapturedInput(origin, artifact.relative_path, entry))
     names = {name.casefold() for name in selected}
     if len(names) != len(selected) or any(
         parent.as_posix() in names for name in names for parent in PurePosixPath(name).parents
@@ -551,8 +567,8 @@ def capture_chain_view(
     entries = _copy_captures(captures, pending, readonly=True)
     view = ArtifactView(pending, entries, _digest(entries), captures)
     inspect_artifact_view(view)
-    for (plan, _), binding in zip(completed, bindings, strict=True):
-        validate_binding(binding, plan.project_root, plan.limits)
+    for binding in bindings:
+        validate_binding(binding, completed[0][0].project_root, completed[0][0].limits)
     _path(directory, destination.name)
     if destination.exists():
         raise ContractError(
@@ -564,26 +580,56 @@ def capture_chain_view(
 
 def capture_output(
     snapshot: BaselineSnapshot,
-    declared_path: str,
+    declared_path: str | tuple[str, ...],
     run_directory: Path,
     limits: ContractLimits,
-) -> Artifact | None:
-    """Capture only a newly produced file; absence remains absence, not an empty file."""
-    target = _path(snapshot.producer, declared_path)
-    if not target.exists():
-        return None
-    data, entry = _read(snapshot.producer, declared_path, limits.output_bytes)
-    output_root = run_directory / "artifacts"
-    output_root.mkdir(mode=0o700)
-    _write(output_root, entry, data)
-    captured = _path(output_root, declared_path)
-    captured.chmod(0o400)
-    return Artifact(declared_path, captured, entry.sha256, entry.size)
+) -> Artifact | ArtifactSet | None:
+    """Publish a complete opaque delivery atomically, never a partial output set."""
+    names = (declared_path,) if isinstance(declared_path, str) else declared_path
+    if not 1 <= len(names) <= limits.output_files:
+        raise ContractError("Declared artifact count exceeds the limit.", code="output_limit")
+    captured = []
+    total = 0
+    for name in names:
+        if not _path(snapshot.producer, name).exists():
+            return None
+        raw, entry = _read(snapshot.producer, name, limits.output_bytes)
+        total += entry.size
+        if total > limits.output_total_bytes:
+            raise ContractError("Combined artifact bytes exceed the limit.", code="output_limit")
+        captured.append((raw, replace(entry, mode=0o400)))
+    pending = _path(run_directory, "artifacts.pending")
+    output_root = _path(run_directory, "artifacts")
+    if output_root.exists() or pending.exists():
+        raise ContractError("Artifact publication paths already exist.", code="artifact_collision")
+    pending.mkdir(mode=0o700)
+    for raw, entry in captured:
+        _write(pending, entry, raw)
+        _, observed = _read(pending, entry.relative_path, entry.size)
+        if (observed.sha256, observed.size) != (entry.sha256, entry.size):
+            raise ContractError("Artifact changed during publication.", code="artifact_changed")
+    if _path(run_directory, "artifacts").exists():
+        raise ContractError("Artifact publication destination appeared.", code="artifact_collision")
+    pending.rename(output_root)
+    files = tuple(
+        Artifact(
+            entry.relative_path,
+            output_root / entry.relative_path,
+            entry.sha256,
+            entry.size,
+        )
+        for _, entry in captured
+    )
+    return (
+        files[0]
+        if isinstance(declared_path, str)
+        else ArtifactSet(files, artifact_inventory_digest(files))
+    )
 
 
 def prepare_check_workspace(
     snapshot: BaselineSnapshot,
-    artifact: Artifact,
+    artifact: Artifact | ArtifactSet,
     run_directory: Path,
     check_name: str,
 ) -> Path:
@@ -594,25 +640,27 @@ def prepare_check_workspace(
     root.mkdir(mode=0o700)
     _copy_entries(snapshot.root, root, snapshot.files)
     shutil.copytree(snapshot.root / ".git", root / ".git", symlinks=False)
-    data, observed = _read(artifact.path.parent, artifact.path.name, artifact.size)
-    if observed.sha256 != artifact.sha256 or observed.size != artifact.size:
-        raise ContractError("Captured output identity changed.", code="artifact_changed")
-    _write(root, FileEntry(artifact.relative_path, artifact.sha256, artifact.size, 0o400), data)
+    for item in artifact_files(artifact):
+        data, observed = _read(item.path.parent, item.path.name, item.size)
+        if observed.sha256 != item.sha256 or observed.size != item.size:
+            raise ContractError("Captured output identity changed.", code="artifact_changed")
+        _write(root, FileEntry(item.relative_path, item.sha256, item.size, 0o400), data)
     return root
 
 
 def verify_check_integrity(
-    snapshot: BaselineSnapshot, artifact: Artifact, check_workspace: Path
+    snapshot: BaselineSnapshot, artifact: Artifact | ArtifactSet, check_workspace: Path
 ) -> bool:
     """Check supplied identities; no claim against same-user mutation-and-restore."""
     try:
-        _, captured = _read(artifact.path.parent, artifact.path.name, artifact.size)
-        _, subject = _read(check_workspace, artifact.relative_path, artifact.size)
-        if any(
-            entry.sha256 != artifact.sha256 or entry.size != artifact.size
-            for entry in (captured, subject)
-        ):
-            return False
+        for item in artifact_files(artifact):
+            _, captured = _read(item.path.parent, item.path.name, item.size)
+            _, subject = _read(check_workspace, item.relative_path, item.size)
+            if any(
+                entry.sha256 != item.sha256 or entry.size != item.size
+                for entry in (captured, subject)
+            ):
+                return False
         for expected in snapshot.files:
             if expected.relative_path.startswith("checks/"):
                 _, observed = _read(check_workspace, expected.relative_path, expected.size)

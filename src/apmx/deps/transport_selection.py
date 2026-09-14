@@ -36,7 +36,8 @@ class ProtocolPreference(Enum):
 
 
 def initial_transport_scheme(
-    dep_ref: DependencyReference | None, cli_pref: ProtocolPreference = ProtocolPreference.NONE,
+    dep_ref: DependencyReference | None,
+    cli_pref: ProtocolPreference = ProtocolPreference.NONE,
 ) -> str:
     explicit = (getattr(dep_ref, "explicit_scheme", None) or "").lower()
     if explicit:
@@ -53,21 +54,32 @@ class TransportAttempt:
 
 class TransportSelector:
     def select(
-        self, dep_ref: DependencyReference, cli_pref: ProtocolPreference, *, candidate_url: str,
+        self,
+        dep_ref: DependencyReference,
+        cli_pref: ProtocolPreference,
+        *,
+        candidate_url: str,
     ) -> TransportAttempt:
         rewrites, headers = configured_git_url_policy()
         candidate = candidate_url
         effective = resolve_git_url_rewrite(candidate, rewrites)
-        if candidate.endswith(".git") and effective and effective.endswith(".git.git"):
-            if not any(prefix == candidate for _, prefix in rewrites):
-                unsuffixed = candidate.removesuffix(".git")
-                rewritten = resolve_git_url_rewrite(unsuffixed, rewrites)
-                if rewritten is not None and effective == f"{rewritten}.git":
-                    candidate, effective = unsuffixed, rewritten
+        if (
+            candidate.endswith(".git")
+            and effective
+            and effective.endswith(".git.git")
+            and not any(prefix == candidate for _, prefix in rewrites)
+        ):
+            unsuffixed = candidate.removesuffix(".git")
+            rewritten = resolve_git_url_rewrite(unsuffixed, rewrites)
+            if rewritten is not None and effective == f"{rewritten}.git":
+                candidate, effective = unsuffixed, rewritten
         if effective is None:
-            return TransportAttempt(initial_transport_scheme(dep_ref, cli_pref), candidate, candidate)
+            return TransportAttempt(
+                initial_transport_scheme(dep_ref, cli_pref), candidate, candidate
+            )
         validate_resolved_git_url_rewrite(
-            candidate, effective,
+            candidate,
+            effective,
             has_authorization=git_url_has_authorization(effective, headers),
         )
         scheme = urlsplit(effective).scheme.lower() or (

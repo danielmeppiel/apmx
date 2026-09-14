@@ -1,7 +1,7 @@
 """Prove fixture behavior independently of the not-yet-built application."""
 
-import json
 import contextlib
+import json
 import os
 import shutil
 import stat
@@ -9,9 +9,9 @@ import subprocess
 import sys
 import tempfile
 import time
-from types import SimpleNamespace
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts import smoke
@@ -26,7 +26,11 @@ class SmokeFixtureTests(unittest.TestCase):
             smoke.require_local_identity(str(original), original, consumer_lock=True)
             with self.assertRaises(AssertionError):
                 smoke.require_local_identity(str(original) + "-decoy", original, consumer_lock=True)
-            for identity in ("./original-source", "local:original-source", f"local:{original}-decoy"):
+            for identity in (
+                "./original-source",
+                "local:original-source",
+                f"local:{original}-decoy",
+            ):
                 with self.assertRaises(AssertionError):
                     smoke.require_local_identity(identity, original)
 
@@ -82,10 +86,16 @@ class SmokeFixtureTests(unittest.TestCase):
             result = subprocess.CompletedProcess([], 0, "apmx 0.1.0", "")
             with (
                 patch.object(smoke.release, "probe_backend", return_value="unit fixture"),
-                patch.object(smoke.tempfile, "TemporaryDirectory", return_value=contextlib.nullcontext(str(alias))),
+                patch.object(
+                    smoke.tempfile,
+                    "TemporaryDirectory",
+                    return_value=contextlib.nullcontext(str(alias)),
+                ),
                 patch.object(smoke, "run_binary", return_value=result),
                 patch.object(smoke, "run_case", return_value={}) as run,
-                patch.object(sys, "argv", ["smoke.py", "--binary", str(binary), "--version", "0.1.0"]),
+                patch.object(
+                    sys, "argv", ["smoke.py", "--binary", str(binary), "--version", "0.1.0"]
+                ),
                 patch("builtins.print"),
             ):
                 smoke.main()
@@ -96,14 +106,17 @@ class SmokeFixtureTests(unittest.TestCase):
     def test_environment_does_not_copy_credentials_or_python_fallback(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            with patch.dict(os.environ, {
-                "GITHUB_TOKEN": "not-a-real-token",
-                "GH_TOKEN": "not-a-real-token",
-                "PYTHONPATH": "/old/apm/src",
-                "PYTHONHOME": "/old/python",
-                "VIRTUAL_ENV": "/app-installed",
-                "COPILOT_HOME": "/real/profile",
-            }):
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_TOKEN": "not-a-real-token",
+                    "GH_TOKEN": "not-a-real-token",
+                    "PYTHONPATH": "/old/apm/src",
+                    "PYTHONHOME": "/old/python",
+                    "VIRTUAL_ENV": "/app-installed",
+                    "COPILOT_HOME": "/real/profile",
+                },
+            ):
                 env = smoke.isolated_env(root, root / "tools")
             for key in ("GITHUB_TOKEN", "GH_TOKEN", "PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
                 self.assertNotIn(key, env)
@@ -120,8 +133,19 @@ class SmokeFixtureTests(unittest.TestCase):
                 env = smoke.isolated_env(root, root / "tools")
                 env["APMX_ACTOR_MODE"] = mode
                 result = subprocess.run(
-                    [sys.executable, "-I", str(smoke.FIXTURES / "copilot_actor.py"), "-p", "fixture"],
-                    cwd=root, env=env, capture_output=True, text=True, check=False, timeout=15,
+                    [
+                        sys.executable,
+                        "-I",
+                        str(smoke.FIXTURES / "copilot_actor.py"),
+                        "-p",
+                        "fixture",
+                    ],
+                    cwd=root,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=15,
                 )
                 self.assertEqual(result.returncode, 7 if mode == "halt" else 0)
                 events = [json.loads(line) for line in result.stdout.splitlines()]
@@ -129,10 +153,13 @@ class SmokeFixtureTests(unittest.TestCase):
                 self.assertEqual(events[-1]["exitCode"], result.returncode)
                 self.assertEqual(events[-1]["sessionId"], "hermetic-fixture")
                 phases = {
-                    event["data"]["phase"] for event in events
+                    event["data"]["phase"]
+                    for event in events
                     if event["type"] == "assistant.message_start"
                 }
-                self.assertEqual(phases, set() if mode == "quiet" else {"commentary", "analysis", "final_answer"})
+                self.assertEqual(
+                    phases, set() if mode == "quiet" else {"commentary", "analysis", "final_answer"}
+                )
                 if mode == "quiet":
                     self.assertEqual(len(events), 1)
                 if mode == "halt":
@@ -141,7 +168,11 @@ class SmokeFixtureTests(unittest.TestCase):
                     self.assertNotEqual((root / "checks/check.py").read_bytes(), baseline)
                     checked = subprocess.run(
                         [sys.executable, "-I", str(smoke.FIXTURES / "check.py")],
-                        cwd=root, env=env, capture_output=True, check=False, timeout=15,
+                        cwd=root,
+                        env=env,
+                        capture_output=True,
+                        check=False,
+                        timeout=15,
                     )
                     self.assertEqual(checked.returncode, expected)
 
@@ -158,10 +189,17 @@ class SmokeFixtureTests(unittest.TestCase):
             prompt = 'fixture "quoted"; touch SHELL_INJECTION_SENTINEL; $(echo unused)'
             result = subprocess.run(
                 [str(tools / "copilot"), "-p", prompt],
-                cwd=root, env=env, capture_output=True, text=True, check=False, timeout=15,
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
             )
             self.assertEqual(result.returncode, 0)
-            calls = [json.loads(line) for line in Path(env["APMX_ACTOR_LOG"]).read_text().splitlines()]
+            calls = [
+                json.loads(line) for line in Path(env["APMX_ACTOR_LOG"]).read_text().splitlines()
+            ]
             self.assertEqual(calls[0]["argv"], ["-p", prompt])
             self.assertFalse((root / "SHELL_INJECTION_SENTINEL").exists())
 
@@ -170,11 +208,21 @@ class SmokeFixtureTests(unittest.TestCase):
             launcher = Path(temporary) / "apmx"
             launcher.write_text("#!/bin/sh\necho fake 0.1.0\n")
             launcher.chmod(0o755)
-            with patch.object(sys, "argv", [
-                "smoke.py", "--binary", str(launcher), "--version", "0.1.0",
-            ]):
-                with self.assertRaisesRegex(AssertionError, "native frozen"):
-                    smoke.main()
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "smoke.py",
+                        "--binary",
+                        str(launcher),
+                        "--version",
+                        "0.1.0",
+                    ],
+                ),
+                self.assertRaisesRegex(AssertionError, "native frozen"),
+            ):
+                smoke.main()
 
     def test_live_reader_acknowledges_progress_before_child_completion(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -190,7 +238,9 @@ class SmokeFixtureTests(unittest.TestCase):
                 " time.sleep(.01)\n"
                 "print('completed after acknowledgement',flush=True)\n"
             )
-            result = smoke.run_binary(Path(sys.executable), ["-I", "-c", code], root, env, timeout=5)
+            result = smoke.run_binary(
+                Path(sys.executable), ["-I", "-c", code], root, env, timeout=5
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("completed after acknowledgement", result.stdout)
             self.assertTrue((root / "gate").is_file())
@@ -205,7 +255,11 @@ class SmokeFixtureTests(unittest.TestCase):
             (root / "checks").mkdir()
             process = subprocess.Popen(
                 [sys.executable, "-I", str(smoke.FIXTURES / "copilot_actor.py"), "-p", "fixture"],
-                cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                cwd=root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
             try:
                 for _ in range(3):
@@ -228,17 +282,29 @@ class SmokeFixtureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             env = smoke.isolated_env(root, root / "tools")
-            env.update({
-                "APMX_ACTOR_MODE": "linger",
-                "APMX_CHILD_PID": str(root / "child.pid"),
-                "APMX_CHILD_HEARTBEAT": str(root / "child.heartbeat"),
-                "APMX_CHILD_STOP": str(root / "child.stop"),
-            })
+            env.update(
+                {
+                    "APMX_ACTOR_MODE": "linger",
+                    "APMX_CHILD_PID": str(root / "child.pid"),
+                    "APMX_CHILD_HEARTBEAT": str(root / "child.heartbeat"),
+                    "APMX_CHILD_STOP": str(root / "child.stop"),
+                }
+            )
             try:
                 result = subprocess.run(
-                    [sys.executable, "-I", str(smoke.FIXTURES / "copilot_actor.py"), "-p", "fixture"],
-                    cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=20, check=False,
+                    [
+                        sys.executable,
+                        "-I",
+                        str(smoke.FIXTURES / "copilot_actor.py"),
+                        "-p",
+                        "fixture",
+                    ],
+                    cwd=root,
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=20,
+                    check=False,
                 )
                 self.assertEqual(result.returncode, 0)
                 pid = int((root / "child.pid").read_text())
@@ -248,7 +314,9 @@ class SmokeFixtureTests(unittest.TestCase):
             finally:
                 (root / "child.stop").write_text("fixture cleanup\n")
                 deadline = time.monotonic() + 5
-                while (root / "child.pid").exists() and smoke.child_running(int((root / "child.pid").read_text())):
+                while (root / "child.pid").exists() and smoke.child_running(
+                    int((root / "child.pid").read_text())
+                ):
                     if time.monotonic() >= deadline:
                         self.fail("Fixture child did not honor its cleanup marker")
                     time.sleep(0.05)
@@ -262,16 +330,26 @@ class SmokeFixtureTests(unittest.TestCase):
             with (
                 patch.object(smoke, "prepare_tools", return_value=tools),
                 patch.object(smoke, "poison_host_apm"),
-                patch.object(smoke.release, "check_backend_metadata", return_value=smoke.release.read_backend_pin()),
+                patch.object(
+                    smoke.release,
+                    "check_backend_metadata",
+                    return_value=smoke.release.read_backend_pin(),
+                ),
                 patch.object(smoke, "install_backend_fixture", return_value={}),
-                patch.object(smoke, "run_binary", side_effect=RuntimeError("stop before binary")) as run,
+                patch.object(
+                    smoke, "run_binary", side_effect=RuntimeError("stop before binary")
+                ) as run,
+                self.assertRaisesRegex(RuntimeError, "stop before binary"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "stop before binary"):
-                    smoke.run_case(Path("unrun-apmx"), root, None, "package", "pass")
+                smoke.run_case(Path("unrun-apmx"), root, None, "package", "pass")
             package = root / "package"
             self.assertIn("path: ./skills/release-style", (package / "apm.yml").read_text())
-            self.assertIn("imports:\n  - release-style", (package / "handoff.contract.md").read_text())
-            self.assertIn("RELEASE_SKILL_SENTINEL", (package / "skills/release-style/SKILL.md").read_text())
+            self.assertIn(
+                "imports:\n  - release-style", (package / "handoff.contract.md").read_text()
+            )
+            self.assertIn(
+                "RELEASE_SKILL_SENTINEL", (package / "skills/release-style/SKILL.md").read_text()
+            )
             self.assertIn("apm: []", (package / "skills/release-style/apm.yml").read_text())
             self.assertEqual(run.call_args.args[3]["APMX_EXPECT_SKILL"], "1")
             self.assertNotIn("GIT_TRACE2_EVENT", run.call_args.args[3])
@@ -290,11 +368,19 @@ class SmokeFixtureTests(unittest.TestCase):
                 "identity file '/private/fixture-key'\n"
             )
             trace.write_text(
-                json.dumps({"event": "def_param", "param": "http.extraHeader", "value": "secret-auth-setting"})
-                + "\n" + json.dumps({"event": "def_param", "param": "core.longpaths", "value": "true"})
-                + "\n" + "\n".join(
-                json.dumps({"event": "error", "msg": f"problem-{index}: {message}"})
-                for index in range(20)
+                json.dumps(
+                    {
+                        "event": "def_param",
+                        "param": "http.extraHeader",
+                        "value": "secret-auth-setting",
+                    }
+                )
+                + "\n"
+                + json.dumps({"event": "def_param", "param": "core.longpaths", "value": "true"})
+                + "\n"
+                + "\n".join(
+                    json.dumps({"event": "error", "msg": f"problem-{index}: {message}"})
+                    for index in range(20)
                 )
             )
             detail = smoke.git_trace_details(trace)
@@ -305,8 +391,14 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertNotIn("problem-0:", detail)
             self.assertLess(len(detail), 11000)
             for secret in (
-                "fixture-user", "fixture-password", "url-secret", "header-secret",
-                "environment-secret", "labelled-secret", "ghp_fixtureToken123", "/private/fixture-key",
+                "fixture-user",
+                "fixture-password",
+                "url-secret",
+                "header-secret",
+                "environment-secret",
+                "labelled-secret",
+                "ghp_fixtureToken123",
+                "/private/fixture-key",
             ):
                 self.assertNotIn(secret, detail)
 
@@ -315,8 +407,12 @@ class SmokeFixtureTests(unittest.TestCase):
             trace = Path(temporary) / "trace.jsonl"
             self.assertIn("no trace file", smoke.git_trace_details(trace))
             trace.write_text(
-                json.dumps({"event": "start", "argv": ["git", "-c", "secret-value", "clone", "secret-url"]})
-                + "\n" + json.dumps({"event": "exit", "code": 128}) + "\nmalformed"
+                json.dumps(
+                    {"event": "start", "argv": ["git", "-c", "secret-value", "clone", "secret-url"]}
+                )
+                + "\n"
+                + json.dumps({"event": "exit", "code": 128})
+                + "\nmalformed"
             )
             detail = smoke.git_trace_details(trace)
             self.assertIn("start: clone", detail)
@@ -325,8 +421,10 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertNotIn("secret-value", detail)
             self.assertNotIn("secret-url", detail)
             trace.write_bytes(
-                b"x" * (2 * 1024**2 + 100) + b"\n"
-                + json.dumps({"event": "error", "msg": "final native error"}).encode() + b"\n"
+                b"x" * (2 * 1024**2 + 100)
+                + b"\n"
+                + json.dumps({"event": "error", "msg": "final native error"}).encode()
+                + b"\n"
             )
             detail = smoke.git_trace_details(trace)
             self.assertIn("final native error", detail)
@@ -351,26 +449,37 @@ class SmokeFixtureTests(unittest.TestCase):
                 self.assertFalse(trace.is_relative_to(Path(env["TMPDIR"])))
                 for directory in smoke.PROFILE_DIRECTORIES:
                     self.assertFalse(trace.is_relative_to(root / directory))
-                self.assertFalse(any(
-                    key.startswith("GIT_CONFIG_KEY_") and value == "core.longpaths"
-                    for key, value in env.items()
-                ))
-                trace.write_text(json.dumps({
-                    "event": "error",
-                    "msg": "actual frozen native failure; token fixture-secret",
-                }) + "\n")
+                self.assertFalse(
+                    any(
+                        key.startswith("GIT_CONFIG_KEY_") and value == "core.longpaths"
+                        for key, value in env.items()
+                    )
+                )
+                trace.write_text(
+                    json.dumps(
+                        {
+                            "event": "error",
+                            "msg": "actual frozen native failure; token fixture-secret",
+                        }
+                    )
+                    + "\n"
+                )
                 return subprocess.CompletedProcess([], 22, "HALTED", "")
 
             with (
                 patch.object(smoke, "prepare_tools", return_value=tools),
                 patch.object(smoke, "poison_host_apm"),
-                patch.object(smoke.release, "check_backend_metadata", return_value=smoke.release.read_backend_pin()),
+                patch.object(
+                    smoke.release,
+                    "check_backend_metadata",
+                    return_value=smoke.release.read_backend_pin(),
+                ),
                 patch.object(smoke, "install_backend_fixture", return_value={}),
                 patch.object(smoke, "prepare_consumer_lock", side_effect=seed),
                 patch.object(smoke, "run_binary", side_effect=fail_app),
+                self.assertRaisesRegex(AssertionError, "actual frozen native failure") as caught,
             ):
-                with self.assertRaisesRegex(AssertionError, "actual frozen native failure") as caught:
-                    smoke.run_case(Path("unrun-app"), root, None, "package", "pass", mixed_imports=True)
+                smoke.run_case(Path("unrun-app"), root, None, "package", "pass", mixed_imports=True)
             self.assertNotIn("fixture-secret", str(caught.exception))
             self.assertEqual(len(seed_environments), 1)
             self.assertNotIn("GIT_TRACE2_EVENT", seed_environments[0])
@@ -384,7 +493,11 @@ class SmokeFixtureTests(unittest.TestCase):
             env = smoke.isolated_env(root, tools)
             smoke.poison_host_apm(tools, env)
             result = subprocess.run(
-                [str(tools / "apm"), "install"], env=env, capture_output=True, timeout=5,
+                [str(tools / "apm"), "install"],
+                env=env,
+                capture_output=True,
+                timeout=5,
+                check=False,
             )
             self.assertEqual(result.returncode, 97)
             self.assertTrue(Path(env["APMX_DECOY_APM_LOG"]).is_file())
@@ -401,8 +514,10 @@ class SmokeFixtureTests(unittest.TestCase):
             before = smoke.profile_snapshot(root)
             self.assertEqual(smoke.check_profiles(root, before, False), [])
             for relative in (
-                "home/.copilot/installed_plugins.json", "config/mcp.json",
-                "copilot/hooks.json", "appdata/services.json",
+                "home/.copilot/installed_plugins.json",
+                "config/mcp.json",
+                "copilot/hooks.json",
+                "appdata/services.json",
             ):
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -418,9 +533,11 @@ class SmokeFixtureTests(unittest.TestCase):
             root = Path(temporary)
             env = {"APMX_DECOY_APM_LOG": str(root / "decoy")}
             result = subprocess.CompletedProcess([], 0, "pretend success", "")
-            with patch.object(smoke, "run_binary", return_value=result):
-                with self.assertRaisesRegex(AssertionError, "did not create a lockfile"):
-                    smoke.install_backend_fixture(Path("unrun-backend"), root / "missing", env)
+            with (
+                patch.object(smoke, "run_binary", return_value=result),
+                self.assertRaisesRegex(AssertionError, "did not create a lockfile"),
+            ):
+                smoke.install_backend_fixture(Path("unrun-backend"), root / "missing", env)
 
     def test_windows_bootstrap_uses_home_appdata_cache_not_redirected_localappdata(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -434,10 +551,13 @@ class SmokeFixtureTests(unittest.TestCase):
             cache.write_text("pinned APM Windows update cache")
             with patch.object(smoke, "os", SimpleNamespace(name="nt")):
                 changes = smoke.check_profiles(root, {}, True)
-                self.assertEqual(set(changes), {
-                    "home/.apm/config.json",
-                    "home/AppData/Local/apm/cache/last_version_check",
-                })
+                self.assertEqual(
+                    set(changes),
+                    {
+                        "home/.apm/config.json",
+                        "home/AppData/Local/apm/cache/last_version_check",
+                    },
+                )
                 wrong = root / "localappdata/apm/cache/last_version_check"
                 wrong.parent.mkdir(parents=True)
                 wrong.write_text("not the pinned cache path")
@@ -456,55 +576,75 @@ class SmokeFixtureTests(unittest.TestCase):
             config = root / ".apm_empty_gitconfig"
             config.write_bytes(b"")
             with patch.object(smoke, "os", SimpleNamespace(name="nt")):
-                changes = smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                changes = smoke.check_temporary(
+                    root, {}, fresh_home=True, owned_directory=root, case="unit"
+                )
                 self.assertEqual(changes, [".apm_empty_gitconfig"])
                 self.assertEqual(config.read_bytes(), b"")
                 with self.assertRaisesRegex(AssertionError, "outside owned"):
-                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root / "different", case="unit")
+                    smoke.check_temporary(
+                        root, {}, fresh_home=True, owned_directory=root / "different", case="unit"
+                    )
                 with self.assertRaisesRegex(AssertionError, "not cleaned"):
-                    smoke.check_temporary(root, {}, fresh_home=False, owned_directory=root, case="unit")
+                    smoke.check_temporary(
+                        root, {}, fresh_home=False, owned_directory=root, case="unit"
+                    )
                 config.write_bytes(b"unexpected Git configuration")
                 with self.assertRaisesRegex(AssertionError, "zero bytes"):
-                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                    smoke.check_temporary(
+                        root, {}, fresh_home=True, owned_directory=root, case="unit"
+                    )
                 before = smoke.snapshot(root)
                 config.write_bytes(b"")
                 with self.assertRaisesRegex(AssertionError, "not cleaned"):
-                    smoke.check_temporary(root, before, fresh_home=True, owned_directory=root, case="unit")
+                    smoke.check_temporary(
+                        root, before, fresh_home=True, owned_directory=root, case="unit"
+                    )
                 other = root / "unexpected"
                 other.write_bytes(b"")
                 with self.assertRaisesRegex(AssertionError, "not cleaned"):
-                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                    smoke.check_temporary(
+                        root, {}, fresh_home=True, owned_directory=root, case="unit"
+                    )
                 other.unlink()
                 config.unlink()
                 nested = root / "nested/.apm_empty_gitconfig"
                 nested.parent.mkdir()
                 nested.write_bytes(b"")
                 with self.assertRaisesRegex(AssertionError, "not cleaned"):
-                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                    smoke.check_temporary(
+                        root, {}, fresh_home=True, owned_directory=root, case="unit"
+                    )
                 nested.unlink()
                 config.mkdir()
                 with self.assertRaisesRegex(AssertionError, "regular non-reparse"):
-                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                    smoke.check_temporary(
+                        root, {}, fresh_home=True, owned_directory=root, case="unit"
+                    )
                 config.rmdir()
             config.write_bytes(b"")
-            with patch.object(smoke, "os", SimpleNamespace(name="posix")):
-                with self.assertRaisesRegex(AssertionError, "not cleaned"):
-                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+            with (
+                patch.object(smoke, "os", SimpleNamespace(name="posix")),
+                self.assertRaisesRegex(AssertionError, "not cleaned"),
+            ):
+                smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
 
     def test_windows_temp_bootstrap_rejects_reparse_attribute(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             (root / ".apm_empty_gitconfig").write_bytes(b"")
             info = SimpleNamespace(
-                st_mode=stat.S_IFREG | 0o600, st_size=0,
-                st_file_attributes=0x400, st_nlink=1,
+                st_mode=stat.S_IFREG | 0o600,
+                st_size=0,
+                st_file_attributes=0x400,
+                st_nlink=1,
             )
             with (
                 patch.object(smoke, "os", SimpleNamespace(name="nt")),
                 patch.object(Path, "lstat", return_value=info),
+                self.assertRaisesRegex(AssertionError, "regular non-reparse"),
             ):
-                with self.assertRaisesRegex(AssertionError, "regular non-reparse"):
-                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+                smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
 
     @unittest.skipIf(os.name == "nt", "Windows symlink creation requires extra host privileges")
     def test_windows_temp_bootstrap_rejects_symlink_to_empty_file(self):
@@ -515,9 +655,11 @@ class SmokeFixtureTests(unittest.TestCase):
             root = parent / "owned"
             root.mkdir()
             (root / ".apm_empty_gitconfig").symlink_to(target)
-            with patch.object(smoke, "os", SimpleNamespace(name="nt")):
-                with self.assertRaisesRegex(AssertionError, "regular non-reparse"):
-                    smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
+            with (
+                patch.object(smoke, "os", SimpleNamespace(name="nt")),
+                self.assertRaisesRegex(AssertionError, "regular non-reparse"),
+            ):
+                smoke.check_temporary(root, {}, fresh_home=True, owned_directory=root, case="unit")
             self.assertEqual(target.read_bytes(), b"")
 
     def test_mixed_context_fixture_selects_packages_not_primitive_symbols(self):
@@ -528,15 +670,27 @@ class SmokeFixtureTests(unittest.TestCase):
             with (
                 patch.object(smoke, "prepare_tools", return_value=tools),
                 patch.object(smoke, "poison_host_apm"),
-                patch.object(smoke.release, "check_backend_metadata", return_value=smoke.release.read_backend_pin()),
+                patch.object(
+                    smoke.release,
+                    "check_backend_metadata",
+                    return_value=smoke.release.read_backend_pin(),
+                ),
                 patch.object(smoke, "install_backend_fixture", return_value={}),
-                patch.object(smoke, "prepare_consumer_lock", return_value={
-                    "origin": str(root / "package/skills/release-style"),
-                }),
-                patch.object(smoke, "run_binary", side_effect=RuntimeError("stop before binary")) as run,
+                patch.object(
+                    smoke,
+                    "prepare_consumer_lock",
+                    return_value={
+                        "origin": str(root / "package/skills/release-style"),
+                    },
+                ),
+                patch.object(
+                    smoke, "run_binary", side_effect=RuntimeError("stop before binary")
+                ) as run,
+                self.assertRaisesRegex(RuntimeError, "stop before binary"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "stop before binary"):
-                    smoke.run_case(Path("unrun-apmx"), root, None, "package", "pass", mixed_imports=True)
+                smoke.run_case(
+                    Path("unrun-apmx"), root, None, "package", "pass", mixed_imports=True
+                )
             contract = (root / "package/handoff.contract.md").read_text()
             self.assertIn("  - release-context-package\n", contract)
             self.assertNotIn("  - release-guidance\n", contract)
@@ -544,7 +698,10 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertNotIn("  - unselected-package\n", contract)
             env = run.call_args.args[3]
             resources = json.loads(env["APMX_CONTEXT_RESOURCE_DIGESTS"])
-            self.assertEqual(set(resources), {"references/detail.txt", "assets/example.json", "scripts/data_only.py"})
+            self.assertEqual(
+                set(resources),
+                {"references/detail.txt", "assets/example.json", "scripts/data_only.py"},
+            )
             self.assertFalse(Path(env["APMX_RESOURCE_EXECUTED"]).exists())
 
     def test_native_consumer_lock_assertion_rejects_changed_ref_version_or_identity(self):
@@ -562,8 +719,10 @@ class SmokeFixtureTests(unittest.TestCase):
             lock.write_text(content)
             smoke.require_consumer_lock(lock, revision)
             for before, after in (
-                ("v9", "publisher-version-does-not-exist"), ("9.0.0", "1.0.0"),
-                ("localhost", "otherhost"), (revision, "c" * 40),
+                ("v9", "publisher-version-does-not-exist"),
+                ("9.0.0", "1.0.0"),
+                ("localhost", "otherhost"),
+                (revision, "c" * 40),
                 ("fixtures/release-style", "different/release-style"),
             ):
                 lock.write_text(content.replace(before, after))
@@ -575,22 +734,26 @@ class SmokeFixtureTests(unittest.TestCase):
             with self.subTest(mixed=mixed), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary).resolve() / ("long-caller-" + "x" * 100)
 
-                def observe(*args, **kwargs):
+                def observe(*args, expected_root=root, **kwargs):
                     path = kwargs["temporary_root"]
                     self.assertTrue(path.is_dir())
-                    self.assertFalse(path.is_relative_to(root))
-                    self.assertLess(len(str(path)), len(str(root)))
+                    self.assertFalse(path.is_relative_to(expected_root))
+                    self.assertLess(len(str(path)), len(str(expected_root)))
                     return {"temporary_root": path}
 
                 with patch.object(smoke, "_run_case", side_effect=observe):
-                    result = smoke.run_case(Path("unrun-app"), root, None, "package", "pass", mixed_imports=mixed)
+                    result = smoke.run_case(
+                        Path("unrun-app"), root, None, "package", "pass", mixed_imports=mixed
+                    )
                 self.assertFalse(result["temporary_root"].exists())
 
     def test_windows_long_paths_apply_only_to_native_consumer_setup_child(self):
         env = {
             "GIT_CONFIG_COUNT": "2",
-            "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
-            "GIT_CONFIG_KEY_1": "http.extraHeader", "GIT_CONFIG_VALUE_1": "fixture-header",
+            "GIT_CONFIG_KEY_0": "credential.helper",
+            "GIT_CONFIG_VALUE_0": "",
+            "GIT_CONFIG_KEY_1": "http.extraHeader",
+            "GIT_CONFIG_VALUE_1": "fixture-header",
             "GIT_SSH_COMMAND": "fixture-ssh",
             "GIT_CONFIG_GLOBAL": "fixture-config",
         }
@@ -634,21 +797,27 @@ class SmokeFixtureTests(unittest.TestCase):
             tools.mkdir()
 
             def leak_setting(tools, env):
-                env.update({
-                    "GIT_CONFIG_COUNT": "1",
-                    "GIT_CONFIG_KEY_0": "core.longpaths",
-                    "GIT_CONFIG_VALUE_0": "true",
-                })
+                env.update(
+                    {
+                        "GIT_CONFIG_COUNT": "1",
+                        "GIT_CONFIG_KEY_0": "core.longpaths",
+                        "GIT_CONFIG_VALUE_0": "true",
+                    }
+                )
 
             with (
                 patch.object(smoke, "prepare_tools", return_value=tools),
                 patch.object(smoke, "poison_host_apm", side_effect=leak_setting),
-                patch.object(smoke.release, "check_backend_metadata", return_value=smoke.release.read_backend_pin()),
+                patch.object(
+                    smoke.release,
+                    "check_backend_metadata",
+                    return_value=smoke.release.read_backend_pin(),
+                ),
                 patch.object(smoke, "install_backend_fixture", return_value={}),
                 patch.object(smoke, "run_binary") as run,
+                self.assertRaisesRegex(AssertionError, "inherited the fixture-only"),
             ):
-                with self.assertRaisesRegex(AssertionError, "inherited the fixture-only"):
-                    smoke.run_case(Path("unrun-app"), root, None, "local", "pass")
+                smoke.run_case(Path("unrun-app"), root, None, "local", "pass")
             run.assert_not_called()
 
     def test_consumer_fixture_relocates_native_outputs_but_not_activation(self):
@@ -689,15 +858,26 @@ class SmokeFixtureTests(unittest.TestCase):
 
             with (
                 patch.object(smoke.shutil, "which", return_value="git"),
-                patch.object(smoke.subprocess, "run", return_value=subprocess.CompletedProcess(
-                    [], 0, f"{revision}\trefs/tags/v9\n", "",
-                )),
+                patch.object(
+                    smoke.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess(
+                        [],
+                        0,
+                        f"{revision}\trefs/tags/v9\n",
+                        "",
+                    ),
+                ),
                 patch.object(smoke.subprocess, "check_output", return_value=revision + "\n"),
                 patch.object(smoke, "run_binary", side_effect=native_output),
             ):
-                proof = smoke.prepare_consumer_lock(Path("unrun-backend"), root, caller, package, {"PATH": ""})
+                proof = smoke.prepare_consumer_lock(
+                    Path("unrun-backend"), root, caller, package, {"PATH": ""}
+                )
             self.assertEqual((caller / "apm.lock.yaml").read_text(), native_locks[0])
-            self.assertEqual((caller / "apm_modules/bytes").read_bytes(), b"native output unit fixture")
+            self.assertEqual(
+                (caller / "apm_modules/bytes").read_bytes(), b"native output unit fixture"
+            )
             self.assertFalse((caller / ".agents").exists())
             self.assertTrue(proof["native_lock_relocated_unchanged"])
             self.assertFalse(stages[0].exists())
@@ -729,10 +909,16 @@ class SmokeFixtureTests(unittest.TestCase):
                 if failure == "unselected":
                     prompt += " UNSELECTED_SKILL_SENTINEL"
                 if failure == "resource":
-                    (root / ".agents/skills/release-style/references/detail.txt").write_text("changed")
+                    (root / ".agents/skills/release-style/references/detail.txt").write_text(
+                        "changed"
+                    )
                 result = subprocess.run(
                     [sys.executable, "-I", str(smoke.FIXTURES / "copilot_actor.py"), "-p", prompt],
-                    cwd=root, env=env, capture_output=True, timeout=10,
+                    cwd=root,
+                    env=env,
+                    capture_output=True,
+                    timeout=10,
+                    check=False,
                 )
                 self.assertEqual(result.returncode == 0, failure is None, result.stderr)
                 self.assertFalse(Path(env["APMX_RESOURCE_EXECUTED"]).exists())

@@ -1,0 +1,113 @@
+{
+  "schema": "apmx-example-observation/1",
+  "scope": "Actual local native macOS ARM64 factory execution, not a protocol fixture or published release",
+  "command": [
+    "apmx",
+    "./feature-factory",
+    "--on",
+    "copilot"
+  ],
+  "started": "2026-09-14T19:03:54.572190+00:00",
+  "completed": "2026-09-14T19:06:15.549198+00:00",
+  "source_snapshot_sha256": "aa0badd42473f63c36bafcc7ad4e9e6792eab79c6b0dfcd4a024e5e4ed61e63b",
+  "binary_sha256": "bab2f0ff721fe9ca2be666838744608d69991ed2145dc95622942f2aabeae006",
+  "chain_id": "20260914T190354Z-bb94ec06a25d",
+  "chain_record_sha256": "06a604a8a983b7f34db934707007fb6821b0aa7dd9cad4bd9ccc60f2a02b1eb3",
+  "complete": true,
+  "outcome": {
+    "name": "UNPROVEN",
+    "exit_code": 21
+  },
+  "model_override": null,
+  "observed_models": [
+    "gpt-5.6-sol"
+  ],
+  "contracts": 4,
+  "passing_checks": 6,
+  "artifact_files": {
+    "plan.md": {
+      "sha256": "9aea0772e79e62b93df7b46b71e69a88cc45fab409e7a686e8569a5d47848484",
+      "bytes": 2746
+    },
+    "specification.md": {
+      "sha256": "50796cb8c033f09d00ea2625790b67a5787b536a9c33a222e20a0ac997c07f80",
+      "bytes": 3005
+    },
+    "changes.diff": {
+      "sha256": "15f4e18779529a77a9fea34eb0b1ad679a1c18c2a139d45604c1f6f4db85fa31",
+      "bytes": 4944
+    },
+    "implementation.md": {
+      "sha256": "3bc2476df041b05e8b8ce9a35c9a138b7a38cf664f44a9f1181a529d135639f4",
+      "bytes": 1340
+    },
+    "review.md": {
+      "sha256": "37a0b4ce73ce697337116400aa4517cac9b97189284339b7c06b76e981c2291a",
+      "bytes": 2889
+    }
+  },
+  "changed_code_files": [
+    "src/checkout.py",
+    "src/pricing.py",
+    "tests/test_free_shipping.py"
+  ],
+  "original_files_preserved": 22,
+  "process_cleanup_confirmed": true,
+  "replayed_checks": {
+    "acceptance": {
+      "status": "passed",
+      "required_cases": 14,
+      "observations": 14
+    },
+    "regression": {
+      "status": "passed",
+      "required_cases": 14,
+      "observations": 24
+    }
+  },
+  "git_export": {
+    "base_digest": "748d36eefd0a119ae226804958d1ec05f9fba3f9e902b84a724502b5f2c4cb21",
+    "base_tree": "831ddba5527987e4260dc0b41736dc0349626857",
+    "baseline_digest": "ea277c096fa26c78213bd3c7759da0b713d8d1c5747728caa4a52c7536074c2e",
+    "changed_files": [
+      "src/checkout.py",
+      "src/pricing.py",
+      "tests/test_free_shipping.py"
+    ],
+    "output": "changes.diff",
+    "patch_sha256": "15f4e18779529a77a9fea34eb0b1ad679a1c18c2a139d45604c1f6f4db85fa31",
+    "patch_size": 4944,
+    "result_digest": "e0e6c8f63cc975347409e57fab80eb9d5d23f0609fa2f8adc676ee0f787b8190",
+    "result_tree": "2cc37d6537cb13bfca487b82fcd86c8f327a7df3",
+    "schema": "apmx-git-export/0.1"
+  },
+  "ordinary_git_apply": {
+    "patch_sha256": "15f4e18779529a77a9fea34eb0b1ad679a1c18c2a139d45604c1f6f4db85fa31",
+    "observed": {
+      "4999": {
+        "subtotal_cents": 4999,
+        "delivery_cents": 500,
+        "total_cents": 5499
+      },
+      "5000": {
+        "subtotal_cents": 5000,
+        "delivery_cents": 0,
+        "total_cents": 5000
+      },
+      "5001": {
+        "subtotal_cents": 5001,
+        "delivery_cents": 0,
+        "total_cents": 5001
+      }
+    },
+    "git_apply_check": 0,
+    "git_apply": 0
+  },
+  "controlled_negative": {
+    "scope": "Controlled one-character defect in a copy of the genuine native patch; not a model-produced failed run",
+    "mutation": ">= FREE_DELIVERY_THRESHOLD_CENTS changed to > FREE_DELIVERY_THRESHOLD_CENTS",
+    "patch_sha256": "c3b7a3a0985747452050f2a4d91de9f198ed46c3cb3a12db31d6d26620f738bc",
+    "acceptance_exit": 1,
+    "regression_exit": 1
+  }
+}

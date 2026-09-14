@@ -5,9 +5,9 @@ from pathlib import Path
 import click
 
 from apmx.contracts.events import ImportsSelectedEvent
-from apmx.contracts.models import ContractSource, ChainResult
-from apmx.core.contract_logger import ContractLogger
+from apmx.contracts.models import ChainResult, ContractSource
 from apmx.contracts.records import preparation_failure
+from apmx.core.contract_logger import ContractLogger
 
 
 def invoke_contract(
@@ -97,8 +97,8 @@ def invoke_contract(
             verbose=verbose,
         ) as (imports_root, backend):
             if graph is not None:
-                from ..contracts.resolution import preflight
                 from ..contracts.chain import run_chain
+                from ..contracts.resolution import preflight
 
                 closure = preflight(
                     graph,

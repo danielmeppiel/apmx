@@ -1,7 +1,7 @@
 """Native graph resolution and real leaf execution with only the producer replaced."""
 
-import json
 import ast
+import json
 import os
 import shlex
 import sys
@@ -671,7 +671,11 @@ def test_view_failure_is_not_a_completed_aggregate(
     write = workspace._write
 
     def fail_write(root, entry, raw):
-        if fault == "write" and root.name == "artifacts.pending":
+        if (
+            fault == "write"
+            and root.name == "artifacts.pending"
+            and root.parent.parent.name == "chains"
+        ):
             raise OSError("view storage unavailable")
         return write(root, entry, raw)
 

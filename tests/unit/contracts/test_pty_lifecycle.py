@@ -136,18 +136,22 @@ def test_pty_streams_live_output_and_restores_terminal(
                 streamed_at is None
                 and b"PTY actor ready" in output
                 and b"Native stderr ready" in output
-                and b"Tool started: view" in output
             ):
                 assert child.poll() is None
                 streamed_at = time.monotonic()
             if b"Running Copilot" in output and child.poll() is None:
                 spinner_seen_while_running = True
-            if interrupt and not interrupted and streamed_at is not None:
-                if not animate or (
-                    spinner_seen_while_running and time.monotonic() - streamed_at >= 0.5
-                ):
-                    os.kill(child.pid, signal.SIGINT)
-                    interrupted = True
+            if (
+                interrupt
+                and not interrupted
+                and streamed_at is not None
+                and (
+                    not animate
+                    or (spinner_seen_while_running and time.monotonic() - streamed_at >= 0.5)
+                )
+            ):
+                os.kill(child.pid, signal.SIGINT)
+                interrupted = True
             if child.poll() is not None:
                 break
         assert streamed_at is not None, output.decode("ascii", errors="replace")
@@ -187,20 +191,14 @@ def test_pty_streams_live_output_and_restores_terminal(
     assert b"raw exit" not in text
     assert b"[i]" not in text
     plain_lines = text.replace(b"\r", b"")
+    assert b"Tool started: view" not in text
+    assert b"\n            without losing its source or hiding\n" in plain_lines
+    assert b"\n            live progress.\n" in plain_lines
     if animate:
-        assert b"\n            without losing its source or hiding\n" in plain_lines
-        assert b"\n            live progress.\n" in plain_lines
         assert b"\x1b[2;36m" in output
-        styled_segments = re.findall(rb"\x1b\[([0-9;]+)m([^\x1b]*)", output)
-        assert any(
-            b"Tool started: view" in segment and b"2" in codes.split(b";")
-            for codes, segment in styled_segments
-        )
     else:
-        assert (
-            b"Copilot > Visible narration wraps across rows without losing its source "
-            b"or hiding live progress."
-        ) in plain_lines
+        assert b"\x1b" not in output
+    assert "Tool started: view" in (records[0].parent / "transcript.log").read_text()
     if not interrupt and not fail:
         assert b"Contract checks passed; this run was not sandboxed." in text
         assert b"Output: .apm/runs/" in text

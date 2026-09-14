@@ -22,18 +22,29 @@ Focuses on:
 
 from __future__ import annotations
 
+import ast
+import builtins
+import logging
 import os
-from threading import Thread
+import runpy
+import ssl
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from apmx.core import azure_cli as _azure_cli_mod
+from apmx.core import tls_trust
 from apmx.core.auth import (
     AuthContext,
     AuthResolver,
     BearerFallbackOutcome,
     HostInfo,
+    SecretRedactionFilter,
     _org_to_env_suffix,
 )
 from apmx.core.token_manager import GitHubTokenManager
@@ -912,22 +923,380 @@ class TestResolveThreadSafety:
     def test_concurrent_resolves_produce_same_context(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             resolver = AuthResolver()
-            results: list[AuthContext] = []
-            errors: list[Exception] = []
-
-            def _resolve():
-                try:
-                    results.append(resolver.resolve("github.com"))
-                except Exception as exc:
-                    errors.append(exc)
-
-            threads = [Thread(target=_resolve) for _ in range(20)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            assert not errors
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                results = list(executor.map(resolver.resolve, ["github.com"] * 20))
             assert len(results) == 20
             # All should be the same cached object
             assert all(r is results[0] for r in results)
+
+
+class _CallbackFailure(Exception):
+    """Exercise arbitrary caller-defined failures, not a library exception."""
+
+
+@pytest.mark.parametrize(
+    ("host", "unauth_first", "attempts"),
+    [("contoso.ghe.com", False, 2), ("github.com", False, 3), ("github.com", True, 3)],
+)
+def test_arbitrary_callback_failure_preserves_credential_fallback(
+    host: str, unauth_first: bool, attempts: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="apmx.core.auth")
+    secret = "opaque-credential-canary"
+    operation = MagicMock(
+        side_effect=[_CallbackFailure(secret) for _ in range(attempts - 1)] + ["recovered"]
+    )
+    with (
+        patch.dict(os.environ, {"GITHUB_TOKEN": "primary-token"}, clear=True),
+        patch.object(
+            GitHubTokenManager, "resolve_credential_from_gh_cli", return_value="secondary-token"
+        ) as credential,
+    ):
+        result = AuthResolver().try_with_fallback(host, operation, unauth_first=unauth_first)
+    assert result == "recovered"
+    assert operation.call_count == attempts
+    assert operation.call_args.args[0] == "secondary-token"
+    credential.assert_called_once_with(host)
+    assert caplog.records
+    assert secret not in caplog.text
+    assert all(not record.exc_info and not record.exc_text for record in caplog.records)
+
+
+@pytest.mark.parametrize("level", [logging.DEBUG, logging.INFO])
+def test_arbitrary_bearer_failure_preserves_primary_error(
+    level: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(level, logger="apmx.core.auth")
+    secret = "opaque-credential-canary"
+    primary = _CallbackFailure(f"HTTP 401 {secret}")
+    operation = MagicMock(side_effect=[primary, _CallbackFailure(secret)])
+    provider = MagicMock()
+    provider.get_bearer_token.return_value = "bearer-token"
+    with (
+        patch.dict(os.environ, {"ADO_APM_PAT": "primary-token"}, clear=True),
+        patch("apmx.core.azure_cli.get_bearer_provider", return_value=provider),
+        pytest.raises(_CallbackFailure) as raised,
+    ):
+        AuthResolver().try_with_fallback("dev.azure.com", operation)
+    assert raised.value is primary
+    assert [call.args[0] for call in operation.call_args_list] == ["primary-token", "bearer-token"]
+    assert secret not in caplog.text
+    if level == logging.INFO:
+        assert not caplog.records
+    else:
+        assert caplog.records
+        assert all(not record.exc_info and not record.exc_text for record in caplog.records)
+
+
+@pytest.mark.parametrize("acquisition_failure", [False, True])
+def test_bearer_outcome_failure_is_sanitized(
+    acquisition_failure: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="apmx.core.auth")
+    secret = "opaque-credential-canary"
+    provider = MagicMock()
+    provider.get_bearer_token.return_value = "bearer-token"
+    if acquisition_failure:
+        provider.get_bearer_token.side_effect = _azure_cli_mod.AzureCliBearerError(
+            secret, kind="subprocess_error"
+        )
+    bearer_op = MagicMock(side_effect=_CallbackFailure(secret))
+    with patch("apmx.core.azure_cli.get_bearer_provider", return_value=provider):
+        result = AuthResolver().execute_with_bearer_fallback(
+            "dev.azure.com", lambda: "primary", bearer_op, lambda _: True
+        )
+    assert result == BearerFallbackOutcome("primary", not acquisition_failure)
+    assert bearer_op.call_count == int(not acquisition_failure)
+    assert caplog.records
+    assert secret not in caplog.text
+    assert all(not record.exc_info and not record.exc_text for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("message", "args"),
+    [
+        ("password=secret %d", ("invalid",)),
+        ("password=secret %", ("invalid",)),
+        ("password=secret %(missing)s", {"other": "value"}),
+    ],
+)
+def test_malformed_log_record_cannot_bypass_redaction(
+    message: str, args: tuple[str, ...] | dict[str, str]
+) -> None:
+    record = logging.LogRecord(
+        "apmx",
+        logging.DEBUG,
+        __file__,
+        0,
+        message,
+        (args,) if isinstance(args, dict) else args,
+        None,
+    )
+    assert SecretRedactionFilter().filter(record) is False
+
+
+def test_redaction_filter_accepts_explicitly_disabled_exception_info() -> None:
+    record = logging.LogRecord("apmx", logging.DEBUG, __file__, 0, "password=secret", (), None)
+    record.exc_info = False
+    assert SecretRedactionFilter().filter(record) is True
+    assert record.getMessage() == "[REDACTED]"
+
+
+def test_arbitrary_log_formatting_failure_is_safely_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class BrokenArgument:
+        def __str__(self) -> str:
+            raise _CallbackFailure("opaque-credential-canary")
+
+    caplog.set_level(logging.DEBUG, logger="apmx.core.auth")
+    auth_logger = logging.getLogger("apmx.core.auth")
+    redactor = SecretRedactionFilter()
+    auth_logger.addFilter(redactor)
+    try:
+        auth_logger.debug("password=secret %s", BrokenArgument())
+    finally:
+        auth_logger.removeFilter(redactor)
+    assert caplog.messages == ["Log record formatting failed; record omitted"]
+    assert "opaque-credential-canary" not in caplog.text
+    assert "password=secret" not in caplog.text
+    assert all(not record.exc_info and not record.exc_text for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OSError("opaque-credential-canary"),
+        subprocess.TimeoutExpired("opaque-credential-canary", 30),
+        subprocess.SubprocessError("opaque-credential-canary"),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "opaque-credential-canary"),
+        _CallbackFailure("opaque-credential-canary"),
+    ],
+)
+@pytest.mark.parametrize("level", [logging.DEBUG, logging.INFO])
+def test_azure_tenant_probe_failure_is_best_effort_and_sanitized(
+    failure: Exception,
+    level: int,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    caplog.set_level(level, logger="apmx.core.azure_cli")
+    provider = _azure_cli_mod.AzureCliBearerProvider(az_command=os.path.abspath("fake-az"))
+    with patch("apmx.core.azure_cli.run_external", side_effect=failure) as run:
+        assert provider.get_current_tenant_id() is None
+    run.assert_called_once()
+    assert caplog.messages == (
+        ["Unable to read the active Azure CLI tenant"] if level == logging.DEBUG else []
+    )
+    assert "opaque-credential-canary" not in caplog.text
+    assert all(not record.exc_info and not record.exc_text for record in caplog.records)
+    assert capsys.readouterr() == ("", "")
+
+
+_TLS_FAILURES = [
+    ImportError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    SyntaxError,
+    KeyError,
+    AssertionError,
+    _CallbackFailure,
+]
+_BOOTSTRAP_PATH = Path(tls_trust.__file__).parent / "_child_tls" / "_apm_tls_bootstrap.py"
+
+
+@pytest.mark.parametrize("failure_type", _TLS_FAILURES)
+@pytest.mark.parametrize("stage", ["import", "inject"])
+@pytest.mark.parametrize("child", [False, True])
+@pytest.mark.parametrize("level", [logging.DEBUG, logging.INFO])
+def test_tls_failures_preserve_verified_fallback_and_confidentiality(
+    failure_type: type[Exception],
+    stage: str,
+    child: bool,
+    level: int,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    caplog.set_level(level, logger="apm.tls" if child else "apmx.core.tls_trust")
+    secret = "opaque-credential-canary"
+    failure = failure_type(secret)
+    inject = MagicMock(side_effect=failure if stage == "inject" else None)
+    original_import = builtins.__import__
+
+    def import_module(name: str, *args: object, **kwargs: object) -> object:
+        if name == "truststore" and stage == "import":
+            raise failure
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setitem(sys.modules, "truststore", SimpleNamespace(inject_into_ssl=inject))
+    monkeypatch.setattr(builtins, "__import__", import_module)
+    monkeypatch.setattr(sys, "argv", ["child.py"])
+    monkeypatch.setattr(sys, "orig_argv", ["python", "child.py"])
+    monkeypatch.setattr(tls_trust, "_KNOWN_BUNDLED_CERT_FILE", None)
+    monkeypatch.setattr(tls_trust, "_LAST_TLS_STATUS", None)
+    context_type = ssl.SSLContext
+    with patch.dict(
+        os.environ,
+        {"SSL_CERT_FILE": "bundled-ca.pem", "APM_SSL_CERT_FILE_IS_BUNDLED_DEFAULT": "1"},
+        clear=True,
+    ):
+        if child:
+            runpy.run_path(str(_BOOTSTRAP_PATH))
+        else:
+            assert tls_trust.configure_tls_trust() is False
+        assert os.environ["SSL_CERT_FILE"] == "bundled-ca.pem"
+        if not child or stage == "inject":
+            assert "APM_SSL_CERT_FILE_IS_BUNDLED_DEFAULT" not in os.environ
+    assert ssl.SSLContext is context_type
+    assert inject.call_count == int(stage == "inject")
+    assert len(caplog.records) == int(level == logging.DEBUG)
+    assert secret not in caplog.text
+    assert all(not record.exc_info and not record.exc_text for record in caplog.records)
+    if not child:
+        stage_name = "import" if stage == "import" else "injection"
+        status = (
+            f"TLS: verifying against bundled CA (certifi fallback); truststore {stage_name} failed"
+        )
+        assert tls_trust._LAST_TLS_STATUS == (status, ())
+        caplog.clear()
+        caplog.set_level(logging.DEBUG, logger="apmx.core.tls_trust")
+        tls_trust.log_tls_trust_status()
+        assert caplog.messages == [status]
+        assert caplog.records[0].levelno == logging.DEBUG
+        assert not caplog.records[0].exc_info
+        assert not caplog.records[0].exc_text
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("level", [logging.DEBUG, logging.INFO])
+def test_tls_bootstrap_arbitrary_pathlike_failure_is_best_effort(
+    level: int, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class BrokenPath:
+        def __fspath__(self) -> str:
+            raise _CallbackFailure("opaque-credential-canary")
+
+    caplog.set_level(level, logger="apmx.core.tls_trust")
+    assert tls_trust.ensure_child_tls_bootstrap(BrokenPath()) is False
+    assert caplog.messages == (
+        ["TLS: child bootstrap could not be installed"] if level == logging.DEBUG else []
+    )
+    assert "opaque-credential-canary" not in caplog.text
+    assert all(not record.exc_info and not record.exc_text for record in caplog.records)
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("failure_type", [OSError, RuntimeError, ValueError])
+def test_tls_bootstrap_path_failures_are_best_effort(
+    failure_type: type[Exception], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="apmx.core.tls_trust")
+    with patch.object(Path, "resolve", side_effect=failure_type("opaque-credential-canary")):
+        assert tls_trust._child_bootstrap_dir() is None
+    with patch(
+        "apmx.core.tls_trust._venv_site_packages",
+        side_effect=failure_type("opaque-credential-canary"),
+    ):
+        assert tls_trust.ensure_child_tls_bootstrap("venv") is False
+    assert caplog.messages == [
+        "TLS: child bootstrap directory could not be resolved",
+        "TLS: child bootstrap could not be installed",
+    ]
+    assert "opaque-credential-canary" not in caplog.text
+
+
+@pytest.mark.parametrize("failure_type", [ImportError, OSError, RuntimeError, ValueError])
+def test_failed_certifi_lookup_preserves_user_ca(
+    failure_type: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="apmx.core.tls_trust")
+    monkeypatch.setattr(tls_trust, "_KNOWN_BUNDLED_CERT_FILE", None)
+    monkeypatch.setitem(
+        sys.modules,
+        "certifi",
+        SimpleNamespace(where=MagicMock(side_effect=failure_type("opaque-credential-canary"))),
+    )
+    assert tls_trust.build_child_tls_env({"SSL_CERT_FILE": "user-ca.pem"}) == {
+        "SSL_CERT_FILE": "user-ca.pem"
+    }
+    assert caplog.messages == ["TLS: bundled certifi path could not be resolved"]
+    assert "opaque-credential-canary" not in caplog.text
+
+
+def test_child_bootstrap_retains_pre_310_grammar_and_no_app_imports() -> None:
+    tree = ast.parse(_BOOTSTRAP_PATH.read_text(encoding="utf-8"), feature_version=(3, 8))
+    imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert imports == {"logging", "os", "sys", "truststore"}
+    assert not any(isinstance(node, ast.ImportFrom) for node in ast.walk(tree))
+
+
+@pytest.mark.parametrize("child", [False, True])
+@pytest.mark.parametrize(
+    "override", ["REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "APM_DISABLE_TRUSTSTORE", None]
+)
+def test_tls_overrides_and_success_preserve_trust_selection(
+    child: bool, override: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cert_files: list[str | None] = []
+    inject = MagicMock(side_effect=lambda: cert_files.append(os.environ.get("SSL_CERT_FILE")))
+    monkeypatch.setitem(sys.modules, "truststore", SimpleNamespace(inject_into_ssl=inject))
+    monkeypatch.setattr(sys, "argv", ["child.py"])
+    monkeypatch.setattr(sys, "orig_argv", ["python", "child.py"])
+    monkeypatch.setattr(tls_trust, "_KNOWN_BUNDLED_CERT_FILE", None)
+    monkeypatch.setattr(tls_trust, "_LAST_TLS_STATUS", None)
+    env = {"SSL_CERT_FILE": "bundled-ca.pem", "APM_SSL_CERT_FILE_IS_BUNDLED_DEFAULT": "1"}
+    if override:
+        env[override] = "1" if override == "APM_DISABLE_TRUSTSTORE" else "user-ca.pem"
+    with patch.dict(os.environ, env, clear=True):
+        if child:
+            runpy.run_path(str(_BOOTSTRAP_PATH))
+        else:
+            assert tls_trust.configure_tls_trust() is (override is None)
+        assert cert_files == ([None] if override is None else [])
+        if override:
+            assert os.environ[override] == env[override]
+            assert os.environ["SSL_CERT_FILE"] == "bundled-ca.pem"
+        else:
+            assert "SSL_CERT_FILE" not in os.environ
+            assert "APM_SSL_CERT_FILE_IS_BUNDLED_DEFAULT" not in os.environ
+
+
+@pytest.mark.parametrize("failed_write", [1, 2])
+def test_child_bootstrap_write_failure_cannot_activate_partial_module(
+    failed_write: int,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="apmx.core.tls_trust")
+    site_packages = tmp_path / "Lib" / "site-packages"
+    site_packages.mkdir(parents=True)
+    write = tls_trust._atomic_write
+    written: list[str] = []
+
+    def write_or_fail(target: Path, data: bytes) -> None:
+        written.append(target.name)
+        if len(written) == failed_write:
+            raise OSError("opaque-credential-canary")
+        write(target, data)
+
+    with patch("apmx.core.tls_trust._atomic_write", side_effect=write_or_fail):
+        assert tls_trust.ensure_child_tls_bootstrap(tmp_path) is False
+    assert written == ["_apm_tls_bootstrap.py", "_apm_tls.pth"][:failed_write]
+    assert not (site_packages / "_apm_tls.pth").exists()
+    if failed_write == 2:
+        assert (
+            site_packages / "_apm_tls_bootstrap.py"
+        ).read_bytes() == _BOOTSTRAP_PATH.read_bytes()
+    assert caplog.messages == ["TLS: child bootstrap could not be installed"]
+    assert "opaque-credential-canary" not in caplog.text

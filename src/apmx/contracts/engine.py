@@ -6,9 +6,11 @@ from dataclasses import replace
 from ..core.contract_logger import ContractLogger
 from ..runtime.factory import RuntimeFactory
 from . import frontend, process, records, workspace
+from .check_command import check_argv
 from .events import EventEmitter
 from .models import (
     Artifact,
+    ArtifactSet,
     BaselineSnapshot,
     CheckObservation,
     ContractError,
@@ -19,7 +21,6 @@ from .models import (
     RunResult,
 )
 from .stream import ContractStreamDecoder
-from .check_command import check_argv
 
 
 def _remaining(deadline: float) -> float:
@@ -42,7 +43,7 @@ def _producer_failure(observation: ProcessObservation) -> str | None:
 def _run_checks(
     plan: LeafPlan,
     snapshot: BaselineSnapshot,
-    artifact: Artifact,
+    artifact: Artifact | ArtifactSet,
     store: records.AttemptStore,
     events: EventEmitter,
     deadline: float,
@@ -161,10 +162,11 @@ def run_contract(
     )
     store = records.AttemptStore.create(plan, consent_source=consent_source, handoff_policy=policy)
     events = EventEmitter(store.run_id, logger.on_event)
-    artifact: Artifact | None = None
+    artifact: Artifact | ArtifactSet | None = None
     checks: list[CheckObservation] = []
     stop_reason: str | None = None
     observed_models: tuple[str, ...] = ()
+    native_exports = ()
     deadline = time.monotonic() + plan.limits.attempt_seconds
     try:
         logger.attach_run(store.run_id, store.directory)
@@ -178,7 +180,7 @@ def run_contract(
             contract_relative_path=plan.source.contract_relative_path if plan.source else None,
             package_ref=plan.source.package_ref if plan.source else None,
             caller_root=str(plan.project_root),
-            produces=plan.contract.produces,
+            produces=plan.contract.output_label,
             harness=plan.harness,
             model=plan.model,
             run_directory=str(store.directory),
@@ -241,6 +243,10 @@ def run_contract(
                 snapshot, plan.contract.produces, store.directory, plan.limits
             )
             store.update("capture", artifact=artifact)
+        if not stop_reason and "artifact_tools" in request.control_observations:
+            from ..runtime.artifact_tools import capture_exports
+
+            native_exports = capture_exports(store.directory, artifact, snapshot, plan.limits)
         if not stop_reason:
             if artifact is not None:
                 events.emit("phase", name="checks")
@@ -249,7 +255,7 @@ def run_contract(
                 events.emit(
                     "diagnostic",
                     severity="warning",
-                    message=f"{plan.contract.produces} was not produced.",
+                    message=f"The complete delivery ({plan.contract.output_label}) was not produced.",
                     action="Inspect the contract and retained Copilot transcript, then rerun.",
                 )
     except KeyboardInterrupt:
@@ -272,6 +278,7 @@ def run_contract(
         consent_source=consent_source,
         handoff_policy=policy,
         retained_provenance=store.retained_provenance,
+        native_exports=native_exports,
         outcome=records.reduce_outcome(artifact, tuple(checks), stop_reason),
         artifact=artifact,
         checks=tuple(checks),

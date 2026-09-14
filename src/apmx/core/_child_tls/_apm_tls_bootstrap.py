@@ -8,6 +8,7 @@ user/corporate ``sitecustomize.py``).
 
 Must stay SILENT (write nothing to stdout/stderr) and never raise -- a broken
 bootstrap must not disturb the child runtime's own output or startup.
+Keep pre-3.10 syntax so older children can reach the optional-import fallback.
 """
 
 import logging as _logging
@@ -40,6 +41,11 @@ def _bootstrap():
     try:
         import truststore
     except Exception:
+        # Optional imports may raise arbitrary platform/compatibility failures.
+        if _logger.isEnabledFor(_logging.DEBUG):
+            _logger.exception(
+                "TLS: child truststore import failed; falling back to certifi", exc_info=False
+            )
         return
     marker = "APM_SSL_CERT_FILE_IS_BUNDLED_DEFAULT"
     bundled = None
@@ -52,7 +58,8 @@ def _bootstrap():
     except Exception:
         if bundled is not None:
             _os.environ["SSL_CERT_FILE"] = bundled
-        _logger.debug("TLS: child falling back to certifi")
+        if _logger.isEnabledFor(_logging.DEBUG):
+            _logger.exception("TLS: child falling back to certifi", exc_info=False)
 
 
 _bootstrap()

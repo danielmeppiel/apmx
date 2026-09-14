@@ -140,7 +140,8 @@ class _WinAPI:
             "CreateJobObjectW": (handle, [pointer, wintypes.LPCWSTR]),
             "SetInformationJobObject": (wintypes.BOOL, [handle, ctypes.c_int, pointer, dword]),
             "QueryInformationJobObject": (
-                wintypes.BOOL, [handle, ctypes.c_int, pointer, dword, pointer]
+                wintypes.BOOL,
+                [handle, ctypes.c_int, pointer, dword, pointer],
             ),
             "AssignProcessToJobObject": (wintypes.BOOL, [handle, handle]),
             "TerminateJobObject": (wintypes.BOOL, [handle, wintypes.UINT]),
@@ -151,10 +152,12 @@ class _WinAPI:
             ),
             "SetHandleInformation": (wintypes.BOOL, [handle, dword, dword]),
             "CreateFileW": (
-                handle, [wintypes.LPCWSTR, dword, dword, pointer, dword, dword, handle]
+                handle,
+                [wintypes.LPCWSTR, dword, dword, pointer, dword, dword, handle],
             ),
             "InitializeProcThreadAttributeList": (
-                wintypes.BOOL, [pointer, dword, dword, size_pointer]
+                wintypes.BOOL,
+                [pointer, dword, dword, size_pointer],
             ),
             "UpdateProcThreadAttribute": (
                 wintypes.BOOL,
@@ -164,19 +167,26 @@ class _WinAPI:
             "CreateProcessW": (
                 wintypes.BOOL,
                 [
-                    wintypes.LPCWSTR, wintypes.LPWSTR, pointer, pointer, wintypes.BOOL,
-                    dword, pointer, wintypes.LPCWSTR, pointer, ctypes.POINTER(_ProcessInfo),
+                    wintypes.LPCWSTR,
+                    wintypes.LPWSTR,
+                    pointer,
+                    pointer,
+                    wintypes.BOOL,
+                    dword,
+                    pointer,
+                    wintypes.LPCWSTR,
+                    pointer,
+                    ctypes.POINTER(_ProcessInfo),
                 ],
             ),
             "ResumeThread": (dword, [handle]),
             "WaitForSingleObject": (dword, [handle, dword]),
             "GetExitCodeProcess": (wintypes.BOOL, [handle, ctypes.POINTER(dword)]),
             "PeekNamedPipe": (
-                wintypes.BOOL, [handle, pointer, dword, pointer, ctypes.POINTER(dword), pointer]
+                wintypes.BOOL,
+                [handle, pointer, dword, pointer, ctypes.POINTER(dword), pointer],
             ),
-            "ReadFile": (
-                wintypes.BOOL, [handle, pointer, dword, ctypes.POINTER(dword), pointer]
-            ),
+            "ReadFile": (wintypes.BOOL, [handle, pointer, dword, ctypes.POINTER(dword), pointer]),
             "CloseHandle": (wintypes.BOOL, [handle]),
             "SetDllDirectoryW": (wintypes.BOOL, [wintypes.LPCWSTR]),
         }
@@ -224,7 +234,8 @@ def _command(request: ProcessRequest) -> tuple[str, str, str]:
     characters = 0
     for argument in request.argv:
         if not isinstance(argument, str):
-            raise ValueError("Native argv must contain non-NUL strings.")
+            # Preserve the command-validation ValueError boundary for malformed fields.
+            raise ValueError("Native argv must contain non-NUL strings.")  # noqa: TRY004
         characters += len(argument) + 1
         if characters > _MAX_COMMAND_CHARS:
             raise ValueError("The native command line exceeds the Windows limit.")
@@ -244,7 +255,8 @@ def _command(request: ProcessRequest) -> tuple[str, str, str]:
     characters = 1
     for key, value in external_process_env(request.env).items():
         if not isinstance(key, str) or not isinstance(value, str):
-            raise ValueError("Invalid native environment entry.")
+            # Environment field types use the same validation family as invalid values.
+            raise ValueError("Invalid native environment entry.")  # noqa: TRY004
         characters += len(key) + len(value) + 2
         if characters > _MAX_COMMAND_CHARS:
             raise ValueError("The native environment exceeds the managed limit.")
@@ -289,15 +301,20 @@ class _JobProcess:
         self.job = self._own(api.check(api.CreateJobObjectW(None, None)))
         job_limits = _ExtendedLimits()
         job_limits.basic.flags = _KILL_ON_CLOSE
-        api.check(api.SetInformationJobObject(
-            self.job, 9, ctypes.byref(job_limits), ctypes.sizeof(job_limits)
-        ))
+        api.check(
+            api.SetInformationJobObject(
+                self.job, 9, ctypes.byref(job_limits), ctypes.sizeof(job_limits)
+            )
+        )
         security = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), None, True)
         writes = []
         for stream in ("stdout", "stderr"):
             read, write = wintypes.HANDLE(), wintypes.HANDLE()
-            api.check(api.CreatePipe(ctypes.byref(read), ctypes.byref(write),
-                                     ctypes.byref(security), _CHUNK_BYTES))
+            api.check(
+                api.CreatePipe(
+                    ctypes.byref(read), ctypes.byref(write), ctypes.byref(security), _CHUNK_BYTES
+                )
+            )
             self.pipes[stream] = self._own(read.value)
             writes.append(self._own(write.value))
             api.check(api.SetHandleInformation(read, 1, 0))
@@ -318,18 +335,29 @@ class _JobProcess:
         api.check(api.InitializeProcThreadAttributeList(attributes, 1, 0, ctypes.byref(size)))
         try:
             inherited = (wintypes.HANDLE * 3)(stdin, *writes)
-            api.check(api.UpdateProcThreadAttribute(
-                attributes, 0, 0x20002, inherited, ctypes.sizeof(inherited), None, None
-            ))
+            api.check(
+                api.UpdateProcThreadAttribute(
+                    attributes, 0, 0x20002, inherited, ctypes.sizeof(inherited), None, None
+                )
+            )
             startup.attributes = ctypes.cast(attributes, wintypes.LPVOID)
             env_buffer = ctypes.create_unicode_buffer(environment)
             # CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT.
             with _external_dll_search(api, request.timeout_seconds):
-                api.check(api.CreateProcessW(
-                    executable, ctypes.create_unicode_buffer(command), None, None, True,
-                    0x4 | 0x400 | 0x80000, env_buffer, str(request.cwd),
-                    ctypes.byref(startup), ctypes.byref(self.info),
-                ))
+                api.check(
+                    api.CreateProcessW(
+                        executable,
+                        ctypes.create_unicode_buffer(command),
+                        None,
+                        None,
+                        True,
+                        0x4 | 0x400 | 0x80000,
+                        env_buffer,
+                        str(request.cwd),
+                        ctypes.byref(startup),
+                        ctypes.byref(self.info),
+                    )
+                )
             self.process = self._own(self.info.process)
             thread = self._own(self.info.thread)
             self.pid = self.info.pid
@@ -357,9 +385,11 @@ class _JobProcess:
 
     def active_processes(self) -> int:
         accounting = _Accounting()
-        self.api.check(self.api.QueryInformationJobObject(
-            self.job, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None
-        ))
+        self.api.check(
+            self.api.QueryInformationJobObject(
+                self.job, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None
+            )
+        )
         return accounting.active_processes
 
     def read(self, stream: str) -> bytes | None:
@@ -375,10 +405,8 @@ class _JobProcess:
             return b""
         buffer = ctypes.create_string_buffer(min(available.value, _CHUNK_BYTES))
         count = wintypes.DWORD()
-        self.api.check(self.api.ReadFile(
-            handle, buffer, len(buffer), ctypes.byref(count), None
-        ))
-        return buffer.raw[:count.value]
+        self.api.check(self.api.ReadFile(handle, buffer, len(buffer), ctypes.byref(count), None))
+        return buffer.raw[: count.value]
 
     def terminate(self) -> None:
         self.api.check(self.api.TerminateJobObject(self.job, 1))
@@ -486,8 +514,9 @@ def supervise_process(
                         and active
                         and now - leader_exited_at >= post_exit_grace(limits.cleanup_seconds)
                     ):
-                        residual_group = ({"inspection": "owned_windows_job",
-                                           "active_processes": active},)
+                        residual_group = (
+                            {"inspection": "owned_windows_job", "active_processes": active},
+                        )
                         stop("lingering_children", leader_exited_at)
                     elif now >= next_heartbeat and returncode is None:
                         next_heartbeat = now + HEARTBEAT_SECONDS
@@ -516,7 +545,8 @@ def supervise_process(
                 # Callback/native failures propagate only after a bounded cleanup attempt.
                 deadline = (
                     time.monotonic() + limits.cleanup_seconds
-                    if stop_started is None else stop_started + limits.cleanup_seconds
+                    if stop_started is None
+                    else stop_started + limits.cleanup_seconds
                 )
                 with contextlib.suppress(OSError, KeyboardInterrupt):
                     child.terminate()

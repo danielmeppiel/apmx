@@ -21,12 +21,12 @@ from .models import (
     ContractError,
     ContractLimits,
     ContractSource,
+    FileEntry,
     LeafContract,
     LeafPlan,
     Outcome,
-    SourceLocation,
     RetainedInput,
-    FileEntry,
+    SourceLocation,
 )
 
 
@@ -134,7 +134,28 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
         raise ContractError(
             "needs contains duplicate or case-colliding paths.", location=at("needs")
         )
-    produces = _fixed_path(data.get("produces"), at("produces"), "produces")
+    declared = data.get("produces")
+    if isinstance(declared, list):
+        if not 1 <= len(declared) <= limits.output_files:
+            raise ContractError(
+                f"produces must name between one and {limits.output_files} artifact files.",
+                location=at("produces"),
+            )
+        produces = tuple(
+            _fixed_path(value, at("produces", index), "produces")
+            for index, value in enumerate(declared)
+        )
+        names = [name.casefold() for name in produces]
+        if len(set(names)) != len(names) or any(
+            left.startswith(right + "/") or right.startswith(left + "/")
+            for index, left in enumerate(names)
+            for right in names[index + 1 :]
+        ):
+            raise ContractError(
+                "Produced artifact paths collide or overlap.", location=at("produces")
+            )
+    else:
+        produces = _fixed_path(declared, at("produces"), "produces")
     verify = data.get("verify")
     if not isinstance(verify, dict) or not 1 <= len(verify) <= min(8, limits.check_count):
         raise ContractError(
@@ -161,8 +182,7 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
         if (
             not isinstance(name, str)
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./-]*", name)
-            or name.startswith("apm_modules/")
-            or name.startswith("_local/")
+            or name.startswith(("apm_modules/", "_local/"))
         ):
             raise ContractError(
                 "An import names a declared skill/dependency, not a storage path or version.",
@@ -246,15 +266,6 @@ def plan_contract(
     _regular(selected, source_root, source_location)
     contract = parse_contract(selected, limits=limits)
     location = contract.locations.get("produces", source_location)
-    output = root / contract.produces
-    try:
-        ensure_path_within(output, root)
-        if has_symlink_component(root, output):
-            raise ValueError("Output contains a symlink.")
-        if output.exists() and not output.is_file():
-            raise ValueError("Output must be a regular file path.")
-    except (OSError, ValueError) as exc:
-        raise ContractError(str(exc), location=location) from exc
     occupied = {
         *(value.casefold() for value in contract.needs),
         ("_apmx_source" if source else contract.path.relative_to(root).as_posix().casefold()),
@@ -262,31 +273,40 @@ def plan_contract(
         "apm.lock.yaml",
         "apm.lock",
     }
-    output_name = contract.produces.casefold()
     from .context_layout import NATIVE_SKILL_ROOTS, is_native_skill_path
 
-    if (
-        output_name == "checks"
-        or output_name.startswith("checks/")
-        or output_name == "_apmx_context"
-        or output_name.startswith("_apmx_context/")
-        or is_native_skill_path(output_name)
-        or any(name.startswith(output_name + "/") for name in NATIVE_SKILL_ROOTS)
-        or any(
-            output_name == item
-            or output_name.startswith(item + "/")
-            or item.startswith(output_name + "/")
-            for item in occupied
-        )
-    ):
-        raise ContractError(
-            "Output overlaps supplied input, source, manifest or checks.", location=location
-        )
+    for name in contract.outputs:
+        output = root / name
+        try:
+            ensure_path_within(output, root)
+            if has_symlink_component(root, output):
+                raise ValueError("Output contains a symlink.")
+            if output.exists() and not output.is_file():
+                raise ValueError("Output must be a regular file path.")
+        except (OSError, ValueError) as exc:
+            raise ContractError(str(exc), location=location) from exc
+        output_name = name.casefold()
+        if (
+            output_name in {"checks", "_apmx_context"}
+            or output_name.startswith(("checks/", "_apmx_context/"))
+            or is_native_skill_path(output_name)
+            or any(name.startswith(output_name + "/") for name in NATIVE_SKILL_ROOTS)
+            or any(
+                output_name == item
+                or output_name.startswith(item + "/")
+                or item.startswith(output_name + "/")
+                for item in occupied
+            )
+        ):
+            raise ContractError(
+                "Output overlaps supplied input, source, manifest or checks.", location=location
+            )
     size = 0
     supplied = tuple(binding.artifact.relative_path for binding in input_bindings)
-    if len(set((*deferred_inputs, *supplied))) != len(deferred_inputs) + len(supplied) or not set(
-        (*deferred_inputs, *supplied)
-    ) <= set(contract.needs):
+    bound_names = {*deferred_inputs, *supplied}
+    if len(bound_names) != len(deferred_inputs) + len(supplied) or not bound_names <= set(
+        contract.needs
+    ):
         raise ContractError(
             "Deferred/bound inputs must be distinct declared needs.", code="invalid_binding"
         )
@@ -305,9 +325,7 @@ def plan_contract(
     if size > limits.input_bytes:
         raise ContractError("Selected inputs exceed the byte limit.", code="input_limit")
     admit_caller_policy(root, limits=limits)
-    package, _, manifest_digest = read_project_manifest(
-        source_root, limits, allow_missing=source is None
-    )
+    _, _, manifest_digest = read_project_manifest(source_root, limits, allow_missing=source is None)
     consumer, _, consumer_manifest_digest = read_project_manifest(root, limits, allow_missing=True)
     consumer_lock, consumer_lock_digest = read_lock(root, limits)
     if imports_root is None:

@@ -83,8 +83,7 @@ def compute_package_hash(package_path: Path) -> str:
     regular_files.sort(key=lambda p: p.as_posix())
 
     return _hash_package_entries(
-        (rel_path.as_posix(), (package_path / rel_path).read_bytes())
-        for rel_path in regular_files
+        (rel_path.as_posix(), (package_path / rel_path).read_bytes()) for rel_path in regular_files
     )
 
 

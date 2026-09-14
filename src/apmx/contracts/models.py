@@ -55,6 +55,8 @@ class ContractLimits:
     resource_files: int = 256
     resource_bytes: int = 8 * 1024 * 1024
     output_bytes: int = 4 * 1024 * 1024
+    output_files: int = 16
+    output_total_bytes: int = 16 * 1024 * 1024
     check_count: int = 8
     attempt_seconds: float = 1200
     check_seconds: float = 180
@@ -81,10 +83,18 @@ class LeafContract:
     source_digest: str
     body: str
     needs: tuple[str, ...]
-    produces: str
+    produces: str | tuple[str, ...]
     checks: tuple[CheckSpec, ...]
     imports: tuple[str, ...] = ()
     locations: Mapping[str, SourceLocation] = field(default_factory=dict)
+
+    @property
+    def outputs(self) -> tuple[str, ...]:
+        return (self.produces,) if isinstance(self.produces, str) else self.produces
+
+    @property
+    def output_label(self) -> str:
+        return ", ".join(self.outputs)
 
 
 @dataclass(frozen=True)
@@ -216,6 +226,21 @@ class Artifact:
 
 
 @dataclass(frozen=True)
+class ArtifactSet:
+    """One complete delivery; sha256 identifies the sorted per-file inventory."""
+
+    files: tuple[Artifact, ...]
+    sha256: str
+
+
+def artifact_files(value: Artifact | ArtifactSet | None) -> tuple[Artifact, ...]:
+    """Normalize complete deliveries without selecting an arbitrary first member."""
+    if isinstance(value, ArtifactSet):
+        return value.files
+    return (value,) if value is not None else ()
+
+
+@dataclass(frozen=True)
 class RetainedInput:
     """An assessed artifact bound to its finalized, caller-owned leaf record."""
 
@@ -270,7 +295,7 @@ class RunResult:
     run_id: str
     run_directory: Path
     outcome: Outcome
-    artifact: Artifact | None
+    artifact: Artifact | ArtifactSet | None
     checks: tuple[CheckObservation, ...]
     stop_reason: str | None = None
     requested_model: str | None = None
@@ -278,6 +303,7 @@ class RunResult:
     consent_source: str | None = None
     handoff_policy: str | None = None
     retained_provenance: tuple[FileEntry, ...] = ()
+    native_exports: tuple[FileEntry, ...] = ()
 
 
 @dataclass(frozen=True)

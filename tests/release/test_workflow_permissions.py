@@ -1,9 +1,9 @@
 """Guard release permission/token boundaries; actionlint validates YAML syntax."""
 
 import re
+import shlex
 import unittest
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[2] / ".github/workflows"
 
@@ -28,7 +28,8 @@ class WorkflowPermissionTests(unittest.TestCase):
             r"(?m)^    permissions:\n      contents: write$",
         )
         write_jobs = {
-            name for name in ("candidate", "build", "draft", "verify-downloaded", "publish")
+            name
+            for name in ("candidate", "build", "draft", "verify-downloaded", "publish")
             if re.search(r"(?m)^      contents: write$", self.job(name))
         }
         self.assertEqual(write_jobs, {"draft", "verify-downloaded", "publish"})
@@ -62,22 +63,42 @@ class WorkflowPermissionTests(unittest.TestCase):
             self.job("publish"),
         )
         verification = self.job("verify-downloaded")
-        self.assertIn("--manifest-sha \"$MANIFEST_SHA\"", verification)
-        self.assertIn("--assets-fingerprint \"$ASSETS_FINGERPRINT\"", verification)
-        self.assertIn("python scripts/smoke.py --binary \"$BUNDLE/$executable\"", verification)
+        self.assertIn('--manifest-sha "$MANIFEST_SHA"', verification)
+        self.assertIn('--assets-fingerprint "$ASSETS_FINGERPRINT"', verification)
+        self.assertIn('python scripts/smoke.py --binary "$BUNDLE/$executable"', verification)
         self.assertNotIn("continue-on-error:", verification)
 
     def test_native_tests_use_provisioned_real_backend_before_source_free_wheel_proof(self):
         steps = re.split(r"(?m)^      - ", self.ci)
         provision = next(step for step in steps if "\n        id: backend\n" in step)
-        tests = next(step for step in steps if "python -m pytest tests/unit tests/release -q" in step)
-        self.assertIn('scripts/release.py provision-apm --target "$TARGET" --output dist/apm-backend', provision)
+        tests = next(
+            step for step in steps if "python -m pytest tests/unit tests/release -q" in step
+        )
+        self.assertIn(
+            'scripts/release.py provision-apm --target "$TARGET" --output dist/apm-backend',
+            provision,
+        )
         self.assertIn("uv run --frozen --extra dev --extra build", provision)
         self.assertLess(self.ci.index(provision), self.ci.index(tests))
         self.assertIn("source-free built-wheel", tests)
         self.assertIn("APMX_APM_BACKEND: ${{ steps.backend.outputs.backend }}", tests)
         self.assertNotIn("continue-on-error:", tests)
         self.assertEqual(self.ci.count("APMX_APM_BACKEND:"), 1)
+
+    def test_native_tests_opt_into_optional_factory_tools(self) -> None:
+        """Exercise optional BDD checks on each platform without a core dependency."""
+        before_tests = self.ci.split("python -m pytest tests/unit tests/release -q", 1)[0]
+        commands = re.findall(r"(?m)^\s+run: (uv (?:sync|run) .+)$", before_tests)
+        self.assertEqual(len(commands), 3)
+        for command in commands:
+            arguments = shlex.split(command)
+            extras = [
+                arguments[index + 1]
+                for index, value in enumerate(arguments[:-1])
+                if value == "--extra"
+            ]
+            self.assertIn("factory", extras)
+            self.assertIn("--frozen", arguments)
 
 
 if __name__ == "__main__":

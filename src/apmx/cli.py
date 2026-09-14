@@ -1,5 +1,7 @@
 """Native entrypoint for local factory directories and explicit leaf contracts."""
 
+import os
+import sys
 from pathlib import Path
 
 import click
@@ -7,15 +9,30 @@ import click
 from apmx.commands.contracts import invoke_contract
 from apmx.contracts.frontend import admit_caller_policy
 from apmx.contracts.models import ContractError, ContractLimits, Outcome
-from apmx.core.contract_logger import ContractLogger
 from apmx.contracts.records import preparation_failure
+from apmx.core.contract_logger import ContractLogger
 from apmx.core.output_mode import configure_output_mode, detect_output_mode
 from apmx.core.tls_trust import configure_process_tls_trust
 from apmx.install.contract_source import prepare_contract_source
 from apmx.version import get_version
 
 
+class NativeCommand(click.Command):
+    """Keep the frozen MCP helper internal, without adding a public CLI operation."""
+
+    def main(self, *args, **kwargs):
+        if getattr(sys, "frozen", False) and os.environ.get("APMX_INTERNAL_ARTIFACT_SERVER"):
+            from apmx.runtime.artifact_mcp import run_server
+
+            code = run_server(Path(os.environ["APMX_INTERNAL_ARTIFACT_SERVER"]))
+            if kwargs.get("standalone_mode", True):
+                raise SystemExit(code)
+            return code
+        return super().main(*args, **kwargs)
+
+
 @click.command(
+    cls=NativeCommand,
     name="apmx",
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(

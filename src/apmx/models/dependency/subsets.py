@@ -36,7 +36,8 @@ def skill_subset_filter_tokens(skill_subset: Iterable[object] | None) -> set[str
 def parse_skill_subset(skills_raw: object) -> list[str]:
     """Validate and normalize object-form dependency ``skills:``."""
     if not isinstance(skills_raw, list):
-        raise ValueError("'skills' field must be a list of skill names")
+        # All objects are accepted for validation; malformed schema values raise ValueError.
+        raise ValueError("'skills' field must be a list of skill names")  # noqa: TRY004
     if not skills_raw:
         raise ValueError(
             "skills: must contain at least one name; "
@@ -61,7 +62,8 @@ def parse_target_subset(targets_raw: object) -> list[str]:
     from apmx.models.apm_package import KNOWN_TARGET_NAMES
 
     if not isinstance(targets_raw, list):
-        raise ValueError("'targets' field must be a list of target names")
+        # Keep the same manifest-validation exception for wrong types and wrong values.
+        raise ValueError("'targets' field must be a list of target names")  # noqa: TRY004
     if not targets_raw:
         raise ValueError(
             "targets: must contain at least one target; "

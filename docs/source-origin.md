@@ -139,6 +139,11 @@ prose on the verbose screen; public/private message filtering and completion
 checks are unchanged. Offline `--plan` never runs or reports an install; local
 execution without imports does not claim APM ran.
 
+Contract and factory output share a presentation owner for spacing, outcome
+emphasis and detail visibility. See [terminal output](terminal-output.md) for
+default/verbose behavior, no-color layout and the regression/static guardrails.
+This presentation policy does not change check results or retained evidence.
+
 Copilot's public narration uses portable ASCII typography on screen: curly
 apostrophes/quotes become straight quotes, typographic dashes become ASCII
 dashes, and ellipses become `...`. For example, a curly apostrophe in "I'm"
@@ -189,8 +194,9 @@ Personal and plugin skills remain governed by Copilot's host configuration, not
 an apmx sandbox or isolated profile.
 
 Native custom instructions remain disabled. Runs with imported skills expose
-the native `skill` tool alongside `view` and `apply_patch`; other runs retain the
-two-tool profile. Shell/network denial and the exact output write grant remain.
+the native `skill` tool for their selected context. The artifact adapter also
+provides bounded private file operations and explicit Git export, described
+below; declaring an output does not grant arbitrary shell or network access.
 Use a skill name (the documented explicit form is `/handoff-style`) or a request
 matching its description; no instruction to open a skill path is needed.
 See [GitHub's native CLI skill documentation](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills).
@@ -264,14 +270,57 @@ runner, signed evidence, spend caps or effect contracts.
 
 ## State and format compatibility
 
+### Artifact deliveries
+
+`produces: plan.md` remains a single-file delivery. A list such as
+`produces: [changes.diff, implementation.md]` declares several required artifact
+files, not output alternatives or editable source-directory scopes.
+Capture preserves opaque bytes, including binary files, under explicit count
+and byte limits. A filename suffix does not execute, mount or apply a file.
+
+The complete producer result binds the output inventory and each artifact's
+identity. All declared artifacts and required checks must be complete before
+any member can advance. Consumers select artifacts through `needs`; several
+selected outputs do not rerun their producer. Handoff validation also checks
+unselected sibling artifacts, so a consumer cannot take a partial delivery
+whose other outputs or retained evidence changed.
+
+Native Copilot receives a session-local plugin carrying the private
+`apmx_artifacts` tool server. It exposes `write_file`, `delete_file` and
+`export_changes`; the plugin is not installed into the user's persistent
+configuration. The server is dispatched through the APMX runtime, including
+the bundled executable, rather than requiring a source checkout or another
+system Python to run the helper.
+
+An upstream artifact remains read-only evidence. A consumer can edit or delete
+its private copy, including on Windows; surviving copies retain their captured
+permissions. Neither the retained artifact nor the baseline is made writable.
+
+Working edits are distinct from publication. The explicit exporter names a
+declared output, derives a Git patch from captured baseline and working files,
+and excludes artifact outputs and protected check/runner resources. It does
+not trust the producer's Git index or ask the model to compose patch hunks.
+Its bounded text-change support is not a global restriction on artifact bytes.
+No contract phase name or output extension selects additional permissions.
+
+Recorded native export observations retain baseline/result identities, patch
+identity and changed paths. They describe export, not acceptance: a patch-aware
+verification command must reconstruct the matching candidate and test it.
+Each check gets a fresh workspace, so applying a patch in one check does not
+prepare the next. Optional Gherkin tooling belongs to the example's commands,
+not the core contract language or mandatory runtime dependencies.
+
 `apm.yml`, `apm.lock.yaml`, legacy `apm.lock`, `apm_modules` and package `.apm`
 resources keep their original spellings. Renaming them would break input format
 and resource discovery compatibility.
 
 Runs deliberately remain under the **caller's** `.apm/runs/<fresh-run-id>/`.
 This is local evidence compatibility, distinct from APM's normal user configuration.
-The existing `apm-contract-run/0.1` record schema and `native-advisory` profile
-remain readable by existing consumers. Temporary package preparation uses
+Legacy single-file results retain `apm-contract-run/0.1`. Multiple-artifact
+results use `apm-contract-run/0.2`, whose `artifact.files` inventory and aggregate
+digest describe the whole delivery. Consumers must recognize that schema,
+not silently select its first member. Both retain the `native-advisory` profile.
+Temporary package preparation uses
 exclusive `apmx-*` system-temporary directories and is removed after use. Run IDs prevent
 overwriting prior evidence. Producer and checker workspaces are separate.
 Additive record fields include actual backend identity, consumer and effective

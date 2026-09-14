@@ -306,13 +306,12 @@ def _relocate_case_components(
         source = current_parent / existing_part
         target = current_parent / desired_part
         if existing_part != desired_part:
-            if reader.exists(target):
-                if not reader.samefile(source, target):
-                    raise MaterializationPathCollisionError(
-                        "Package directory casing collides between "
-                        f"{source} and {target}. Inspect both directories, "
-                        "keep the intended package, and run 'apm install' again."
-                    )
+            if reader.exists(target) and not reader.samefile(source, target):
+                raise MaterializationPathCollisionError(
+                    "Package directory casing collides between "
+                    f"{source} and {target}. Inspect both directories, "
+                    "keep the intended package, and run 'apm install' again."
+                )
             staging_session.relocate_path(source, target)
             reader.invalidate(current_parent)
         current_parent = target

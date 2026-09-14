@@ -3,16 +3,32 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from .dependency.reference import DependencyReference as DependencyReference
+from .dependency.reference import DependencyReference
 from .dependency.selection import parse_dependency_entry
 
+__all__ = ["KNOWN_TARGET_NAMES", "APMPackage", "DependencyReference", "parse_targets"]
 
 _TARGET_ALIASES = {"vscode": "copilot", "agents": "copilot", "agy": "antigravity"}
-KNOWN_TARGET_NAMES = frozenset({
-    "copilot", "claude", "cursor", "kiro", "opencode", "gemini", "grok-build",
-    "grok-cloud", "antigravity", "codex", "vscode", "agents", "copilot-app",
-    "copilot-cowork", "openclaw", "agent-skills",
-})
+KNOWN_TARGET_NAMES = frozenset(
+    {
+        "copilot",
+        "claude",
+        "cursor",
+        "kiro",
+        "opencode",
+        "gemini",
+        "grok-build",
+        "grok-cloud",
+        "antigravity",
+        "codex",
+        "vscode",
+        "agents",
+        "copilot-app",
+        "copilot-cowork",
+        "openclaw",
+        "agent-skills",
+    }
+)
 
 
 def parse_targets(value: object) -> tuple[str, ...]:
@@ -20,7 +36,9 @@ def parse_targets(value: object) -> tuple[str, ...]:
         return ()
     if isinstance(value, str):
         value = value.split(",")
-    if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
         raise ValueError("Package targets must be a string or list of nonempty strings.")
     names = tuple(_TARGET_ALIASES.get(item.strip(), item.strip()) for item in value)
     if any(name not in KNOWN_TARGET_NAMES | {"all"} for name in names):
@@ -53,16 +71,25 @@ class APMPackage:
             if raw is None:
                 return None
             if not isinstance(raw, dict):
-                raise ValueError(f"{key} must be a mapping.")
+                # Malformed decoded fields preserve the manifest ValueError API.
+                raise ValueError(f"{key} must be a mapping.")  # noqa: TRY004
             parsed = {}
             for kind, entries in raw.items():
                 if not isinstance(entries, list):
-                    raise ValueError(f"{key}.{kind} must be a list.")
-                parsed[kind] = [parse_dependency_entry(entry) for entry in entries] if kind == "apm" else entries
+                    raise ValueError(f"{key}.{kind} must be a list.")  # noqa: TRY004
+                parsed[kind] = (
+                    [parse_dependency_entry(entry) for entry in entries]
+                    if kind == "apm"
+                    else entries
+                )
             return parsed
 
         return cls(
-            data["name"], data["version"], dependencies("dependencies"),
-            dependencies("devDependencies"), source_path, package_path,
+            data["name"],
+            data["version"],
+            dependencies("dependencies"),
+            dependencies("devDependencies"),
+            source_path,
+            package_path,
             parse_targets(data.get("targets", data.get("target"))),
         )

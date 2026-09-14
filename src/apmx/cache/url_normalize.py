@@ -114,8 +114,7 @@ def normalize_repo_url(url: str) -> str:
 
     # Step 1: Strip trailing slash and one trailing .git suffix from path.
     path = (parsed.path or "").rstrip("/")
-    if path.endswith(".git"):
-        path = path[:-4]
+    path = path.removesuffix(".git")
 
     # Lowercase path ONLY for hosts known to treat paths case-insensitively
     # (GitHub, GitLab.com, Bitbucket.org). Self-hosted Gitea and some

@@ -1,100 +1,120 @@
 # APMX
 
-APMX runs agentic software factories: **agents do the work; your checks decide
-what moves forward.**
+APMX runs agentic software factories from the command line, without custom
+orchestration code.
 
-Go from a feature request to a plan, specification, code, tests and review
-without writing agent-orchestration code.
+It passes files to dependent tasks only after every declared output is delivered
+and every declared check passes, keeping the files and check results so you can
+inspect each handoff.
 
-## Start with what "done" means
+## Start with a contract
 
-An agent can write code, generate tests that share the same mistake, and still
-say "done". A prompt alone does not give your workflow a reliable acceptance
-check.
+A **contract** is a Markdown task with three declarations: what it needs,
+what files it must deliver, and how to check them. Those files are its
+**artifacts**: a plan, patch, report or binary.
 
-A **contract** is a Markdown file that gives the agent a task and tells APMX
-what output to expect and how to check it. Here is the example's
-[build contract](examples/contracts/software-factory/contracts/build.contract.md),
-with its task instructions shortened:
+Here is the example's [planning contract](examples/contracts/software-factory/contracts/planning.contract.md),
+with its instructions shortened:
 
 ```markdown
 ---
-needs:
-  - request.json
-  - plan.json
-  - spec.json
-produces: shipping.py
+needs: request.md
+produces: plan.md
 verify:
-  contract: python3 -I -B checks/verify.py build
+  document: python3 -I -B checks/documents.py planning plan.md
 ---
-Implement the shipping specification as shipping.py.
+Plan the checkout change in request.md. Write plan.md with
+Goal, Changes, Validation and Risks sections.
 ```
 
-`needs` names the inputs; `produces` names the deliverable. `verify` is a check
-**APMX runs independently**, not an instruction for Copilot to grade its own
-work. You choose the checks, so acceptance does not depend on the agent's
-conversation.
+The next contract declares `needs: plan.md`. APMX runs the planner, checks its
+output, and passes the exact captured document forward. You do not write the
+agent-orchestration code.
 
-## Run a factory, not a list of agents
+## Run a feature factory
 
-A **factory** is a directory of contracts, checks and starting inputs.
-APMX connects each contract's inputs to the outputs it needs and works out the
-order. No pipeline file, final-step selection or separate Python runner.
-
-The [feature-factory example](examples/contracts/software-factory/README.md)
-builds a Python shipping-cost function:
+The [checkout example](examples/contracts/software-factory/README.md) adds free
+delivery from a 5000-cent subtotal, changing pricing, checkout and tests.
+Its contracts deliver:
 
 ```text
-Feature request -> Plan -> Specification -> Code -> Tests -> Review
+request.md -> plan.md -> specification.md
+                        -> changes.diff + implementation.md -> review.md
 ```
 
+A **factory** is a directory of contracts, checks and starting inputs. APMX
+resolves their `needs` into execution order. No pipeline file or last-step
+selection.
+
 Use the [matching APMX build](docs/install.md#run-the-current-source-checkout)
-and [prepare the example folder](examples/contracts/software-factory/README.md#set-up).
+and [prepare the example](examples/contracts/software-factory/README.md#set-up).
 From the directory containing `feature-factory`, run:
 
 ```sh
 apmx ./feature-factory --on copilot
 ```
 
-APMX shows the work and asks for confirmation before running it.
-Add `--plan` to preview without model calls, package installation or checks.
+APMX shows the work and asks for confirmation. Add `--plan` to preview without
+model calls, installation or checks.
 
-**Observed with real Copilot on macOS:** all five steps completed and their
-checks passed, producing a shipping function, 23 test cases and a review.
-The build check covered all 5000 valid weights and invalid inputs; the generated
-tests caught the example's four known broken implementations.
-A 1001g quote returned 700 cents. A
-[deliberately broken copy was rejected at 1000g](examples/contracts/software-factory/README.md#observed-run).
-Code and tests agreeing with each other is not enough.
+**Observed with real Copilot and a local native macOS build:** all four
+contracts and six checks completed. The patch changed two source files and
+added regression tests. A 5000-cent subtotal now has free delivery; 4999 still
+costs 500 cents. A [deliberately broken patch was rejected at the threshold](examples/contracts/software-factory/README.md#observed-run).
+
+## Deliver files, not a working directory
+
+Any contract can produce one artifact or several. The implementation delivers:
+
+```yaml
+produces:
+  - changes.diff
+  - implementation.md
+```
+
+Copilot edits private source copies and invokes a bounded Git exporter; it
+does not hand-write patch hunks. The original checkout is unchanged.
+All declared artifacts and required checks must be complete before a consumer
+receives any of that delivery.
+
+The example's patch-aware checks reconstruct the changed application and test
+it independently. **Gherkin is optional**; this example chooses it to express
+behavior such as:
+
+```gherkin
+Scenario: Free delivery at 5000 cents
+  Given a subtotal of 5000
+  When I request pricing and checkout
+  Then delivery is 0 cents and the total is 5000 cents
+```
+
+Use your own verification commands and tools. A document check can assess
+structure; it does not prove the reasoning is correct. Generated tests do not
+replace the example's original acceptance checks.
 
 ## Follow the evidence
 
-After each agent finishes, APMX runs the original check definitions in separate
-check workspaces. It saves the output, its hash and the check results. The
-checked copy is what the next step receives; a newer same-name file cannot
-silently replace it. Missing outputs or failed or incomplete checks block
-dependent work.
+APMX retains artifacts, their identities and the original check results.
+Missing outputs, failed or incomplete checks, and changed retained evidence
+block dependent work. Follow the printed paths:
 
-Follow the printed paths inside your factory:
+- `.apm/chains/<id>/record.json` connects the actual steps and handoffs.
+- `.apm/chains/<id>/artifacts/` collects the completed factory's artifacts.
+- `.apm/runs/<id>/record.json` records each contract's inputs and checks.
 
-- `.apm/chains/<id>/record.json` connects the steps and explains blocked work.
-- `.apm/chains/<id>/artifacts/` collects the completed factory's checked outputs.
-- `.apm/runs/<run-id>/record.json` records each step's checks and input sources.
-
-**Local execution is not a sandbox:** agents and checks can use your files,
-network and logins, and model usage may cost money. Passing checks do not certify
-isolation; local results remain **UNPROVEN (exit 21)**.
-[Read the execution limits and results](examples/contracts/software-factory/README.md#failures-and-reruns).
+**Local execution is not a sandbox.** Agents and checks can use host files,
+network and logins; model usage may cost money. Passing checks does not certify
+isolation. Local results remain **UNPROVEN (exit 21)**; inspect the record to
+distinguish a completed run from incomplete work.
 
 ## Go further
 
 APMX runs and checks; Copilot does the agent work. Bundled APM prepares shared
 packages and skills when needed, with no separate APM installation.
 
-- [Factory walkthrough and output inspection](examples/contracts/software-factory/README.md)
+- [Factory setup, artifacts and replaying checks](examples/contracts/software-factory/README.md)
 - [Write your first contract](examples/contracts/first-contract/README.md)
 - [Reuse a packaged task and skill](examples/contracts/packaged-job/README.md)
-- [Automation and explicit permissions](examples/contracts/software-factory/README.md#automation)
 - [Report a problem or contribute](https://github.com/danielmeppiel/apmx/issues) - include a small example and remove secrets from logs.
 
 This private repository requires authorized access. APMX is an independent,

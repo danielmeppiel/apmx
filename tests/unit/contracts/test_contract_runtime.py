@@ -119,20 +119,27 @@ def test_native_request_exact_permissions_and_model(
     assert context.content not in prompt
     assert "_apmx_context" not in prompt
     assert "does not activate skills" not in prompt
-    assert "Use view to read and apply_patch to write." in prompt
+    assert "Use view to read; apply_patch can write declared artifacts." in prompt
+    assert "Never hand-compose patch hunks" in prompt
     assert (
         "Send brief progress updates in plain ASCII before reading inputs and writing the output."
         in prompt
     )
     tail = request.argv[3:]
     assert tail[:4] == ("--output-format", "json", "--stream", "on")
-    assert tail[tail.index("--available-tools") + 1 : tail.index("--available-tools") + 4] == (
+    available = tail[tail.index("--available-tools") + 1 : tail.index("--deny-tool")]
+    assert available == (
         "view",
         "apply_patch",
+        "apmx_artifacts-write_file",
+        "apmx_artifacts-delete_file",
+        "apmx_artifacts-export_changes",
         "skill",
     )
     assert tail[tail.index("--allow-tool") + 1] == f"write({snapshot.producer / 'handoff.json'})"
-    assert tail.count("--allow-tool") == 1
+    assert tail.count("--allow-tool") == 4
+    assert "--plugin-dir" in tail
+    assert "apmx_artifacts(export_changes)" in tail
     disabled = [
         tail[index + 1] for index, flag in enumerate(tail) if flag == "--disable-mcp-server"
     ]

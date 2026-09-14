@@ -1,52 +1,34 @@
 ---
 needs:
-  - request.json
-  - plan.json
-  - spec.json
-  - shipping.py
-  - tests.json
-produces: review.json
+  - request.md
+  - specification.md
+  - changes.diff
+  - implementation.md
+produces: review.md
 verify:
-  contract: python3 -I -B checks/verify.py review
+  document: python3 -I -B checks/documents.py review review.md
 ---
-Give a fresh-context advisory review of this tiny shipping-library change.
-Target: native Copilot through apmx. Read all supplied inputs. Compare the plan,
-specification, actual implementation and tests to request.json. You receive
-ordinary artifacts, not runtime records. Assess the code and test coverage;
-do not claim executions or passed checks, compute hashes in prose, or treat
-an earlier agent's completion claim as proof. APMX retains runtime observations
-separately; they are not an input to your advisory judgment.
+Give a fresh-context advisory review of the supplied checkout change. Compare
+the specification, actual patch and implementation report with request.md.
+Inspect the inclusive threshold, consistency of pricing and checkout totals,
+input validation, and added regression coverage.
 
-Write review.json with exactly these fields:
+Write review.md with these nonempty Markdown sections:
 
-```json
-{
-  "advisory": true,
-  "assurance": "UNPROVEN",
-  "recommendation": "no_findings",
-  "summary": "Your assessment, grounded in the supplied implementation and test cases",
-  "findings": [],
-  "limitations": ["Separate passing checks do not establish host isolation or production readiness."],
-  "follow_up": []
-}
-```
+## Assessment
+Explain whether the proposed edits address the requested behavior and interface.
 
-Use "follow_up" instead of "no_findings" if you identify a concern. Each finding
-has exactly file, line, severity, requirements, detail. For example:
+## Findings
+Give concrete concerns with file and code references, or state that inspection
+found none. Do not invent a concern to fill the section. Suggest relevant
+follow-up work without treating advice as an acceptance decision.
 
-```json
-{"file": "shipping.py", "line": 1, "severity": "low", "requirements": ["purity"], "detail": "A specific concern grounded in this line, if one actually exists"}
-```
+## Limitations
+Distinguish code inspection from observed executions. You receive artifacts,
+not runtime records; the implementation report is not test evidence. Separate
+passing checks do not establish host isolation or production readiness.
 
-Do not invent a finding to fill the template. Allowed files: plan.json,
-spec.json, shipping.py, tests.json. Use actual 1-based line numbers and severity
-low, medium or high. Requirement IDs: types, range, rates, errors, purity.
-At most eight findings and follow-ups; limitations has 1-8 items; all text is
-nonempty and <=800 characters. A no_findings report has no findings; follow_up
-requires at least one finding or follow-up item.
-
-Review quality is judgment: the checker validates format and evidence
-references, not your reasoning. This report never authorizes merge/deployment
-and is not a certification. Current execution remains UNPROVEN on the host.
-Do not change inputs, run commands, install, or delegate. Write only review.json
-under 32 KiB with the permitted file tools.
+Target native Copilot through APMX. Do not change inputs, apply the patch, run
+commands/checks, install, or delegate. Write ASCII Markdown under 16 KiB using
+the permitted file tools. Do not certify, authorize merge/deployment or claim
+you ran tests. The document checker validates sections, not review quality.

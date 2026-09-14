@@ -176,7 +176,8 @@ def supervise_process(
                     elapsed = now - stop_started
                     grace = (
                         post_exit_grace(limits.cleanup_seconds)
-                        if stop_reason == "lingering_children" else 0
+                        if stop_reason == "lingering_children"
+                        else 0
                     )
                     kill_after = grace + (limits.cleanup_seconds - grace) / 2
                     if elapsed >= kill_after and "SIGKILL" not in sent:
@@ -247,9 +248,7 @@ def local_git(
         raise ContractError(
             "Git is required for captured assessment workspaces.", code="git_missing"
         ) from exc
-    env = {
-        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
-    }
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     env.update(
         GIT_CONFIG_NOSYSTEM="1",
         GIT_CONFIG_GLOBAL=os.devnull,

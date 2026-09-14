@@ -20,8 +20,11 @@ def backend_fixture(root: Path, target: str, pin: dict) -> None:
     root.mkdir(parents=True)
     executable = root / pin["assets"][target]["executable"]
     header = (
-        b"MZ" if target.startswith("windows-")
-        else b"\x7fELF" if target.startswith("linux-") else b"\xcf\xfa\xed\xfe"
+        b"MZ"
+        if target.startswith("windows-")
+        else b"\x7fELF"
+        if target.startswith("linux-")
+        else b"\xcf\xfa\xed\xfe"
     )
     executable.write_bytes(header + b" non-executable unit fixture")
     executable.chmod(0o755)
@@ -37,10 +40,15 @@ def add_backend_fixture(bundle: Path, target: str) -> None:
     shutil.copyfile(release.BACKEND_PIN, bundle / "apm-backend.json")
     (bundle / "_internal/apmx").mkdir(parents=True)
     shutil.copyfile(release.BACKEND_PIN, bundle / "_internal/apmx/apm-backend.json")
-    (bundle / "RELEASE.json").write_text(json.dumps({
-        "target": target, "apm_backend_pin_sha256": release.digest(release.BACKEND_PIN),
-        "apm_backend": release.backend_provenance(bundle / "libexec/apm", pin, target),
-    }))
+    (bundle / "RELEASE.json").write_text(
+        json.dumps(
+            {
+                "target": target,
+                "apm_backend_pin_sha256": release.digest(release.BACKEND_PIN),
+                "apm_backend": release.backend_provenance(bundle / "libexec/apm", pin, target),
+            }
+        )
+    )
 
 
 class BackendTests(unittest.TestCase):
@@ -52,8 +60,11 @@ class BackendTests(unittest.TestCase):
 
     def test_pin_requires_exact_five_assets_and_immutable_identity(self):
         for field, value in (
-            ("version", "latest"), ("source_commit", "main"),
-            ("repository", "untrusted/apm"), ("schema", "unknown"), ("assets", {}),
+            ("version", "latest"),
+            ("source_commit", "main"),
+            ("repository", "untrusted/apm"),
+            ("schema", "unknown"),
+            ("assets", {}),
         ):
             with self.subTest(field=field):
                 pin = {**self.pin, field: value}
@@ -62,9 +73,12 @@ class BackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "pin"):
                     release.read_backend_pin(path)
         for field, value in (
-            ("root", "../apm"), ("archive", "https://host/file"),
-            ("sha256", "not-a-hash"), ("executable", "../apm"),
-            ("version_output", "line one\nline two"), ("version_output", ""),
+            ("root", "../apm"),
+            ("archive", "https://host/file"),
+            ("sha256", "not-a-hash"),
+            ("executable", "../apm"),
+            ("version_output", "line one\nline two"),
+            ("version_output", ""),
         ):
             pin = copy.deepcopy(self.pin)
             pin["assets"]["linux-arm64"][field] = value
@@ -140,7 +154,9 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(probe.call_args.args[0].name, "apm")
         self.assertTrue(probe.call_args.args[0].is_absolute())
         self.assertEqual(metadata["executable_sha256"], release.digest(destination / "apm"))
-        self.assertEqual((destination / "_internal/runtime").read_bytes(), b"backend runtime fixture")
+        self.assertEqual(
+            (destination / "_internal/runtime").read_bytes(), b"backend runtime fixture"
+        )
         self.assertEqual(list(destination.parent.iterdir()), [destination])
         with self.assertRaisesRegex(ValueError, "new destination"):
             release.provision_backend("linux-arm64", destination)
@@ -153,9 +169,9 @@ class BackendTests(unittest.TestCase):
             patch.object(release, "read_backend_pin", return_value=self.pin),
             patch.object(release, "urlopen", return_value=response),
             patch.object(release, "_extract_payload") as extract,
+            self.assertRaisesRegex(ValueError, "checksum"),
         ):
-            with self.assertRaisesRegex(ValueError, "checksum"):
-                release.provision_backend("linux-arm64", destination)
+            release.provision_backend("linux-arm64", destination)
         extract.assert_not_called()
         self.assertFalse(destination.exists())
         self.assertEqual(list(destination.parent.iterdir()), [])
@@ -169,32 +185,43 @@ class BackendTests(unittest.TestCase):
                 with tarfile.open(fileobj=response, mode="w:gz") as stream:
                     stream.addfile(tarfile.TarInfo("unexpected-root"))
                 response.seek(0)
-                response.geturl = lambda: (
+                response.geturl = lambda insecure=insecure: (
                     "http://host/asset" if insecure else "https://host/asset"
                 )
                 pin = copy.deepcopy(self.pin)
-                pin["assets"]["linux-arm64"]["sha256"] = hashlib.sha256(response.getvalue()).hexdigest()
+                pin["assets"]["linux-arm64"]["sha256"] = hashlib.sha256(
+                    response.getvalue()
+                ).hexdigest()
                 with (
                     patch.object(release, "read_backend_pin", return_value=pin),
                     patch.object(release, "urlopen", return_value=response),
+                    self.assertRaisesRegex(ValueError, "HTTPS|archive root"),
                 ):
-                    with self.assertRaisesRegex(ValueError, "HTTPS|archive root"):
-                        release.provision_backend("linux-arm64", case / "backend")
+                    release.provision_backend("linux-arm64", case / "backend")
                 self.assertFalse((case / "backend").exists())
 
     def test_version_probe_requires_exact_platform_specific_official_output(self):
         for target, asset in self.pin["assets"].items():
             expected = asset["version_output"]
-            with self.subTest(target=target), patch.object(
-                release.subprocess, "run",
-                return_value=subprocess.CompletedProcess([], 0, expected + "\n", ""),
+            with (
+                self.subTest(target=target),
+                patch.object(
+                    release.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 0, expected + "\n", ""),
+                ),
             ):
-                self.assertEqual(release.probe_backend(self.root / asset["executable"], self.pin, target), expected)
+                self.assertEqual(
+                    release.probe_backend(self.root / asset["executable"], self.pin, target),
+                    expected,
+                )
             wrong = {
                 expected.replace(self.pin["version"], "99.99.99"),
                 "arbitrary prefix " + expected,
                 expected + " trailing text",
-                " " + expected, expected + " ", "\n" + expected,
+                " " + expected,
+                expected + " ",
+                "\n" + expected,
             }
             if target.startswith("windows-"):
                 wrong.add(expected + f" ({self.pin['source_commit'][:7]})")
@@ -202,12 +229,16 @@ class BackendTests(unittest.TestCase):
                 wrong.add(expected.replace(f" ({self.pin['source_commit'][:7]})", ""))
                 wrong.add(expected.replace(self.pin["source_commit"][:7], "fffffff"))
             for output in wrong:
-                with self.subTest(target=target, output=output), patch.object(
-                    release.subprocess, "run",
-                    return_value=subprocess.CompletedProcess([], 0, output, ""),
+                with (
+                    self.subTest(target=target, output=output),
+                    patch.object(
+                        release.subprocess,
+                        "run",
+                        return_value=subprocess.CompletedProcess([], 0, output, ""),
+                    ),
+                    self.assertRaisesRegex(ValueError, "version/source mismatch"),
                 ):
-                    with self.assertRaisesRegex(ValueError, "version/source mismatch"):
-                        release.probe_backend(self.root / asset["executable"], self.pin, target)
+                    release.probe_backend(self.root / asset["executable"], self.pin, target)
 
 
 if __name__ == "__main__":

@@ -81,11 +81,12 @@ _LAST_TLS_STATUS: tuple[str, tuple[object, ...]] | None = None
 _KNOWN_BUNDLED_CERT_FILE: str | None = None
 
 
-def _record_tls_trust_status(message: str, *args: object) -> None:
-    """Cache and emit the selected trust source at debug level."""
+def _record_tls_trust_status(message: str, *args: object, emit: bool = True) -> None:
+    """Cache the trust source, optionally emitting its debug diagnostic."""
     global _LAST_TLS_STATUS
     _LAST_TLS_STATUS = (message, args)
-    logger.debug(message, *args)
+    if emit:
+        logger.debug(message, *args)
 
 
 def log_tls_trust_status() -> None:
@@ -161,11 +162,14 @@ def configure_tls_trust(env: Mapping[str, str] | None = None) -> bool:
         return False
 
     try:
-        # Broad except: a broken/incompatible install can fail at import, not
-        # only with ImportError -- degrade instead of crashing startup.
+        # Foreign import hooks and platform backends can raise arbitrary errors.
         import truststore
-    except Exception as exc:
-        _record_tls_trust_status("TLS: verifying against bundled CA (certifi fallback) [%s]", exc)
+    except Exception:
+        message = "TLS: verifying against bundled CA (certifi fallback); truststore import failed"
+        # Cache for replay without duplicating the sanitized failure diagnostic.
+        _record_tls_trust_status(message, emit=False)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.exception(message, exc_info=False)
         return False
 
     # If the frozen hook pinned SSL_CERT_FILE to bundled certifi, pop it so
@@ -178,12 +182,17 @@ def configure_tls_trust(env: Mapping[str, str] | None = None) -> bool:
 
     try:
         truststore.inject_into_ssl()
-    except Exception as exc:
+    except Exception:
         # Never end with zero trust: restore the bundled certifi path so
         # musl/minimal-container hosts still verify against certifi.
         if bundled_cert is not None:
             environ[_SSL_CERT_FILE_VAR] = bundled_cert
-        _record_tls_trust_status("TLS: verifying against bundled CA (certifi fallback) [%s]", exc)
+        message = (
+            "TLS: verifying against bundled CA (certifi fallback); truststore injection failed"
+        )
+        _record_tls_trust_status(message, emit=False)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.exception(message, exc_info=False)
         return False
 
     _record_tls_trust_status("TLS: verifying against OS trust store (truststore)")
@@ -211,7 +220,8 @@ def _child_bootstrap_dir() -> str | None:
         else:
             candidate = Path(__file__).resolve().parent / _CHILD_SHIM_DIRNAME
         return str(candidate)
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
+        logger.debug("TLS: child bootstrap directory could not be resolved")
         return None
 
 
@@ -290,6 +300,9 @@ def ensure_child_tls_bootstrap(venv_path: str | os.PathLike[str]) -> bool:
         _atomic_write(site_packages / _BOOTSTRAP_PTH_FILE, _PTH_CONTENT.encode("ascii"))
         return True
     except Exception:
+        # PathLike implementations may fail outside the usual filesystem errors.
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.exception("TLS: child bootstrap could not be installed", exc_info=False)
         return False
 
 
@@ -312,7 +325,8 @@ def _is_bundled_certifi(path: str) -> bool:
         import certifi
 
         return normalized == os.path.normcase(os.path.abspath(certifi.where()))
-    except Exception:
+    except (ImportError, OSError, RuntimeError, ValueError):
+        logger.debug("TLS: bundled certifi path could not be resolved")
         return False
 
 

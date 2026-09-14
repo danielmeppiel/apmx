@@ -1,10 +1,16 @@
 """Console utility functions for formatting and output."""
 
 import atexit
+import logging
 import os
+import shutil
+import stat
 import sys
+import textwrap
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import click
@@ -13,16 +19,19 @@ import click
 try:
     from rich import print as rich_print
     from rich.console import Console
+    from rich.errors import ConsoleError, StyleError
     from rich.panel import Panel
     from rich.table import Table
 
     RICH_AVAILABLE = True
+    _RICH_RENDER_ERRORS = (ConsoleError, StyleError, UnicodeError)
 except ImportError:
     RICH_AVAILABLE = False
     Console = Any
     Panel = Any
     Table = Any
     rich_print = None
+    _RICH_RENDER_ERRORS = (UnicodeError,)
 
 # Colorama imports for fallback
 try:
@@ -71,6 +80,13 @@ STATUS_SYMBOLS = {
 _console_instance: Any | None = None
 _console_lock = threading.Lock()
 _console_stderr: bool = False
+_logger = logging.getLogger(__name__)
+
+
+def _report_render_failure(operation: str, error: Exception, recovery: str) -> None:
+    """Use independent stdlib diagnostics, never the failing Rich rendering path."""
+    # Exception messages can contain the original, unsanitized display content.
+    _logger.warning("%s failed (%s). %s", operation, type(error).__name__, recovery)
 
 
 def _get_console() -> Any | None:
@@ -83,10 +99,12 @@ def _get_console() -> Any | None:
     with _console_lock:
         if _console_instance is not None:
             return _console_instance
-        try:  # noqa: SIM105
+        try:
             _console_instance = Console(stderr=_console_stderr)
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            _report_render_failure(
+                "Rich console initialization", exc, "Using basic terminal output."
+            )
     return _console_instance
 
 
@@ -111,6 +129,100 @@ def _reset_console() -> None:
         _console_stderr = False
 
 
+class TerminalMode(Enum):
+    """Contract output profiles; color permission does not determine TTY layout."""
+
+    STREAM = "stream"
+    PLAIN_TTY = "plain-tty"
+    STYLED_TTY = "styled-tty"
+
+
+@dataclass(frozen=True)
+class TerminalCapabilities:
+    mode: TerminalMode
+    width: int
+
+    @property
+    def styled(self) -> bool:
+        return self.mode is TerminalMode.STYLED_TTY
+
+    @property
+    def prose_layout(self) -> bool:
+        return self.mode is not TerminalMode.STREAM
+
+
+def terminal_capabilities() -> TerminalCapabilities:
+    """Resolve the current output stream and width, including after a resize."""
+    rich_console = _get_console()
+    stream = sys.stderr if _console_stderr else sys.stdout
+    tty = rich_console.is_terminal if rich_console is not None else stream.isatty()
+    width = getattr(rich_console, "width", None)
+    if not isinstance(width, int):
+        width = shutil.get_terminal_size(fallback=(80, 24)).columns
+    conservative = os.environ.get("CI", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    } or os.environ.get("TERM", "").strip().lower() in {"", "dumb"}
+    mode = (
+        TerminalMode.STREAM
+        if not tty or conservative
+        else TerminalMode.PLAIN_TTY
+        if "NO_COLOR" in os.environ
+        else TerminalMode.STYLED_TTY
+    )
+    return TerminalCapabilities(mode, max(1, width))
+
+
+def can_confirm_factory() -> bool:
+    """Consent uses stdin/stdout, independently of the diagnostic output stream."""
+    return not os.environ.get("CI") and sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def silence_broken_pipe() -> None:
+    """Prevent shutdown from retrying writes to an already-broken human descriptor."""
+    stream = sys.stderr if _console_stderr else sys.stdout
+    try:
+        descriptor = stream.fileno()
+        mode = os.fstat(descriptor).st_mode
+        if not (stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)):
+            return
+    except (AttributeError, OSError, ValueError):
+        return
+    try:
+        null = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(null, descriptor)
+        finally:
+            os.close(null)
+    except OSError:
+        pass
+
+
+def _wrap_prose(message: str, width: int, indent: int) -> str:
+    """ASCII hanging layout shared by styled, no-color and fallback contract output."""
+    if 0 < indent < width:
+        prefix, body = message[:indent], message[indent:]
+        continuation = " " * indent
+        available = width - indent
+    else:
+        prefix, body, continuation, available = "", message, "", width
+    lines = textwrap.wrap(
+        body,
+        width=available,
+        break_long_words=True,
+        break_on_hyphens=False,
+        replace_whitespace=False,
+        expand_tabs=False,
+    )
+    return (
+        "\n".join(
+            (prefix if index == 0 else continuation) + line for index, line in enumerate(lines)
+        )
+        or prefix
+    )
+
+
 def _rich_echo(
     message: str,
     color: str = "white",
@@ -123,6 +235,7 @@ def _rich_echo(
     accent_length: int | None = None,
     body_style: str = "default",
     hanging_indent: int | None = None,
+    capabilities: TerminalCapabilities | None = None,
 ):
     """Echo with opt-in accents and TTY prose layout; legacy output is unchanged."""
     # Handle backward compatibility - if style is provided, use it as color
@@ -132,6 +245,16 @@ def _rich_echo(
     if symbol and symbol in STATUS_SYMBOLS:
         symbol_char = STATUS_SYMBOLS[symbol]
         message = f"{symbol_char} {message}"
+
+    # Contract-only opt-in. Legacy callers retain their existing layout.
+    if capabilities is not None:
+        plain = not capabilities.styled
+        if capabilities.prose_layout and hanging_indent is not None:
+            full_accent = accent_length == len(message)
+            message = _wrap_prose(message, capabilities.width, hanging_indent)
+            if full_accent:
+                accent_length = len(message)
+        hanging_indent = None
 
     if plain:
         _plain_echo(message)
@@ -178,8 +301,11 @@ def _rich_echo(
             # Lifecycle loggers must be able to disable a closed human stream;
             # a fallback write would only repeat the same broken-pipe failure.
             raise
-        except Exception:
-            pass
+        except _RICH_RENDER_ERRORS as exc:
+            _report_render_failure("Rich text rendering", exc, "Using basic text output.")
+        except OSError as exc:
+            _report_render_failure("Terminal write", exc, "Output cannot be written.")
+            raise
 
     # Colorama fallback
     if COLORAMA_AVAILABLE and Fore and "NO_COLOR" not in os.environ:
@@ -285,8 +411,13 @@ def _rich_panel(content: str, title: str = None, style: str = "cyan"):  # noqa: 
             panel = Panel(content, title=title, border_style=style)
             console.print(panel)
             return
-        except Exception:
-            pass
+        except BrokenPipeError:
+            raise
+        except _RICH_RENDER_ERRORS as exc:
+            _report_render_failure("Rich panel rendering", exc, "Using basic text output.")
+        except OSError as exc:
+            _report_render_failure("Terminal write", exc, "Output cannot be written.")
+            raise
 
     # Fallback to simple text display
     if title:
@@ -315,8 +446,18 @@ def _create_files_table(files_data: list, title: str = "Files") -> Any | None:
                 table.add_row(str(file_info), "")
 
         return table
-    except Exception:
+    except _RICH_RENDER_ERRORS as exc:
+        _report_render_failure(
+            "Rich table construction", exc, "Table rendering is unavailable; use plain output."
+        )
         return None
+
+
+def _stop_download_spinner(status: Any) -> None:
+    try:
+        status.stop()
+    except _RICH_RENDER_ERRORS as exc:
+        _report_render_failure("Spinner cleanup", exc, "The terminal display may need refreshing.")
 
 
 @contextmanager
@@ -329,15 +470,21 @@ def show_download_spinner(repo_name: str):
             pass
     """
     console = _get_console()
+    status = None
     if console and RICH_AVAILABLE:
         try:
-            with console.status(f"[cyan]Downloading {repo_name}...", spinner="dots") as status:
-                yield status
-        except Exception:
-            # Fallback if Rich fails
-            click.echo(f"Downloading {repo_name}...")
-            yield None
+            status = console.status(f"[cyan]Downloading {repo_name}...", spinner="dots")
+            status.start()
+        except _RICH_RENDER_ERRORS as exc:
+            if status is not None:
+                _stop_download_spinner(status)
+            _report_render_failure("Spinner startup", exc, "Continuing without animation.")
+            status = None
+    if status is not None:
+        try:
+            yield status
+        finally:
+            _stop_download_spinner(status)
     else:
-        # Fallback for non-Rich environments
         click.echo(f"Downloading {repo_name}...")
         yield None

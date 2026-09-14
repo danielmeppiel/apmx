@@ -7,6 +7,9 @@ activation command.
 You do need **Git**, the [native GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart),
 and any tools named by a contract's checks. Authenticate with Copilot itself.
 The examples use Python 3.12 or newer; development and native builds use Python 3.12.
+Gherkin is not required by APMX. The software-factory example opts into Behave;
+its [setup instructions](../examples/contracts/software-factory/README.md#set-up)
+install the optional check tools.
 
 This repository is currently private. Downloading releases or cloning the source
 requires an authenticated GitHub account with repository access.
@@ -16,7 +19,7 @@ requires an authenticated GitHub account with repository access.
 | Route | What you get |
 | --- | --- |
 | [Published v0.2.0](https://github.com/danielmeppiel/apmx/releases/tag/v0.2.0) | A complete native bundle with APM and the single-contract runner. |
-| [Current source checkout](#run-the-current-source-checkout) | Factory execution, native skill discovery and improved logs. These changes are not yet in v0.2.0. |
+| [Current source checkout](#run-the-current-source-checkout) | Factory execution, multiple-artifact handoffs, native skill discovery and improved logs. These changes are not yet in v0.2.0. |
 
 The published release was built from commit
 `2f0356d3e7ebb07f62911768198f9b0cd120cca9`. This document does not imply a new

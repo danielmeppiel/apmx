@@ -42,8 +42,10 @@ class LicenseTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(name)
         distribution = SimpleNamespace(
-            metadata={"Name": "example", "License-Expression": "MIT"}, version="1",
-            files=files, locate_file=lambda name: self.site / name,
+            metadata={"Name": "example", "License-Expression": "MIT"},
+            version="1",
+            files=files,
+            locate_file=lambda name: self.site / name,
         )
         self.collect([distribution])
         notices = self.bundle / "LICENSES"
@@ -64,7 +66,9 @@ class LicenseTests(unittest.TestCase):
 
     def test_declared_but_missing_distribution_license_blocks_packaging(self):
         distribution = SimpleNamespace(
-            metadata={"Name": "example"}, version="1", files=["LICENSE"],
+            metadata={"Name": "example"},
+            version="1",
+            files=["LICENSE"],
             locate_file=lambda name: self.site / name,
         )
         with self.assertRaisesRegex(ValueError, "license is missing"):
@@ -73,7 +77,9 @@ class LicenseTests(unittest.TestCase):
     def test_upstream_metadata_only_and_missing_notices_are_explicit(self):
         distributions = [
             SimpleNamespace(
-                metadata={"Name": "metadata-only", "License": "MIT"}, version="1", files=[],
+                metadata={"Name": "metadata-only", "License": "MIT"},
+                version="1",
+                files=[],
             ),
             SimpleNamespace(metadata={"Name": "no-notice"}, version="2", files=[]),
         ]
