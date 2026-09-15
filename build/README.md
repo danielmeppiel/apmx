@@ -256,6 +256,13 @@ draft download and explicit publication receive `contents: write`, because draft
 release APIs require it. Verification receives `GH_TOKEN` only in the download
 step, not when running native bytes; checkouts do not persist credentials.
 
+**Approving preparation authorizes public Actions archive downloads.** Candidate
+archive artifacts are exposed through this public repository's Actions runs
+(GitHub sign-in may be required), even while the GitHub release remains a draft.
+One-day retention does not make this private binary staging. Review the notice
+gate and this exposure boundary before authorizing the preparation dispatch;
+the later decision authorizes GitHub release publication, not first exposure.
+
 Before upload, preparation independently extracts all five archives, checks
 required native notices/inventories and source-commit metadata, and creates an
 **experimental prerelease draft**, never a latest release. Exactly five archives,
@@ -268,8 +275,9 @@ contain release helpers, not application source or an installed application.
 
 Only successful downloaded-byte checks for every target produce the small
 `verified-native-draft` artifact containing `verified-draft.json`. **Preparation
-stops there; it cannot publish.** Review actual bundled-component notice coverage
-and cold installer/download evidence before authorizing exposure. No old archive
+stops there; it cannot publish the GitHub release.** Review actual bundled-component
+notice coverage and cold installer/download evidence before authorizing GitHub
+release publication; Actions archives have already been exposed. No old archive
 is relabeled or silently repacked, and the distribution hold remains until fresh
 downloads actually work.
 
