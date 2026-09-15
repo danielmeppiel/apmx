@@ -192,7 +192,25 @@ python3.12 -m venv .apmx-checks &&
 .apmx-checks/bin/python -m pip install 'behave==1.3.3'
 ```
 
-Stop if setup fails. After it succeeds, select the checker environment:
+Stop if setup fails. With some relocatable or uv-managed Python installations,
+`python3.12 -m venv` can fail during `ensurepip` or standard-library discovery.
+This is checker-environment setup, not evidence of a native APMX failure.
+Preserve the failed environment and diagnostics. In a fresh pinned example
+checkout with no `.apmx-checks` yet, the verified alternative is to replace
+the two environment/dependency commands above with:
+
+```sh
+UV_PYTHON_DOWNLOADS=never uv venv --python 3.12 .apmx-checks &&
+python3.12 -m pip --python .apmx-checks/bin/python install 'behave==1.3.3'
+```
+
+This requires an already installed Python 3.12 and a working, preconfigured
+system pip client. `UV_PYTHON_DOWNLOADS=never` prevents a new interpreter
+download. The approved system client installs only Behave and its dependencies
+into the new environment; pip need not be installed inside it. Keep your approved
+proxy and certificate settings. Do not use `uv sync` or install source APMX.
+
+After either setup succeeds, select the checker environment:
 
 ```sh
 export APMX_SOURCE="$PWD"
@@ -252,7 +270,9 @@ the [Windows factory copy](../examples/contracts/software-factory/README.md#wind
 To repair checker dependencies later, reselect the existing checks-only
 environment and run `python -m pip install 'behave==1.3.3'` through your approved
 package configuration. Do not repeat the clone or install APMX into that
-environment.
+environment. If it was created by `uv venv` without pip, return to the example
+checkout and use the approved system client instead:
+`python3.12 -m pip --python .apmx-checks/bin/python install 'behave==1.3.3'`.
 
 ## Run the current source checkout
 
