@@ -11,7 +11,7 @@ experimental activation command is needed.
 | Route | What you get |
 | --- | --- |
 | [Pinned source below](#run-the-current-source-checkout) **(recommended)** | Factory execution, multiple-artifact handoffs, native skill discovery and current logs, with matching example files. |
-| [Legacy v0.2.0 archives](#legacy-native-archives-optional) | The older single-contract runner. **Not compatible with this factory walkthrough.** |
+| [Native archives](#native-downloads-temporarily-withheld) | **Temporarily withheld.** This source preview does not offer or endorse native binary downloads. |
 
 The pinned source reports version 0.3.0; that is not a published release,
 tag or native archive. Its full commit ID, not `apmx --version`, identifies
@@ -216,121 +216,31 @@ APMX/Python/Behave checks above, then continue to the same factory copy and run
 commands. For later dependency repairs, repeat the approved hash-verified
 installation process, not an unqualified `uv sync`.
 
-## Legacy native archives (optional)
+## Native downloads temporarily withheld
 
-Published [v0.2.0](https://github.com/danielmeppiel/apmx/releases/tag/v0.2.0)
-was built from `2f0356d3e7ebb07f62911768198f9b0cd120cca9`. These older complete
-bundles include Python and APM, but **cannot run the factory described above**.
-Use their matching single-contract examples, not current-source examples:
+This experimental preview is **source-only**. APMX native binary distribution
+is on hold pending third-party notice remediation: historical v0.1/v0.2 Linux
+archives omitted the required libffi MIT notice. Those legacy archives are
+not an offered or endorsed installation route, and this guide provides no
+release or CI-binary download commands. Locally rebuilding a bundle does not
+by itself establish that its third-party notices are complete.
 
-```sh
-git clone --branch v0.2.0 https://github.com/danielmeppiel/apmx.git apmx-v0.2.0
-```
+For source history, v0.2.0 corresponds to
+`2f0356d3e7ebb07f62911768198f9b0cd120cca9` and supports the older
+single-contract runner, not this factory. The pinned source route above is
+the installation path for this preview.
 
-The following downloads are optional legacy instructions, not the recommended
-source installation. They do not imply v0.3.0 binaries have been published.
-
-### macOS and Linux release
-
-With the [GitHub CLI](https://cli.github.com/) authenticated, run:
-
-```sh
-version=0.2.0
-target=macos-arm64  # Change this using the table above.
-install_dir="$HOME/.local/share/apmx/$version"
-archive="apmx-$version-$target.tar.gz"
-
-mkdir -p "$install_dir" &&
-gh release download "v$version" --repo danielmeppiel/apmx \
-  --pattern "$archive" --pattern "$archive.sha256" --dir "$install_dir"
-```
-
-Verify the download **before extracting it**. On macOS:
-
-```sh
-(cd "$install_dir" && shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive")
-```
-
-On Linux:
-
-```sh
-(cd "$install_dir" && sha256sum -c "$archive.sha256" && tar -xzf "$archive")
-```
-
-After successful verification and extraction:
-
-```sh
-export PATH="$install_dir/apmx-$target:$PATH"
-apmx --version
-```
-
-The PATH change applies to this terminal. Add the extracted directory to your
-shell configuration if you want it available in future terminals. Repeating a
-download into a populated directory may refuse existing files; use a fresh
-directory rather than overwriting an installation in use.
-
-### Windows release
-
-Use native `copilot.exe`, not an npm `.cmd` shim. Independent checks use the same
-`sh -c` command language on all platforms, so install **Git for Windows**, which
-provides `sh.exe`.
-
-In PowerShell, with GitHub CLI authenticated:
-
-```powershell
-$version = "0.2.0"
-$archive = "apmx-$version-windows-x86_64.zip"
-$installDir = Join-Path $env:LOCALAPPDATA "apmx\$version"
-New-Item -ItemType Directory -Path $installDir -ErrorAction Stop | Out-Null
-gh release download "v$version" --repo danielmeppiel/apmx `
-  --pattern $archive --pattern "$archive.sha256" --dir $installDir
-if ($LASTEXITCODE -ne 0) { throw "Download failed; do not extract this archive." }
-$archivePath = Join-Path $installDir $archive
-$expected = (Get-Content "$archivePath.sha256" -Raw).Trim().Split()[0]
-$actual = (Get-FileHash $archivePath -Algorithm SHA256).Hash
-if ($actual -ne $expected) { throw "Checksum mismatch; do not extract this archive." }
-Expand-Archive -LiteralPath $archivePath -DestinationPath $installDir -ErrorAction Stop
-$env:PATH = "$(Join-Path $installDir 'apmx-windows-x86_64');$env:PATH"
-apmx --version
-```
-
-The installation directory must be new. The PATH change applies to this
-PowerShell session.
-
-### Keep both native runtimes together
-
-Keep the **whole extracted folder**, not just `apmx` or `apmx.exe`:
-
-```text
-apmx-<target>/
-  apmx                  # apmx.exe on Windows
-  _internal/
-  libexec/apm/
-    apm                 # apm.exe on Windows
-    _internal/
-```
-
-APMX selects its pinned private APM backend, never a host `apm` from PATH.
-Checksums detect changed download bytes; they are not publisher signatures.
-The current releases have **no publisher signing or macOS notarization**.
-
-### Building a native bundle from source
-
-This optional developer step is not needed for the walkthrough. A local build
-is not a published archive. From the pinned source checkout:
-
-```sh
-uv sync --frozen --python 3.12 --extra factory --extra build &&
-uv run --frozen --extra factory --extra build python scripts/release.py build --target macos-arm64
-```
-
-Use the target for your current machine; this is not cross-compilation.
+The hold concerns redistributed native bundles, not the APMX source license.
+The source's Apache-2.0 terms and retained upstream MIT notices are unchanged.
+Source installation still provisions the complete, checksum-verified
+**official APM 0.30.0** backend from its upstream release; that acquisition is
+separate from the withheld APMX archives.
 
 ## Migrating from v0.2.0 to v0.3.0
 
-This section describes the v0.3.0 candidate. A version bump in source is not
-publication: check `gh release list --repo danielmeppiel/apmx` for available
-releases before downloading. The v0.2.0 download examples above remain usable.
+This section describes migration from older source or installations to the
+pinned v0.3.0 source candidate. A version bump in source is not binary
+publication; native downloads are temporarily withheld as explained above.
 
 **Breaking compatibility change: imported skill metadata.** A skill accepted by
 v0.2.0 can now fail admission unless its authored `SKILL.md` declares a nonempty

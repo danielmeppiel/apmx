@@ -11,9 +11,10 @@ accepting it.**
 **Experimental source preview.** Start with the
 [pinned source installation](docs/install.md#run-the-current-source-checkout),
 then [copy, preview and run the factory](examples/contracts/software-factory/README.md#set-up).
-The older v0.2.0 native archives do not run this factory. Current harness
-support is **native GitHub Copilot CLI only**; authenticate with Copilot before
-execution.
+This preview is **source-only**:
+[native downloads are temporarily withheld](docs/install.md#native-downloads-temporarily-withheld)
+pending third-party notice remediation. Current harness support is **native
+GitHub Copilot CLI only**; authenticate with Copilot before execution.
 
 ## Start with a contract
 

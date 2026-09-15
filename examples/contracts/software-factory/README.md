@@ -15,7 +15,8 @@ Complete the [pinned source installation](../../../docs/install.md#run-the-curre
 first, including backend provisioning and the `factory` extra. Stay in that
 terminal: `APMX_SOURCE` identifies the checkout and PATH selects its APMX and
 Python 3.12. **Behave 1.3.3 is optional for APMX**, but required for this
-example's Gherkin checks. The legacy v0.2.0 binary cannot run this factory.
+example's Gherkin checks. This preview is source-only;
+[native downloads are temporarily withheld](../../../docs/install.md#native-downloads-temporarily-withheld).
 
 On macOS or Linux, check the selected tools before copying anything:
 
