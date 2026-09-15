@@ -283,6 +283,11 @@ it is not evidence of an automatically repaired or failed model-generated run.
 
 ## Observed run
 
+For the separate 2026-09-15 fresh-user source run, see the
+[sanitized terminal replays and proof record](../../../docs/demo/README.md).
+Download the self-contained HTML to open locally; the record distinguishes
+actual execution time from edited playback and the post-run negative control.
+
 On 2026-09-14, the factory command ran with real Copilot and a complete local
 macOS ARM64 bundle, including its frozen artifact-tool server and bundled APM.
 It preserved the configured model and completed all four contracts and six
