@@ -8,7 +8,8 @@
 
 These are authored, secret-free fixtures, not copies of a governed project.
 Copy this directory to a fresh disposable directory outside another Git
-repository. Use standalone apmx, Python 3,
+repository. Use the [pinned source installation](../../docs/install.md#run-the-current-source-checkout),
+Python 3.12,
 and an authenticated native Copilot CLI with access to your selected model.
 Do not remove a project's remotes or policy to make it eligible.
 
@@ -108,6 +109,7 @@ local-run confirmation, or explicit automation flags, permits only fully
 checked native outputs to advance. It never permits failed or incomplete
 checks to be ignored. Passing checks never authorizes merge or delivery.
 
-On Windows replace `python3` check commands with a native Python executable,
-using quoted forward-slash paths. Git for Windows' `sh.exe` runs checks;
+On Windows use the installation guide's PowerShell setup and adjust only the
+disposable example contract copies to use `python` from the selected native
+environment. Git for Windows' `sh.exe` runs checks;
 the native Copilot producer never runs through a `.cmd` shim.

@@ -1,9 +1,5 @@
 # Run a checkout feature factory
 
-```sh
-apmx ./feature-factory --on copilot
-```
-
 Give Copilot a checkout feature request. Get a plan, specification, code patch,
 implementation report and advisory review, with independent checks between
 contracts. APMX follows artifact dependencies; there is no separate pipeline
@@ -15,57 +11,74 @@ Both pricing and checkout totals must agree.
 
 ## Set up
 
-Use the [current APMX build](../../../docs/install.md), Git, authenticated native
-Copilot CLI, and Python 3.12 or newer. **Behave is optional for APMX.** This
-example chooses Gherkin acceptance and therefore needs **Behave 1.3.3** in the
-Python environment used by its checks. Other contracts can use other tools.
+Complete the [pinned source installation](../../../docs/install.md#run-the-current-source-checkout)
+first, including backend provisioning and the `factory` extra. Stay in that
+terminal: `APMX_SOURCE` identifies the checkout and PATH selects its APMX and
+Python 3.12. **Behave 1.3.3 is optional for APMX**, but required for this
+example's Gherkin checks. The legacy v0.2.0 binary cannot run this factory.
 
-For source-checkout development, the optional extra is:
-
-```sh
-uv sync --frozen --extra dev --extra factory
-. .venv/bin/activate
-```
-
-For a native APMX binary, use a separate Python environment without installing
-APMX into it, so it does not shadow your installed binary:
+On macOS or Linux, check the selected tools before copying anything:
 
 ```sh
-python3 -m venv .checkout-checks
-. .checkout-checks/bin/activate
-python3 -m pip install 'behave==1.3.3'
+command -v apmx
+python3 -c 'import sys, behave; print(sys.executable); print("Behave", behave.__version__)'
+git --version
+copilot --version
 ```
 
-Keep that environment active while running APMX and replaying checks. The
-native bundle supplies its own APMX runtime, not this example's optional tools.
-Do not install packages globally.
+APMX and Python must come from the source checkout's `.venv/bin/`, and Behave
+must report `1.3.3`. Copilot must be installed and authenticated through its own
+CLI; a version response does not establish login. Stop on any missing tool.
 
-From the source checkout, copy the example to a new directory:
+Create a fresh caller outside Git and copy the example. This uses a unique
+temporary directory rather than overwriting earlier runs:
 
 ```sh
-mkdir "$HOME/feature-factory" &&
-cp -R examples/contracts/software-factory/. "$HOME/feature-factory/" &&
-cd "$HOME"
+demo="$(mktemp -d "${TMPDIR:-/tmp}/apmx-demo.XXXXXX")" &&
+if git -C "$demo" rev-parse --show-toplevel >/dev/null 2>&1; then
+  printf '%s\n' "Stop: choose a demo location outside any Git repository." >&2
+  false
+else
+  mkdir "$demo/feature-factory" &&
+  cp -R "$APMX_SOURCE/examples/contracts/software-factory/." "$demo/feature-factory/" &&
+  cd "$demo" &&
+  printf 'Demo directory: %s\n' "$PWD"
+fi
 ```
 
-If that directory exists, choose a new name; preserve earlier runs. Use a demo
-directory outside another Git repository. Do not remove a real project's
-remotes or policy to bypass admission.
+Keep the printed directory: outputs and records will live below it, not in
+your source installation. Temporary folders can be cleaned by your operating
+system; preserve the complete demo directory somewhere durable when finished.
+If your chosen location is inside Git, choose another location; never remove
+a real project's remotes or policy to bypass admission.
 
 ### Windows
 
-Use native Copilot, Git for Windows, Python 3.12 or newer and a matching APMX
-build. Create and activate the optional check environment in PowerShell:
+Complete the [Windows source installation](../../../docs/install.md#windows-source-installation)
+first. In that same PowerShell session, make a new caller and adjust only the
+disposable contract copies to use `python` from the selected `.venv\Scripts`
+environment. A separate `py -3.12` launcher could select an environment without
+Behave, so it is not used here.
 
 ```powershell
-py -3.12 -m venv .checkout-checks
-& .\.checkout-checks\Scripts\Activate.ps1
-python -m pip install 'behave==1.3.3'
+$demo = Join-Path $env:TEMP ("apmx-demo-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $demo -ErrorAction Stop | Out-Null
+git -C $demo rev-parse --show-toplevel 2>$null
+if ($LASTEXITCODE -eq 0) { throw "Choose a demo location outside any Git repository." }
+$factory = Join-Path $demo "feature-factory"
+New-Item -ItemType Directory -Path $factory -ErrorAction Stop | Out-Null
+Copy-Item "$(Join-Path $env:APMX_SOURCE 'examples\contracts\software-factory')\*" $factory -Recurse -ErrorAction Stop
+Get-ChildItem (Join-Path $factory "contracts") -Filter "*.contract.md" | ForEach-Object {
+  $text = [IO.File]::ReadAllText($_.FullName).Replace("python3 -I -B checks/", "python -I -B checks/")
+  [IO.File]::WriteAllText($_.FullName, $text, [Text.UTF8Encoding]::new($false))
+}
+Set-Location $demo
+Write-Output "Demo directory: $demo"
 ```
 
-Copy the example to a new directory under your home directory. In the copied
-contracts, replace `python3 ` with `python ` so checks use the active environment,
-not a different Python launcher. Then preview and run that directory with APMX.
+Keep the selected environment on PATH. The original checkout and check resources
+are unchanged. The remaining APMX commands work in PowerShell too; use `python`
+instead of `python3` for manual checker replay.
 
 ## What the contracts deliver
 
@@ -127,10 +140,22 @@ From the directory containing `feature-factory`, preview without model work:
 apmx ./feature-factory --on copilot --plan
 ```
 
-Then run the first command on this page. APMX requests host-access and local
-handoff consent before execution. The configured model is preserved unless
-you explicitly select another model. Only run trusted contracts: production
-and checks execute on your host, not in a sandbox, and model usage can cost money.
+Expect four contracts in dependency order: planning, specification, build and
+review; five declared output files; and six checks. Preview exits `0` and does
+not install packages, run checkers or verify Copilot login. Continue only when
+it succeeds and the plan matches the example.
+
+**Only run trusted contracts, inputs and checkers.** Copilot, checks and package
+preparation execute on your host, not in a sandbox; they can use host files,
+network and available logins. Model usage can cost money. To execute:
+
+```sh
+apmx ./feature-factory --on copilot
+```
+
+APMX requests host-access and local-handoff consent. This retains your configured
+Copilot model unless you explicitly select another model. APMX runs checks after
+each delivery; a failed or incomplete delivery does not advance.
 
 ### Automation
 
@@ -141,33 +166,57 @@ apmx ./feature-factory --on copilot \
   --allow-host-access --allow-unproven-inputs
 ```
 
+In PowerShell, put the same command and both flags on one line.
 The second permission admits only complete local deliveries whose required
 checks passed. It does not permit failed or incomplete outputs.
 
 ### Artifacts and checks
 
-Use the printed aggregate record and `Artifacts:` directory:
+Use the printed aggregate record and `Artifacts:` directory, relative to the
+caller directory you created:
 
 ```text
 feature-factory/.apm/chains/<id>/record.json
 feature-factory/.apm/chains/<id>/artifacts/
+feature-factory/.apm/runs/<run-id>/record.json
+feature-factory/.apm/runs/<run-id>/transcript.log
 ```
 
 The artifact view contains the exact admitted outputs and original required
-inputs/check resources. A directory existing is not proof of completion; read
-the record's `complete` field and required check results.
+inputs/check resources. Do not edit retained records or artifacts. A directory
+existing, a green line or exit `21` is not proof of completion. Open the chain
+record and confirm `complete: true`, all four `nodes` are `completed`, no
+`result.stop_reason`, and all six checks have `normalized: 0` in the node
+results/per-run records. Check names repeat across contracts: planning and
+specification each have `document`, build has `acceptance`, `regression` and
+`report`, and review has `document`.
+
+The completed artifact view must contain all five deliveries:
+`plan.md`, `specification.md`, `changes.diff`, `implementation.md` and `review.md`.
+Read the documents and review the patch yourself. The original source checkout
+is unchanged; APMX does not automatically apply the patch to a project.
 
 Replay either patch-aware checker from that artifact view:
 
 ```sh
-cd "PASTE_PRINTED_ARTIFACTS_DIRECTORY"
-python3 -I -B checks/acceptance.py changes.diff
-python3 -I -B checks/regression.py changes.diff
+printf 'Paste the printed Artifacts directory: '
+IFS= read -r artifacts
+if cd "$artifacts"; then
+  python3 -I -B checks/acceptance.py changes.diff
+  printf 'Acceptance exit: %s\n' "$?"
+  python3 -I -B checks/regression.py changes.diff
+  printf 'Regression exit: %s\n' "$?"
+fi
 ```
 
 **Each invocation starts from the captured baseline, applies the exact patch,
 and tests that candidate.** A separate `git apply --check` followed by an
 unrelated test invocation would not test the same workspace.
+
+On PowerShell, use `Set-Location (Read-Host "Paste the printed Artifacts directory")`
+and the same checker commands with `python`. Inspect each check's JSON and exit
+status (`$?` immediately after a check in a POSIX shell, `$LASTEXITCODE` in
+PowerShell); do not let the second invocation hide the first one's failure.
 
 The regression command runs the supplied cases and original tests in one fresh
 Python process, then generated tests in another. Generated-test imports and mocks
@@ -191,9 +240,48 @@ Empty, filtered, skipped, undefined or pending Gherkin does not pass. External
 Behave configuration and environment selection are ignored. Missing optional
 Behave returns `2` with setup guidance, not a passing skipped check.
 
+## Recover after a failed or incomplete run
+
+APMX stops dependent work; it does **not** automatically repair, retry or resume
+the factory. A stopped factory may have per-run artifacts but no completed
+aggregate `artifacts/` view.
+
+1. **Find the first stopped contract.** Open the printed chain `record.json`.
+   Read `result.stop_reason`, the stopped node's `reason` and `result`, and its
+   referenced run directory. In that run's `record.json`, inspect required
+   `checks`, their `normalized` values and raw `process` observations. Read the
+   adjacent `transcript.log` for retained checker stdout/stderr and diagnostics.
+   A leaf record's `complete` field means finalization finished; it does not by
+   itself mean outputs/checks passed.
+2. **Distinguish a defect from incomplete execution.** A check's exit `1`
+   rejects behavior; `2` means missing tooling, invalid inputs or incomplete
+   execution. For a missing Behave import, return to `APMX_SOURCE`, rerun
+   `uv sync --frozen --python 3.12 --extra factory`, and reselect the documented
+   PATH. Do not replace a failed check with a skip or treat exit `21` as success.
+   For storage/cleanup failures, resolve the reported condition before retrying.
+3. **Revise with your own harness, outside retained evidence.** Copy the failed
+   run's `baseline/` and available `artifacts/` contents into a separate scratch
+   directory for diagnosis. For an implementation failure, replay the two
+   patch-aware checkers there against `changes.diff`; each invocation applies
+   the patch to its own captured baseline. Use the diagnostics to improve the
+   disposable factory's task instructions or request without changing the
+   acceptance rules, protected checks or seed application. Keep the original
+   `.apm/` records, artifacts and baselines untouched.
+4. **Preview and rerun the factory.** Return to the caller containing
+   `feature-factory`, run `apmx ./feature-factory --on copilot --plan`, then
+   `apmx ./feature-factory --on copilot` after the preview succeeds. This is a
+   new full attempt, not a resume from the failed node; it can incur new model
+   costs. Keep both attempts and inspect the new chain's completion, all six
+   checks and all five outputs before using anything.
+
+For example, free delivery at `> 5000` rather than `>= 5000` must still be
+rejected at exactly 5000 cents. Fix the proposed implementation, not the
+threshold check. The controlled replay below demonstrates that rejection;
+it is not evidence of an automatically repaired or failed model-generated run.
+
 ## Observed run
 
-On 2026-09-14, the command above ran with real Copilot and a complete local
+On 2026-09-14, the factory command ran with real Copilot and a complete local
 macOS ARM64 bundle, including its frozen artifact-tool server and bundled APM.
 It preserved the configured model and completed all four contracts and six
 checks, publishing five artifacts. Copilot invoked the Git exporter after
