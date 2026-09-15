@@ -8,6 +8,13 @@ that must pass before another factory task can use them.**
 Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
+**Experimental source preview.** Start with the
+[pinned source installation](docs/install.md#run-the-current-source-checkout),
+then [copy, preview and run the factory](examples/contracts/software-factory/README.md#set-up).
+The older v0.2.0 native archives do not run this factory. Current harness
+support is **native GitHub Copilot CLI only**; authenticate with Copilot before
+execution.
+
 ## Start with a contract
 
 A **contract** is a Markdown task with three declarations: what it needs,
@@ -47,22 +54,24 @@ A **factory** is a directory of contracts, checks and starting inputs. APMX
 resolves their `needs` into execution order. No pipeline file or last-step
 selection.
 
-Use the [matching APMX build](docs/install.md#run-the-current-source-checkout)
-and [prepare the example](examples/contracts/software-factory/README.md#set-up).
-Current harness support is the native GitHub Copilot CLI.
-From the directory containing `feature-factory`, run:
+After [source installation](docs/install.md#run-the-current-source-checkout)
+and [example setup](examples/contracts/software-factory/README.md#set-up),
+run these commands from the disposable directory containing `feature-factory`:
 
 ```sh
+apmx ./feature-factory --on copilot --plan &&
 apmx ./feature-factory --on copilot
 ```
 
-APMX shows the work and asks for confirmation. Add `--plan` to preview without
-model calls, installation or checks.
+Continue to the second command only if the preview succeeds. Preview makes no
+model calls, installs nothing and runs no checks; it does not verify Copilot
+login or checker readiness. Execution shows the work and asks for confirmation.
 
 **Observed with real Copilot and a local native macOS build:** all four
 contracts and six checks completed. The patch changed two source files and
 added regression tests. A 5000-cent subtotal now has free delivery; 4999 still
-costs 500 cents. A [deliberately broken patch was rejected at the threshold](examples/contracts/software-factory/README.md#observed-run).
+costs 500 cents. In a separate checker replay,
+a [deliberately broken patch was rejected at the threshold](examples/contracts/software-factory/README.md#observed-run).
 
 ## Deliver files, not a working directory
 
@@ -104,6 +113,11 @@ block dependent work. Follow the printed paths:
 - `.apm/chains/<id>/artifacts/` collects the completed factory's artifacts.
 - `.apm/runs/<id>/record.json` records each contract's inputs and checks.
 
+For this example, completion means all four contracts, all six required checks
+and all five artifacts are present. If a check fails, dependent work stops.
+[Inspect diagnostics, revise with your own harness and rerun](examples/contracts/software-factory/README.md#recover-after-a-failed-or-incomplete-run);
+APMX does not automatically repair or resume the factory.
+
 **Local execution is not a sandbox.** Agents and checks can use host files,
 network and logins; model usage may cost money. Passing checks does not certify
 isolation. Local results remain **UNPROVEN (exit 21)**; inspect the record to
@@ -114,13 +128,13 @@ distinguish a completed run from incomplete work.
 APMX runs and checks; Copilot does the agent work. Bundled APM prepares shared
 packages and skills when needed, with no separate APM installation.
 
-- [Factory setup, artifacts and replaying checks](examples/contracts/software-factory/README.md)
+- [Factory setup, artifacts and manual recovery](examples/contracts/software-factory/README.md)
 - [Write your first contract](examples/contracts/first-contract/README.md)
 - [Reuse a packaged task and skill](examples/contracts/packaged-job/README.md)
 - [Report a problem or contribute](https://github.com/danielmeppiel/apmx/issues) - include a small example and remove secrets from logs.
 
-This private repository requires authorized access. APMX is an independent
-project by Daniel Meppiel, licensed under Apache-2.0 for APMX-specific additions.
+APMX is an independent project by Daniel Meppiel, licensed under Apache-2.0
+for APMX-specific additions.
 Retained Microsoft APM material remains MIT-licensed; its terms and attribution
 are preserved in NOTICE. This is not an official Microsoft or GitHub release.
 [Source origin](docs/source-origin.md) | [License](LICENSE) | [Notices](NOTICE)

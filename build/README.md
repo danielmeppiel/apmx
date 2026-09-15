@@ -22,8 +22,8 @@ Its manifest records the versions, copied files, license metadata, and explicitl
 missing upstream notices. This intentionally includes the build-environment
 distribution superset rather than claiming a complete bundled-dependency audit.
 Missing Python license or a missing file declared by installed metadata blocks
-the build. The original standalone/upstream MIT license and NOTICE remain at the
-archive root.
+the build. The archive-root LICENSE covers APMX-specific additions under
+Apache-2.0; NOTICE retains the original Microsoft APM MIT grant and attribution.
 
 ## Pinned APM backend
 
