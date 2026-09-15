@@ -37,6 +37,16 @@ def candidate(tmp_path: Path) -> Path:
     return root
 
 
+def test_authored_patch_cleans_git_objects_without_changing_the_patch(tmp_path: Path) -> None:
+    neighbor = tmp_path / "keep.txt"
+    neighbor.write_bytes(b"not owned by the patch fixture")
+    first = authored_patch(tmp_path)
+    assert not (tmp_path / "software-factory-patch-good").exists()
+    assert authored_patch(tmp_path) == first
+    assert not (tmp_path / "software-factory-patch-good").exists()
+    assert neighbor.read_bytes() == b"not owned by the patch fixture"
+
+
 @pytest.mark.parametrize(
     ("document", "artifact"),
     [

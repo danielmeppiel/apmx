@@ -12,6 +12,8 @@ from typing import Any
 
 import pytest
 
+from apmx.utils.path_security import safe_rmtree
+
 EXAMPLE = Path(__file__).resolve().parents[3] / "examples/contracts/software-factory"
 pytestmark = pytest.mark.component
 
@@ -114,7 +116,7 @@ def authored_patch(
         (working / name).write_bytes(raw.replace(b"\n", b"\r\n") if crlf else raw)
     git("add", "--intent-to-add", "--", "tests/test_free_shipping.py")
     raw = git("diff", "--no-ext-diff", "--no-textconv", "--no-renames")
-    shutil.rmtree(working)
+    safe_rmtree(working, root)
     return raw
 
 

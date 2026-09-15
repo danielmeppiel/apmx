@@ -15,6 +15,7 @@ from test_software_factory_support import EXAMPLE, invoke, outputs, seed
 
 from apmx.cli import main
 from apmx.contracts import resolution, workspace
+from apmx.utils.yaml_io import load_frontmatter_document
 
 __all__ = ["caller", "private_preparation"]
 pytestmark = pytest.mark.component
@@ -32,12 +33,50 @@ def prepare_example(root: Path, renamed: bool = False) -> dict[str, tuple[str, .
     deliveries = {}
     for index, (name, files) in enumerate(DELIVERIES.items()):
         path = root / "contracts" / name
-        text = path.read_text().replace("python3 -I -B ", f"{shlex.quote(sys.executable)} -I -B ")
-        path.write_text(text, encoding="ascii")
+        document = load_frontmatter_document(path)
+        document.metadata["verify"] = {
+            key: shlex.join([sys.executable, *shlex.split(command)[1:]])
+            for key, command in document.metadata["verify"].items()
+        }
+        path.write_text(
+            f"---\n{json.dumps(document.metadata)}\n---\n{document.body}",
+            encoding="ascii",
+            newline="\n",
+        )
         if renamed:
             path = path.rename(path.with_name(f"stage-{9 - index}.contract.md"))
         deliveries[path.name] = files
     return deliveries
+
+
+@pytest.mark.parametrize(
+    "executable",
+    [
+        r"C:\Program Files\Python\python.exe",
+        r"C:\Users\D'Angelo\Python\python.exe",
+        "/opt/Python tools/python3",
+        "/opt/D'Angelo/python3",
+    ],
+)
+def test_factory_checks_preserve_shell_arguments_and_contract_body(
+    tmp_path, monkeypatch, executable
+):
+    monkeypatch.setattr(sys, "executable", executable)
+    root = tmp_path / "factory"
+    prepare_example(root)
+    for name in DELIVERIES:
+        original = load_frontmatter_document(EXAMPLE / "contracts" / name)
+        prepared = load_frontmatter_document(root / "contracts" / name)
+        assert prepared.body == original.body
+        assert prepared.metadata.keys() == original.metadata.keys()
+        for key in original.metadata.keys() - {"verify"}:
+            assert prepared.metadata[key] == original.metadata[key]
+        assert prepared.metadata["verify"].keys() == original.metadata["verify"].keys()
+        for key, command in original.metadata["verify"].items():
+            assert shlex.split(prepared.metadata["verify"][key]) == [
+                executable,
+                *shlex.split(command)[1:],
+            ]
 
 
 @pytest.mark.skipif(
