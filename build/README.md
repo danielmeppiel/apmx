@@ -7,6 +7,14 @@ existing or newly built archives. Use the
 [pinned source preview](../docs/install.md#run-the-current-source-checkout);
 [native downloads are temporarily withheld](../docs/install.md#native-downloads-temporarily-withheld).
 
+Select a reviewed build interpreter explicitly before using the commands below:
+set `APMX_BUILD_PYTHON` and `UV_PYTHON` to the same absolute Python executable
+(`python.exe` on Windows). The workflows bind both to the exact `setup-python`
+output, verify the actual base executable, and record its version, build,
+framework profile and executable SHA-256. `UV_PYTHON_DOWNLOADS=never` alone is
+not interpreter selection. No interpreter replacement or OS installation is
+performed by the native notice gate.
+
 `uv sync --frozen --extra dev --extra build` installs the publicly resolved lock.
 `uv run --frozen --extra dev --extra build python scripts/release.py build --target macos-arm64`
 creates a PyInstaller directory and `dist/assets/apmx-VERSION-macos-arm64.tar.gz`
@@ -47,6 +55,31 @@ identity, not original acquisition or an APT signature chain. A `_ctypes`
 consumer with undefined `ffi_*` symbols is not assigned an embedded libffi
 implementation or an invented version. Runtime provider resolution and full
 system-loader closure are not claimed by the notice inventory.
+
+Generic CPython licensing does not cover arbitrary statically embedded native
+components. A private local preflight exposed this in an unsupported uv-managed
+Python-build-standalone install-only runtime: its wrapper Python contained
+defined libffi implementations, but its installed distribution supplied only a
+generic Python LICENSE, not the complete native-license bundle. That archive
+remains withheld; functional success does not clear redistribution.
+
+For this release, macOS native builds require a selected framework CPython.
+Supporting the incomplete install-only compiler is not required; do not borrow
+the Linux libffi grant for an unidentified static implementation. Source
+development and checker-only Python environments are not restricted by this
+native-compiler policy. A portable Mach-O load-command/symbol-table check rejects
+unmapped defined `ffi_*` implementations, including any universal-binary slice;
+undefined system-library consumers are not mislabeled. Malformed evidence or
+missing Python-core symbol evidence also refuses. The same guard runs during
+collection, archive validation and downloaded extraction, independently of
+manifest claims. It adds no platform-tool or runtime dependency.
+
+Build-time interpreter selection and archive verification are separate:
+`RELEASE.json` records the verified selected interpreter profile, while archive
+checks validate that profile and actual native bytes **without inspecting the
+verifier host's interpreter**. Linux draft staging can therefore validate macOS
+archives. If a hosted provider supplies an unexpected unsupported runtime, the
+gate refuses rather than presuming that `setup-python` proves notice coverage.
 
 Builds require a clean committed tree. `RELEASE.json` binds `source_commit` and
 the native-notice inventory digest; public draft creation rechecks all five

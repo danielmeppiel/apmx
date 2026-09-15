@@ -141,6 +141,7 @@ def git_trace_details(path: Path) -> str:
 
 def build_actor(output: Path) -> None:
     require(os.name == "nt", "Only Windows needs a frozen protocol actor")
+    release.interpreter_identity()
     require(not output.exists(), "Actor build requires a fresh output directory")
     with tempfile.TemporaryDirectory(prefix="apmx-actor-build-") as temporary:
         build_root = Path(temporary)
@@ -1079,6 +1080,7 @@ def main() -> None:
         return
     if args.binary is None or args.version is None:
         parser.error("--binary and --version are required")
+    release.interpreter_identity()
     binary = args.binary.resolve()
     require(binary.is_file(), "Frozen executable not found")
     header = binary.read_bytes()[:4]

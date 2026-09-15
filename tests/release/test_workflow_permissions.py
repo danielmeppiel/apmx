@@ -211,6 +211,16 @@ class PublicWorkflowTests(unittest.TestCase):
         for text in (self.builder, self.job("verify-downloaded")):
             self.assertIn('python scripts/smoke.py --binary "$BUNDLE/$executable"', text)
 
+    def test_uv_build_and_smoke_use_the_explicit_setup_python_output(self):
+        native = self.builder.split("  native:\n", 1)[1]
+        for text in (native, self.job("verify-downloaded")):
+            self.assertIn("id: python", text)
+            self.assertIn("SELECTED_PYTHON: ${{ steps.python.outputs.python-path }}", text)
+            for variable in ("UV_PYTHON", "APMX_BUILD_PYTHON"):
+                self.assertIn(f'echo "{variable}=$SELECTED_PYTHON" >> "$GITHUB_ENV"', text)
+            self.assertLess(text.index("APMX_BUILD_PYTHON="), text.index("uv sync"))
+        self.assertIn("build_interpreter(native_target())", native)
+
 
 if __name__ == "__main__":
     unittest.main()
