@@ -15,6 +15,30 @@ from tests.release.test_backend import add_backend_fixture
 
 
 class PromotionTests(unittest.TestCase):
+    def test_release_notes_bind_candidate_and_preserve_migration_and_assurance_limits(self):
+        notes = promotion.release_notes("0.3.0", "a" * 40)
+        for text in (
+            "Standalone apmx 0.3.0",
+            "`" + "a" * 40 + "`",
+            "multiple output files",
+            "original checkout",
+            "optional Gherkin/Behave",
+            "BREAKING: imported skill metadata",
+            "nonempty `name` and `description`",
+            "authored source package",
+            "Do not patch generated `apm_modules`",
+            "apm-contract-run/0.1",
+            "apm-contract-run/0.2",
+            "--allow-host-access --allow-unproven-inputs",
+            "UNPROVEN (21)",
+            "NOT live inference",
+            "APM 0.30.0",
+            "not publisher authentication",
+            "No trusted publisher signature or Apple notarization",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, notes)
+
     def setUp(self):
         self.commit = "a" * 40
         self.version = "0.1.0"

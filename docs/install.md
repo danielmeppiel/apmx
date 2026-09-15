@@ -187,6 +187,55 @@ uv run --frozen --extra build python scripts/release.py build --target macos-arm
 
 Use the target for your current machine; this is not cross-compilation.
 
+## Migrating from v0.2.0 to v0.3.0
+
+This section describes the v0.3.0 candidate. A version bump in source is not
+publication: check `gh release list --repo danielmeppiel/apmx` for available
+releases before downloading. The v0.2.0 download examples above remain usable.
+
+**Breaking compatibility change: imported skill metadata.** A skill accepted by
+v0.2.0 can now fail admission unless its authored `SKILL.md` declares a nonempty
+`name` and `description`. Names must contain 1-64 lowercase letters or digits,
+optionally separated by single hyphens; leading, trailing and consecutive
+hyphens are not allowed. For example:
+
+```yaml
+---
+name: handoff-style
+description: Write concise handoffs.
+---
+```
+
+Update the authored source package, publish/select its updated revision through
+the normal dependency workflow, and keep `apm.yml` and the generated lock
+coherent. Do not patch generated `apm_modules` copies or edit lock hashes by
+hand. Preview the consuming contract again before consenting to execution.
+
+Selected context names must not collide case-insensitively. Context declaring
+unsupported activation metadata is rejected, including hooks, MCP/LSP servers,
+agent/model overrides, allowed tools or execution context. These are admission
+limits, not an instruction to strip capabilities from a skill that needs them.
+Only explicitly selected package skills are projected into native discovery.
+Ambient project skill trees are not captured implicitly, and naming
+`.agents/skills`, `.github/skills` or `.claude/skills` files in `needs` cannot
+activate them; use package `imports` instead. This does not prohibit unrelated
+project skills from existing in your checkout.
+
+Scalar contracts and existing single-contract invocations remain supported.
+Scalar run records retain `apm-contract-run/0.1`; multiple-output inventories
+use `apm-contract-run/0.2`. Consumers of records should inspect the schema
+instead of assuming every delivery is one file. Existing runs, snapshots and
+artifact paths are not migrated or rewritten.
+
+Factories infer ordering from declared files; artifact tools edit private source
+copies rather than overwriting caller source files. A complete local handoff needs
+every declared output, passing
+required checks, intact inventory and consent. For automation, pass both
+`--allow-host-access` and `--allow-unproven-inputs`. Native execution remains
+unsandboxed and **UNPROVEN / exit 21**, even when checks pass. Behave remains an
+optional checker prerequisite for the software-factory example, not an APMX
+requirement.
+
 ## Before running
 
 Run only factories and contracts you trust. Execution permits Copilot, checks
