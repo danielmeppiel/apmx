@@ -8,7 +8,7 @@ that must pass before another factory task can use them.**
 Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
-**Experimental v0.3.0 prebuilt release - publication pending.**
+**Experimental v0.3.1 prebuilt release - publication pending.**
 The [prebuilt installation guide](docs/install.md#install-a-prebuilt-archive)
 is staged for the new release; use the working
 [pinned source fallback](docs/install.md#run-the-current-source-checkout)
