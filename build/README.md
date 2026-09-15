@@ -7,6 +7,14 @@ existing or newly built archives. Use the
 [pinned source preview](../docs/install.md#run-the-current-source-checkout);
 [native downloads are temporarily withheld](../docs/install.md#native-downloads-temporarily-withheld).
 
+Select a reviewed build interpreter explicitly before using the commands below:
+set `APMX_BUILD_PYTHON` and `UV_PYTHON` to the same absolute Python executable
+(`python.exe` on Windows). The workflows bind both to the exact `setup-python`
+output, verify the actual base executable, and record its version, build,
+framework profile and executable SHA-256. `UV_PYTHON_DOWNLOADS=never` alone is
+not interpreter selection. No interpreter replacement or OS installation is
+performed by the native notice gate.
+
 `uv sync --frozen --extra dev --extra build` installs the publicly resolved lock.
 `uv run --frozen --extra dev --extra build python scripts/release.py build --target macos-arm64`
 creates a PyInstaller directory and `dist/assets/apmx-VERSION-macos-arm64.tar.gz`
@@ -31,6 +39,54 @@ distribution superset rather than claiming a complete bundled-dependency audit.
 Missing Python license or a missing file declared by installed metadata blocks
 the build. The archive-root LICENSE covers APMX-specific additions under
 Apache-2.0; NOTICE retains the original Microsoft APM MIT grant and attribution.
+
+`LICENSES/native-manifest.json` separately inventories actual native-file
+signatures and SHA-256 identities in both runtimes. Every redistributed Linux
+`libffi*.so*` file must independently match a reviewed Ubuntu Noble
+`libffi8 3.4.6-1build1` library identity. Its exact upstream 3.4.6 LICENSE and full
+Ubuntu source-package copyright file are copied under `LICENSES/native/libffi/`.
+The source copyright file retains file-scoped holders and grants; its separate
+build/test-tool licenses are not relabeled as the runtime library's MIT grant.
+
+Unknown library bytes, missing/truncated/changed notices, inventory omissions,
+and a changed inventory hash in `RELEASE.json` block archiving and extracted
+bundle verification. Matching a reviewed package member establishes byte
+identity, not original acquisition or an APT signature chain. A `_ctypes`
+consumer with undefined `ffi_*` symbols is not assigned an embedded libffi
+implementation or an invented version. Runtime provider resolution and full
+system-loader closure are not claimed by the notice inventory.
+
+Generic CPython licensing does not cover arbitrary statically embedded native
+components. A private local preflight exposed this in an unsupported uv-managed
+Python-build-standalone install-only runtime: its wrapper Python contained
+defined libffi implementations, but its installed distribution supplied only a
+generic Python LICENSE, not the complete native-license bundle. That archive
+remains withheld; functional success does not clear redistribution.
+
+For this release, macOS native builds require a selected framework CPython.
+Supporting the incomplete install-only compiler is not required; do not borrow
+the Linux libffi grant for an unidentified static implementation. Source
+development and checker-only Python environments are not restricted by this
+native-compiler policy. A portable Mach-O load-command/symbol-table check rejects
+unmapped defined `ffi_*` implementations, including any universal-binary slice;
+undefined system-library consumers are not mislabeled. Malformed evidence or
+missing Python-core symbol evidence also refuses. The same guard runs during
+collection, archive validation and downloaded extraction, independently of
+manifest claims. It adds no platform-tool or runtime dependency.
+
+Build-time interpreter selection and archive verification are separate:
+`RELEASE.json` records the verified selected interpreter profile, while archive
+checks validate that profile and actual native bytes **without inspecting the
+verifier host's interpreter**. Linux draft staging can therefore validate macOS
+archives. If a hosted provider supplies an unexpected unsupported runtime, the
+gate refuses rather than presuming that `setup-python` proves notice coverage.
+
+Builds require a clean committed tree. `RELEASE.json` binds `source_commit` and
+the native-notice inventory digest; public draft creation rechecks all five
+archives against the reviewed commit before upload. The original backend
+runtime and upstream grants are not rewritten. Required notice source files
+are hash-checked and exempted from Git line-ending conversion; only the exact
+Ubuntu copyright file permits its upstream trailing whitespace.
 
 ## Pinned APM backend
 
@@ -66,7 +122,7 @@ download it at runtime. The development override is not consulted by frozen apmx
 
 ## Acceptance boundary
 
-`python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.2.0`
+`python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.3.0`
 uses a temporary caller outside the checkout, isolated HOME/config directories,
 and no `PYTHONPATH` or `PYTHONHOME`. It does not import or install the application.
 It rejects source launchers and runs six mandatory frozen local/package cases:
@@ -125,6 +181,16 @@ must match the original sources. An unselected dependency's skill and an unsuppo
 must be absent from the prompt and the entire producer workspace; the supporting script must
 never execute. The original single-skill gates remain separate.
 
+An additional **factory** case previews a directory without creating execution
+state or invoking the producer, then executes two dependent contracts. The first
+delivers two files; the second consumes both and delivers a third. It checks
+complete records, both explicit consent flags, scalar and multiple-output record
+schemas, independent check and producer cleanup, immutable original inputs/checks,
+the final artifact view, and **UNPROVEN (21)**. This reuses the existing hermetic
+actor and checker; it is not live model inference. The ten local/package cases
+remain unchanged in scope and run alongside this factory case before upload and
+again against the actual downloaded draft bytes.
+
 That same tenth case also generates a real consumer lock with native APM against
 a genuine Git repository tagged `v9` with package version `9.0.0`. A hermetic SSH
 transport serves actual Git objects; it does not replace APM, its resolver,
@@ -174,47 +240,102 @@ spaces to exercise native argument handling.
 On Windows, build a native actor with
 `uv run --frozen --extra dev --extra build python scripts/smoke.py --build-actor dist/smoke-actor`
 and pass `--actor /absolute/copilot.exe` to smoke. This does not test or authorize
-shell interpolation of arbitrary prompts through a `.cmd` launcher. CI retains
-the Windows fixture as separate, run-scoped test support, never as a release asset.
+shell interpolation of arbitrary prompts through a `.cmd` launcher. The new
+workflows build this fixture locally in each Windows job and never upload it.
 The actor is a PyInstaller **onedir** bundle: keep its `_internal` directory beside
-`copilot.exe`, including when transferring it to a fresh verification runner.
+`copilot.exe`. Downloaded-byte verification builds its own ephemeral actor, rather
+than transferring fixture binaries without accompanying notices between runners.
 One-file extraction is deliberately avoided because terminating a lingering
 descendant also terminates its extraction-cleanup process, leaving fixture-only
 temporary files. The strict app temporary-file cleanup check is not relaxed.
 `--report PATH` retains a JSON report containing the validated fixture records.
 
-## Private promotion
+## Manual public experimental promotion
 
-Ordinary CI builds and tests all five native targets. Release runs only for a
-`vMAJOR.MINOR.PATCH` tag or an explicit manual request naming an existing tag.
-The tag must match `pyproject.toml`, and jobs use its resolved commit throughout.
-All Actions are official and SHA-pinned; dependency installation uses the frozen
-public-index lock. Candidate, build/test, and workflow-default permissions remain
-`contents: read`. Draft creation, downloaded-asset verification, and publication
-jobs explicitly receive `contents: write`: GitHub's private draft APIs reject
-read-only integration tokens even for inspection/download requests. Verification
-uses `GH_TOKEN` only in the download step, never in frozen smoke execution, and
-checkout does not persist credentials. No PAT, new secret, or global permission
-change is required; exact asset/hash checks and publication gates are unchanged.
+The legacy CI, tag-release and bootstrap workflow identities remain disabled.
+Do not enable or rerun them to publish older branches or quarantined archives.
+The replacement `native-notice-build.yml` is reusable/call-only;
+`native-notice-release.yml` is manual-only. Neither starts five-platform builds
+on pushes, pull requests or tags. Only `danielmeppiel/apmx` as a public, non-fork
+repository with default branch `main` is allowed by explicit `--public-release`
+policy. Calls without that flag retain the old private-only restriction.
 
-The release workflow reuses native CI, collects exactly five archives plus their
-sidecars, and uploads them with a commit/version/hash manifest to a private draft.
-Fresh native runners download the **actual draft release assets by asset ID**.
-The manifest digest is anchored in the draft job's output, and the full candidate
-asset identity fingerprint must remain unchanged. No app sources or app
-installation are present in these verification checkouts. Each runner verifies
-checksums, extracts with traversal/link/special-file guards, and repeats all ten
-functional cases. Publication requires every downloaded-asset job to pass and
-rechecks repository privacy, tag identity, draft identity, and asset fingerprint.
+An operator first reviews and merges the candidate, authorizes creation of the
+`v0.3.0` tag at that exact main commit, then explicitly dispatches
+`native-notice-release.yml` on `main` with `phase=prepare` and `tag=v0.3.0`.
+Tag creation, workflow dispatch and publication are separate human-controlled
+actions, not consequences of opening or merging a source PR. Keep main at that
+reviewed revision through preparation and publication: every checkout uses
+the trusted workflow's `github.sha`, and the tag must equal it. The workflows
+never execute arbitrarily selected historical source with current write tokens.
 
-A failure leaves the release as a draft for inspection. Existing releases are
-never overwritten or silently reused. To retry a failed draft, an operator must
-inspect it and explicitly remove it before rerunning, or choose a new version/tag;
-the workflow does not delete releases. Access remains limited to the private
-`danielmeppiel/apmx` repository. Running this workflow is an explicit release
-request; no AI credentials, corporate signing keys, or native auth profiles are
-copied into CI. A separate operator-run downloaded-binary test against genuine
-authenticated Copilot is required before claiming live model execution.
+Preparation builds fresh archives on these standard public GitHub runners:
+
+| Target | Runner |
+| --- | --- |
+| Linux x86_64 | `ubuntu-24.04` |
+| Linux ARM64 | `ubuntu-24.04-arm` |
+| macOS x86_64 | `macos-15-intel` |
+| macOS ARM64 | `macos-15` |
+| Windows x86_64 | `windows-2025` |
+
+These are not larger/paid runners; actual startup availability must still be
+observed. Archive-transfer artifacts are uncompressed and retained for one day;
+JSON license/provenance/smoke evidence and the verification receipt for seven
+days. There are no dependency caches or actor-binary uploads. All Actions are
+official and SHA-pinned; dependencies come from the frozen public-index lock.
+Candidate/build/default permissions are `contents: read`. Only draft creation,
+draft download and explicit publication receive `contents: write`, because draft
+release APIs require it. Verification receives `GH_TOKEN` only in the download
+step, not when running native bytes; checkouts do not persist credentials.
+
+**Approving preparation authorizes public Actions archive downloads.** Candidate
+archive artifacts are exposed through this public repository's Actions runs
+(GitHub sign-in may be required), even while the GitHub release remains a draft.
+One-day retention does not make this private binary staging. Review the notice
+gate and this exposure boundary before authorizing the preparation dispatch;
+the later decision authorizes GitHub release publication, not first exposure.
+
+Before upload, preparation independently extracts all five archives, checks
+required native notices/inventories and source-commit metadata, and creates an
+**experimental prerelease draft**, never a latest release. Exactly five archives,
+their sidecars and a commit/version/hash manifest are uploaded. Fresh runners
+then download the **actual draft release assets by numeric asset ID**, require
+the original manifest digest and unchanged full asset identity fingerprint,
+apply checksum/traversal/link/special-file gates, and repeat all ten original
+functional cases plus the multi-output factory case. Verification checkouts
+contain release helpers, not application source or an installed application.
+
+Only successful downloaded-byte checks for every target produce the small
+`verified-native-draft` artifact containing `verified-draft.json`. **Preparation
+stops there; it cannot publish the GitHub release.** Review actual bundled-component
+notice coverage and cold installer/download evidence before authorizing GitHub
+release publication; Actions archives have already been exposed. No old archive
+is relabeled or silently repacked, and the distribution hold remains until fresh
+downloads actually work.
+
+For a separately approved publication, dispatch the same workflow on the same
+main revision with `phase=publish`, the same tag, and the preparation's
+`verified_run_id`, `release_id` and `assets_fingerprint`. This phase **never
+rebuilds**. It verifies the successful manual run, trusted source/workflow,
+all five effective downloaded job results, unexpired numeric receipt artifact and its
+GitHub ZIP SHA-256, and exact receipt identity/attempt. It then rechecks the tag,
+draft and full asset fingerprint before publishing that same draft, preserving
+`prerelease=true` and `make_latest=false`. An expired, stale, failed or changed
+receipt/candidate refuses; there is no automatic bypass.
+
+Partial failed-job retries use each expected verifier's latest execution across
+all attempts through the receipt's bound run attempt. A receipt-only retry may
+reuse earlier successful verifier executions from that same source/run, but a
+later failed, skipped or incomplete verifier cannot fall back to an older pass.
+Duplicate latest executions, foreign identities, incomplete job pagination and
+a receipt from an older attempt refuse publication.
+
+A failure leaves the draft for inspection. Existing releases are never
+overwritten, silently reused or deleted by these helpers. Do not repeatedly
+dispatch or replace assets to hide a failure; stop for an explicit operator
+decision. No new PAT, AI credentials, corporate signing keys or native auth
+profiles are copied into CI. Hermetic native smoke is not live-model proof.
 
 Each native job provisions the real pinned backend before running source tests,
 passing only its explicit path to that test step. The existing non-skippable

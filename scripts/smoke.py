@@ -141,6 +141,7 @@ def git_trace_details(path: Path) -> str:
 
 def build_actor(output: Path) -> None:
     require(os.name == "nt", "Only Windows needs a frozen protocol actor")
+    release.interpreter_identity()
     require(not output.exists(), "Actor build requires a fresh output directory")
     with tempfile.TemporaryDirectory(prefix="apmx-actor-build-") as temporary:
         build_root = Path(temporary)
@@ -981,6 +982,91 @@ def _run_case(
     }
 
 
+def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
+    root.mkdir()
+    require(not root.resolve().is_relative_to(ROOT.resolve()), "Factory smoke must be outside checkout")
+    tools = prepare_tools(root, actor)
+    env = isolated_env(root, tools)
+    poison_host_apm(tools, env)
+    env.update({"APMX_ACTOR_MODE": "pass", "APMX_FACTORY_SMOKE": "1"})
+    caller = root / "caller"
+    factory = caller / "factory"
+    (factory / "checks").mkdir(parents=True)
+    expected = {"source": "caller", "value": 7}
+    (factory / "notes.md").write_text(json.dumps(expected) + "\n", encoding="utf-8")
+    shutil.copyfile(FIXTURES / "check.py", factory / "checks/check.py")
+    for name, inputs, outputs, marker in (
+        (
+            "first", ["notes.md"], ["first.json", "second.json"],
+            "FACTORY_FIXTURE_FIRST",
+        ),
+        ("second", ["notes.md", "first.json", "second.json"], "final.json", "FACTORY_FIXTURE_SECOND"),
+    ):
+        paths = outputs if isinstance(outputs, list) else [outputs]
+        command = shlex.join([Path(sys.executable).as_posix(), "-I", "checks/check.py", *paths])
+        metadata = {"needs": inputs, "produces": outputs, "verify": {"identity": command}}
+        (factory / f"{name}.contract.md").write_text(
+            "---\n" + json.dumps(metadata) + "\n---\n" + marker + "\n", encoding="utf-8",
+        )
+    before = snapshot(caller)
+    profiles_before = profile_snapshot(root)
+    temporary_before = snapshot(Path(env["TMPDIR"]))
+    preview = run_binary(binary, ["factory", "--on", "copilot", "--plan"], caller, env)
+    require(preview.returncode == 0, f"Frozen factory preview failed: {preview.stdout}\n{preview.stderr}")
+    require(not (factory / ".apm").exists(), "Factory preview created execution state")
+    require(not Path(env["APMX_ACTOR_LOG"]).exists(), "Factory preview invoked the producer")
+    result = run_binary(
+        binary,
+        ["factory", "--on", "copilot", "--model", "fixture-model",
+         "--allow-host-access", "--allow-unproven-inputs"],
+        caller, env,
+    )
+    require(result.returncode == 21, f"Frozen factory failed: {result.stdout}\n{result.stderr}")
+    chains = list((factory / ".apm/chains").glob("*/record.json"))
+    require(len(chains) == 1, "Expected exactly one factory record")
+    record = json.loads(chains[0].read_bytes())
+    require(record["complete"] is True, "Factory did not complete")
+    require(len(record["nodes"]) == 2, "Factory did not execute both contracts")
+    require(all(node["state"] == "completed" for node in record["nodes"]), "Factory node incomplete")
+    require(record["allow_host_access"] is True and record["allow_unproven_inputs"] is True,
+            "Factory did not retain both explicit permissions")
+    view = Path(record["artifacts"]["root"])
+    require(view.resolve() == (chains[0].parent / "artifacts").resolve(), "Factory artifact-view identity")
+    for name in ("first.json", "second.json", "final.json"):
+        require(json.loads((view / name).read_bytes()) == expected, f"Factory delivery mismatch: {name}")
+    require(digest(view / "checks/check.py") == digest(FIXTURES / "check.py"), "Factory checker changed")
+    leaves = [json.loads(path.read_bytes()) for path in (factory / ".apm/runs").glob("*/record.json")]
+    require(len(leaves) == 2, "Expected two factory leaf records")
+    require({leaf["schema"] for leaf in leaves} == {"apm-contract-run/0.1", "apm-contract-run/0.2"},
+            "Factory did not exercise scalar and multiple-output records")
+    for leaf in leaves:
+        require(leaf["result"]["outcome"] == {"name": "UNPROVEN", "exit_code": 21},
+                "Factory changed native assurance semantics")
+        require(leaf["producer"]["cleanup_confirmed"] is True, "Factory producer cleanup unconfirmed")
+        require(leaf["child_pid"] is None and leaf["active_check"] is None, "Factory left active work")
+        require(len(leaf["checks"]) == 1, "Factory checker count mismatch")
+        check = leaf["checks"][0]
+        require(check["normalized"] == 0 and check["process"]["cleanup_confirmed"] is True,
+                "Factory did not pass and clean up its independent checker")
+    for relative, hashed in before.items():
+        require(digest(caller / relative) == hashed, f"Factory source changed: {relative}")
+    for relative in set(snapshot(caller)) - set(before):
+        require(relative.startswith("factory/.apm/"), f"Unexpected factory write: {relative}")
+    check_profiles(root, profiles_before, False)
+    require(snapshot(Path(env["TMPDIR"])) == temporary_before, "Factory left temporary files")
+    for marker in PRIVATE_MARKERS:
+        require(marker not in result.stdout + result.stderr, "Factory leaked private fixture content")
+    require(not Path(env["APMX_DECOY_APM_LOG"]).exists(), "Factory selected host APM")
+    calls = [json.loads(line) for line in Path(env["APMX_ACTOR_LOG"]).read_text().splitlines()]
+    require(sum("-p" in call["argv"] for call in calls) == 2, "Factory producer invocation count")
+    return {
+        "preview_exit": preview.returncode, "exit_code": result.returncode,
+        "contracts": 2, "checks": 2, "delivered_files": 3,
+        "actor": "hermetic Copilot JSONL protocol fixture; NOT live model inference",
+        "record": record,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path)
@@ -994,6 +1080,7 @@ def main() -> None:
         return
     if args.binary is None or args.version is None:
         parser.error("--binary and --version are required")
+    release.interpreter_identity()
     binary = args.binary.resolve()
     require(binary.is_file(), "Frozen executable not found")
     header = binary.read_bytes()[:4]
@@ -1030,11 +1117,13 @@ def main() -> None:
             run_case(binary, root / "package-fresh-home", actor, "package", "pass", fresh_home=True),
             run_case(binary, root / "package-mixed-asf", actor, "package", "pass", mixed_imports=True),
         ]
+        factory = run_factory_case(binary, root / "multi-output-factory", actor)
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(
                 json.dumps({
                     "binary_sha256": digest(binary), "version": args.version, "cases": cases,
+                    "factory": factory,
                     "apm_backend": {
                         **release.backend_provenance(backend.parent, pin, target),
                         "pin_sha256": digest(binary.parent / "apm-backend.json"),
@@ -1043,7 +1132,7 @@ def main() -> None:
                 }, indent=2) + "\n",
                 encoding="utf-8",
             )
-    print("Frozen smoke: 10 local/package cases passed with genuine bundled APM; hermetic Copilot, NOT live inference.")
+    print("Frozen smoke: 10 local/package cases and one multi-output factory passed with genuine bundled APM; hermetic Copilot, NOT live inference.")
 
 
 if __name__ == "__main__":

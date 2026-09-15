@@ -46,6 +46,14 @@ Native archives additionally carry an installed-component license inventory
 under LICENSES/ and the bundled backend's original notices under libexec/apm/.
 These notices do not change the license of APMX-specific additions.
 
+The installed-distribution inventory can include build-associated packages;
+it is not a statement that those packages are absent from the shipped runtimes.
+For example, the bundled APM backend includes setuptools material with its
+retained upstream notices. The native-file inventory records actual shipped
+file identities separately, and required Linux libffi notices accompany each
+identified redistributed library. A dynamically linked consumer is not
+automatically an embedded copy of its dependency.
+
 ---
 
 ## Component. click

@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import shutil
+import struct
 import subprocess
 import tarfile
 import tempfile
@@ -24,7 +25,7 @@ def backend_fixture(root: Path, target: str, pin: dict) -> None:
         if target.startswith("windows-")
         else b"\x7fELF"
         if target.startswith("linux-")
-        else b"\xcf\xfa\xed\xfe"
+        else struct.pack("<IiiIIIII", 0xFEEDFACF, 0x100000C, 0, 2, 0, 0, 0, 0)
     )
     executable.write_bytes(header + b" non-executable unit fixture")
     executable.chmod(0o755)
@@ -40,12 +41,23 @@ def add_backend_fixture(bundle: Path, target: str) -> None:
     shutil.copyfile(release.BACKEND_PIN, bundle / "apm-backend.json")
     (bundle / "_internal/apmx").mkdir(parents=True)
     shutil.copyfile(release.BACKEND_PIN, bundle / "_internal/apmx/apm-backend.json")
+    native_notices = release.collect_native_notices(bundle, target)
     (bundle / "RELEASE.json").write_text(
         json.dumps(
             {
                 "target": target,
                 "apm_backend_pin_sha256": release.digest(release.BACKEND_PIN),
                 "apm_backend": release.backend_provenance(bundle / "libexec/apm", pin, target),
+                "native_notice_manifest_sha256": release.digest(native_notices),
+                "build_interpreter": {
+                    "schema": "apmx-build-interpreter/1",
+                    "implementation": "CPython",
+                    "version": "3.12.0",
+                    "build": ["structural fixture", "not executed"],
+                    "executable_sha256": "0" * 64,
+                    "selection_verified": True,
+                    "framework": "Python" if target.startswith("macos-") else None,
+                },
             }
         )
     )
