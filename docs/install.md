@@ -39,7 +39,10 @@ installation is not.
 In a managed environment, use your organization's approved package proxy and
 certificate configuration before running these commands. Do not disable that
 configuration or certificate verification to make installation succeed; keep
-the source pin, frozen dependency versions and hashes intact.
+the source pin, frozen dependency versions and hashes intact. An index setting
+alone may not redirect frozen artifact URLs; see the
+[managed-environment alternative](#managed-environment-installation-optional)
+if direct package downloads are not permitted.
 
 Choose the target for the machine where you will run APMX:
 
@@ -159,6 +162,59 @@ backend. Frozen native releases ignore it.
 To reopen the source installation in another terminal, return to the same
 checkout and repeat the PATH selection block for your platform. Preserve the
 source SHA when reporting a problem; a version string alone is not provenance.
+
+### Managed-environment installation (optional)
+
+`uv.lock` records canonical artifact URLs as well as versions and hashes.
+Consequently, `uv sync --frozen` can request those URLs directly even when a
+different package index is configured. Merely setting an approved proxy/index
+does not prove that uv uses it for every download. If your environment requires
+an approved package service, do not bypass it, remove hashes, rewrite the lock,
+disable TLS verification or repeatedly retry a prohibited direct download.
+
+The following alternative was exercised on macOS ARM64 with the same pinned
+source, a fresh environment/cache and an already configured approved pip client.
+It is **not** evidence that the default direct-download sequence succeeded.
+Keep package-client configuration and installation logs private; do not copy
+proxy addresses, credentials or certificate configuration into this repository.
+
+Use your organization's approved client for these steps, **instead of**
+`uv sync`; runtime source and locked dependency versions/hashes stay the same:
+
+1. In a fresh checkout at the exact source pin above, create a new Python 3.12
+   `.venv`, for example with `uv venv --python 3.12 .venv`. Export the canonical
+   factory requirements using
+   `uv export --frozen --format requirements-txt --no-emit-project --no-dev --extra factory`.
+   Save that output in a private requirements file outside the checkout.
+   Hashes are included by default; do not add `--no-hashes` or index-emission flags.
+2. Have the approved pip client target that `.venv` and install the exported
+   requirements with `--require-hashes --no-deps`. Also supply a separate hashed
+   build requirement for **`setuptools==84.0.0`**, using its wheel/sdist SHA-256
+   values from this same pinned `uv.lock`. Do not resolve an unpinned build
+   environment: `--frozen` for the application lock does not itself freeze
+   isolated build requirements. This source's editable build succeeded with
+   that locked setuptools; a separate wheel package was not needed.
+3. Install the pinned checkout with the approved pip client targeting the same
+   environment: `install --no-index --no-deps --no-build-isolation --editable .`.
+   Run its `check` command against that environment. For a preconfigured system
+   Python with pip, `python3 -m pip --python .venv/bin/python` selects the target
+   on macOS/Linux; keep the client separate from the newly created environment.
+4. Provision APM without letting uv synchronize the prepared environment again:
+
+```sh
+uv run --no-sync --frozen --extra factory python scripts/release.py provision-apm \
+  --target macos-arm64 --output dist/apm-backend
+```
+
+Use your machine's target and keep the entire resulting backend distribution.
+Provisioning still downloads and verifies the pinned official APM archive from
+GitHub; package-proxy setup does not change that download or its checksum.
+`--no-sync` prevents uv from pruning or resynchronizing the compliant environment
+through the original lock URLs. Directly invoking that environment's Python
+on `scripts/release.py` is equivalent. Repeat the platform's PATH selection and
+APMX/Python/Behave checks above, then continue to the same factory copy and run
+commands. For later dependency repairs, repeat the approved hash-verified
+installation process, not an unqualified `uv sync`.
 
 ## Legacy native archives (optional)
 
