@@ -380,7 +380,16 @@ class PromotionTests(unittest.TestCase):
         jobs = {
             "total_count": 5,
             "jobs": [
-                {"name": f"Downloaded {target}", "conclusion": "success"} for target in TARGETS
+                {
+                    "id": 1000 + index,
+                    "run_id": 456,
+                    "run_attempt": 1,
+                    "head_sha": self.commit,
+                    "name": f"Downloaded {target}",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+                for index, target in enumerate(TARGETS)
             ],
         }
         receipt = {
@@ -413,7 +422,131 @@ class PromotionTests(unittest.TestCase):
                 }
             ],
         }
-        return args, [run, jobs, artifacts], payload
+        return args, [run, [jobs], artifacts], payload
+
+    def test_receipt_only_partial_retry_reuses_latest_successful_verifier_execution(self):
+        args, responses, payload = self.verification_fixture({"run_attempt": 2})
+        responses[0]["run_attempt"] = 2
+        receipt_job = {
+            "id": 2000,
+            "run_id": 456,
+            "run_attempt": 2,
+            "head_sha": self.commit,
+            "name": "verified",
+            "status": "completed",
+            "conclusion": "success",
+        }
+
+        def api(*arguments):
+            endpoint = arguments[-1]
+            if endpoint.endswith("/actions/runs/456"):
+                return responses[0]
+            if "filter=all" in endpoint:
+                jobs = [*responses[1][0]["jobs"], receipt_job]
+                return [
+                    {"total_count": 6, "jobs": jobs[:3]},
+                    {"total_count": 6, "jobs": jobs[3:]},
+                ]
+            if "/attempts/2/jobs?" in endpoint:
+                return {"total_count": 1, "jobs": [receipt_job]}
+            if "/artifacts?" in endpoint:
+                return responses[2]
+            self.fail(f"Unexpected preparation API request: {endpoint}")
+
+        with (
+            patch.object(promotion, "gh_json", side_effect=api) as requests,
+            patch.object(promotion.subprocess, "check_output", return_value=payload),
+        ):
+            receipt = promotion.check_verified_receipt(args)
+        self.assertEqual(receipt["run_attempt"], 2)
+        jobs_request = next(
+            call.args for call in requests.call_args_list if "filter=all" in call.args[-1]
+        )
+        self.assertIn("--paginate", jobs_request)
+        self.assertIn("--slurp", jobs_request)
+
+    def test_latest_failed_skipped_or_incomplete_verifier_never_falls_back_to_success(self):
+        for status, conclusion in (
+            ("completed", "failure"),
+            ("completed", "skipped"),
+            ("in_progress", None),
+            ("queued", "success"),
+        ):
+            args, responses, _ = self.verification_fixture({"run_attempt": 2})
+            responses[0]["run_attempt"] = 2
+            page = responses[1][0]
+            page["jobs"].insert(
+                0,
+                {
+                    **page["jobs"][0],
+                    "id": 2000,
+                    "run_attempt": 2,
+                    "status": status,
+                    "conclusion": conclusion,
+                },
+            )
+            page["total_count"] += 1
+            with (
+                self.subTest(status=status, conclusion=conclusion),
+                patch.object(promotion, "gh_json", side_effect=responses),
+                patch.object(promotion.subprocess, "check_output") as download,
+                self.assertRaisesRegex(ValueError, "downloaded-byte verification"),
+            ):
+                promotion.check_verified_receipt(args)
+            download.assert_not_called()
+
+    def test_latest_successful_verifier_retry_replaces_its_prior_failure(self):
+        args, responses, payload = self.verification_fixture({"run_attempt": 2})
+        responses[0]["run_attempt"] = 2
+        page = responses[1][0]
+        retry = {**page["jobs"][0], "id": 2000, "run_attempt": 2}
+        page["jobs"][0]["conclusion"] = "failure"
+        page["jobs"].insert(0, retry)
+        page["total_count"] += 1
+        with (
+            patch.object(promotion, "gh_json", side_effect=responses),
+            patch.object(promotion.subprocess, "check_output", return_value=payload),
+        ):
+            self.assertEqual(promotion.check_verified_receipt(args)["run_attempt"], 2)
+
+    def test_stale_receipt_after_partial_retry_never_authorizes_publication(self):
+        args, responses, payload = self.verification_fixture()
+        responses[0]["run_attempt"] = 2
+        with (
+            patch.object(promotion, "gh_json", side_effect=responses),
+            patch.object(promotion.subprocess, "check_output", return_value=payload),
+            self.assertRaisesRegex(ValueError, "different candidate or attempt"),
+        ):
+            promotion.check_verified_receipt(args)
+
+    def test_invalid_cross_run_future_or_duplicate_latest_verifier_evidence_refuses(self):
+        for changes in (
+            {"id": 0},
+            {"run_id": 999},
+            {"head_sha": "d" * 40},
+            {"run_attempt": True},
+            {"run_attempt": 3},
+            {"duplicate": True},
+            {"incomplete_pages": True},
+        ):
+            args, responses, _ = self.verification_fixture({"run_attempt": 2})
+            responses[0]["run_attempt"] = 2
+            page = responses[1][0]
+            if changes.get("duplicate"):
+                page["jobs"].append({**page["jobs"][0], "id": 2000})
+                page["total_count"] += 1
+            elif changes.get("incomplete_pages"):
+                page["total_count"] += 1
+            else:
+                page["jobs"][0].update(changes)
+            with (
+                self.subTest(changes=changes),
+                patch.object(promotion, "gh_json", side_effect=responses),
+                patch.object(promotion.subprocess, "check_output") as download,
+                self.assertRaisesRegex(ValueError, "verification|Incomplete preparation"),
+            ):
+                promotion.check_verified_receipt(args)
+            download.assert_not_called()
 
     def test_verified_receipt_requires_exact_successful_new_workflow_and_source(self):
         args, responses, payload = self.verification_fixture()
@@ -447,10 +580,10 @@ class PromotionTests(unittest.TestCase):
         for missing in (True, False):
             args, responses, _ = self.verification_fixture()
             if missing:
-                responses[1]["jobs"].pop()
-                responses[1]["total_count"] -= 1
+                responses[1][0]["jobs"].pop()
+                responses[1][0]["total_count"] -= 1
             else:
-                responses[1]["jobs"][0]["conclusion"] = "skipped"
+                responses[1][0]["jobs"][0]["conclusion"] = "skipped"
             with (
                 self.subTest(missing=missing),
                 patch.object(promotion, "gh_json", side_effect=responses),

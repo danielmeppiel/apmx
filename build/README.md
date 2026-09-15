@@ -285,11 +285,18 @@ For a separately approved publication, dispatch the same workflow on the same
 main revision with `phase=publish`, the same tag, and the preparation's
 `verified_run_id`, `release_id` and `assets_fingerprint`. This phase **never
 rebuilds**. It verifies the successful manual run, trusted source/workflow,
-all five downloaded job results, unexpired numeric receipt artifact and its
+all five effective downloaded job results, unexpired numeric receipt artifact and its
 GitHub ZIP SHA-256, and exact receipt identity/attempt. It then rechecks the tag,
 draft and full asset fingerprint before publishing that same draft, preserving
 `prerelease=true` and `make_latest=false`. An expired, stale, failed or changed
 receipt/candidate refuses; there is no automatic bypass.
+
+Partial failed-job retries use each expected verifier's latest execution across
+all attempts through the receipt's bound run attempt. A receipt-only retry may
+reuse earlier successful verifier executions from that same source/run, but a
+later failed, skipped or incomplete verifier cannot fall back to an older pass.
+Duplicate latest executions, foreign identities, incomplete job pagination and
+a receipt from an older attempt refuse publication.
 
 A failure leaves the draft for inspection. Existing releases are never
 overwritten, silently reused or deleted by these helpers. Do not repeatedly

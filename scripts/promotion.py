@@ -309,14 +309,35 @@ def check_verified_receipt(args) -> dict:
         or type(run.get("run_attempt")) is not int or run["run_attempt"] <= 0
     ):
         raise ValueError("Preparation run is not the successful trusted source workflow")
-    jobs = gh_json(
-        "api", f"repos/{args.repository}/actions/runs/{run_id}/attempts/{run['run_attempt']}/jobs?per_page=100",
+    pages = gh_json(
+        "api", "--paginate", "--slurp",
+        f"repos/{args.repository}/actions/runs/{run_id}/jobs?filter=all&per_page=100",
     )
-    if jobs.get("total_count") != len(jobs.get("jobs", [])):
+    if not isinstance(pages, list) or not pages or any(
+        not isinstance(page, dict) or not isinstance(page.get("jobs"), list) for page in pages
+    ):
+        raise ValueError("Incomplete preparation job evidence")
+    jobs = [job for page in pages for job in page["jobs"]]
+    if any(page.get("total_count") != len(jobs) for page in pages) or any(
+        not isinstance(job, dict) for job in jobs
+    ):
         raise ValueError("Incomplete preparation job evidence")
     for target in TARGETS:
-        matches = [job for job in jobs["jobs"] if job.get("name") == f"Downloaded {target}"]
-        if len(matches) != 1 or matches[0].get("conclusion") != "success":
+        matches = [job for job in jobs if job.get("name") == f"Downloaded {target}"]
+        if not matches or any(
+            type(job.get("id")) is not int or job["id"] <= 0
+            or job.get("run_id") != run_id or job.get("head_sha") != args.commit
+            or type(job.get("run_attempt")) is not int
+            or not 1 <= job["run_attempt"] <= run["run_attempt"]
+            for job in matches
+        ):
+            raise ValueError(f"Missing or invalid downloaded-byte verification identity: {target}")
+        latest_attempt = max(job["run_attempt"] for job in matches)
+        latest = [job for job in matches if job["run_attempt"] == latest_attempt]
+        if (
+            len(latest) != 1 or latest[0].get("status") != "completed"
+            or latest[0].get("conclusion") != "success"
+        ):
             raise ValueError(f"Missing successful downloaded-byte verification: {target}")
     artifacts = gh_json("api", f"repos/{args.repository}/actions/runs/{run_id}/artifacts?per_page=100")
     if artifacts.get("total_count") != len(artifacts.get("artifacts", [])):
