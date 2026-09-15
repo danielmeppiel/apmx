@@ -21,7 +21,7 @@ import tempfile
 import threading
 import time
 from collections import deque
-from pathlib import Path
+from pathlib import Path, PurePath
 
 if __package__:
     from . import release
@@ -982,6 +982,14 @@ def _run_case(
     }
 
 
+def require_factory_state_file(relative: PurePath) -> None:
+    parts = relative.parts
+    require(
+        len(parts) > 2 and parts[:2] == ("factory", ".apm") and ".." not in parts,
+        f"Unexpected factory write: {relative}",
+    )
+
+
 def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
     root.mkdir()
     require(not root.resolve().is_relative_to(ROOT.resolve()), "Factory smoke must be outside checkout")
@@ -1051,7 +1059,7 @@ def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
     for relative, hashed in before.items():
         require(digest(caller / relative) == hashed, f"Factory source changed: {relative}")
     for relative in set(snapshot(caller)) - set(before):
-        require(relative.startswith("factory/.apm/"), f"Unexpected factory write: {relative}")
+        require_factory_state_file(Path(relative))
     check_profiles(root, profiles_before, False)
     require(snapshot(Path(env["TMPDIR"])) == temporary_before, "Factory left temporary files")
     for marker in PRIVATE_MARKERS:

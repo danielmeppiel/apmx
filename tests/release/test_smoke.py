@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,6 +19,40 @@ from tests.release.test_backend import add_backend_fixture
 
 
 class SmokeFixtureTests(unittest.TestCase):
+    def test_factory_write_boundary_uses_real_path_flavor(self):
+        for relative in (
+            PureWindowsPath(
+                r"factory\.apm\runs\20260915T232133Z-501a98a0f053\producer\.git\refs\heads\master"
+            ),
+            PureWindowsPath("factory/.apm/chains/id/artifacts/first.json"),
+            PurePosixPath("factory/.apm/runs/id/record.json"),
+            PurePosixPath(r"factory/.apm/runs/literal\backslash"),
+            Path("factory/.apm/runs/native-path"),
+        ):
+            with self.subTest(relative=relative):
+                smoke.require_factory_state_file(relative)
+
+    def test_factory_write_boundary_rejects_outside_paths_and_posix_backslash_impostors(self):
+        for relative in (
+            PureWindowsPath(r"factory\.apm-old\state"),
+            PureWindowsPath(r"C:\factory\.apm\state"),
+            PureWindowsPath(r"\\server\share\factory\.apm\state"),
+            PureWindowsPath(r"factory\.apm\..\unowned"),
+            PureWindowsPath(r"factory\.apm"),
+            PurePosixPath("/factory/.apm/state"),
+            PurePosixPath("factory/.apm-old/state"),
+            PurePosixPath("factory/.apm/../unowned"),
+            PurePosixPath("factory/.apm"),
+            PurePosixPath(r"factory\.apm\runs\impostor"),
+            PurePosixPath(r"factory/.apm\state/impostor"),
+            PurePosixPath("unowned"),
+        ):
+            with (
+                self.subTest(relative=relative),
+                self.assertRaisesRegex(AssertionError, "Unexpected factory write"),
+            ):
+                smoke.require_factory_state_file(relative)
+
     def test_canonical_local_identity_requires_original_absolute_package_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             original = Path(temporary).resolve() / "original-source"
