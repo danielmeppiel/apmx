@@ -7,7 +7,9 @@ The synthetic Git lock below tests read-only admission, not network acquisition.
 
 import hashlib
 import json
+import shlex
 import shutil
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +20,7 @@ from click.testing import CliRunner
 
 from apmx.cli import main
 from apmx.contracts import frontend, workspace
+from apmx.contracts.check_command import check_argv
 from apmx.contracts.models import (
     ContractError,
     ContractLimits,
@@ -30,6 +33,7 @@ from apmx.deps.lockfile import LockedDependency, LockFile
 from apmx.install import contract_source
 from apmx.models.dependency.reference import DependencyReference
 from apmx.utils.content_hash import compute_package_hash
+from apmx.utils.yaml_io import load_frontmatter_document
 
 pytestmark = pytest.mark.component
 
@@ -59,10 +63,8 @@ def _package(root, *, imports=False):
         "from pathlib import Path\n"
         "assert Path('result.txt').read_bytes() == Path('notes.md').read_bytes()\n"
     )
-    header = (
-        "needs: notes.md\nproduces: result.txt\nverify:\n"
-        f"  content: '{sys.executable} checks/check.py'\n"
-    )
+    command = shlex.join([sys.executable, "checks/check.py"])
+    header = f"needs: notes.md\nproduces: result.txt\nverify:\n  content: {json.dumps(command)}\n"
     if imports:
         header += "imports: [style]\n"
     (root / "job.contract.md").write_text(
@@ -77,6 +79,42 @@ def _skill(root):
     (root / "SKILL.md").write_text(
         "---\nname: style\ndescription: concise style\n---\nWrite concisely.\n"
     )
+
+
+@pytest.mark.parametrize(
+    "executable",
+    [
+        r"C:\Program Files\Python\python.exe",
+        r"C:\Users\D'Angelo\Python\python.exe",
+        "/opt/Python tools/python3",
+        "/opt/D'Angelo/python3",
+    ],
+)
+def test_package_check_preserves_shell_arguments_through_yaml(tmp_path, monkeypatch, executable):
+    monkeypatch.setattr(sys, "executable", executable)
+    package = _package(tmp_path / "job")
+    document = load_frontmatter_document(package / "job.contract.md")
+    assert shlex.split(document.metadata["verify"]["content"]) == [
+        executable,
+        "checks/check.py",
+    ]
+
+
+@pytest.mark.parametrize("matching", [True, False])
+def test_package_check_really_executes_and_rejects_wrong_bytes(tmp_path, matching):
+    package = _package(tmp_path / "job")
+    (package / "result.txt").write_bytes(
+        (package / "notes.md").read_bytes() if matching else b"wrong bytes"
+    )
+    document = load_frontmatter_document(package / "job.contract.md")
+    result = subprocess.run(
+        check_argv(document.metadata["verify"]["content"]),
+        cwd=package,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == (0 if matching else 1), result.stderr
 
 
 def _prepare(package, caller, *, planning=False):

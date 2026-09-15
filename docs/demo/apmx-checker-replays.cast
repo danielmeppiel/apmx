@@ -1,0 +1,10 @@
+{"version": 2, "width": 110, "height": 32, "title": "Independent post-run positive and deliberately bad threshold checker replays - no model calls | Edited speed (1x; gaps capped at 1.5s); path/email-redacted; line-grouped.", "env": {"TERM": "dumb"}}
+[0.233023, "o", "INDEPENDENT POST-RUN CHECKER REPLAYS; no model execution.\nNegative control is a separate >5000 mutation of the actual patch, not a model-produced failure.\n"]
+[0.233216, "o", "Original patch SHA256: 6c6c953580c853902a395f047ecb53f59d5d7678b328e198ee717f69e649b0f3\n"]
+[0.233224, "o", "Negative patch SHA256: d927f81ea13ea03fb4e34e3b34b6cea1181764745e91958f5336306646ab618c\n"]
+[0.235031, "o", "[positive] Executing: python3 -I -B checks/acceptance.py changes.diff\n"]
+[0.235098, "o", "[positive] Executing: python3 -I -B checks/regression.py changes.diff\n"]
+[0.235236, "o", "[negative] Executing: python3 -I -B checks/acceptance.py changes.diff\n"]
+[0.237019, "o", "[negative] Executing: python3 -I -B checks/regression.py changes.diff\n"]
+[0.606372, "o", "positive acceptance: exit 0; 14 required cases; 14 observed rows; failures=[]\npositive regression: exit 0; 14 required cases; 23 observed rows; failures=[]\nnegative acceptance: exit 1; 14 required cases; 14 observed rows; failures=['Free delivery at 5000 cents']\n"]
+[0.606384, "o", "negative regression: exit 1; 14 required cases; 23 observed rows; failures=['Free delivery at 5000 cents', 'test_free_shipping.FreeShippingTests.test_threshold_and_neighboring_values']\nBoth independent checks rejected the threshold defect with assertion exit 1, not tooling exit 2.\nBaseline and check-resource hashes match across all four replays; retained original patch unchanged.\n"]

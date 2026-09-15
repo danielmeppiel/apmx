@@ -1,5 +1,12 @@
 # Standalone release engineering
 
+**Native distribution is on hold pending third-party notice remediation.**
+Historical v0.1/v0.2 Linux bundles omitted the required libffi MIT notice.
+This page describes build mechanics, not approval to publish or redistribute
+existing or newly built archives. Use the
+[pinned source preview](../docs/install.md#run-the-current-source-checkout);
+[native downloads are temporarily withheld](../docs/install.md#native-downloads-temporarily-withheld).
+
 `uv sync --frozen --extra dev --extra build` installs the publicly resolved lock.
 `uv run --frozen --extra dev --extra build python scripts/release.py build --target macos-arm64`
 creates a PyInstaller directory and `dist/assets/apmx-VERSION-macos-arm64.tar.gz`
@@ -22,8 +29,8 @@ Its manifest records the versions, copied files, license metadata, and explicitl
 missing upstream notices. This intentionally includes the build-environment
 distribution superset rather than claiming a complete bundled-dependency audit.
 Missing Python license or a missing file declared by installed metadata blocks
-the build. The original standalone/upstream MIT license and NOTICE remain at the
-archive root.
+the build. The archive-root LICENSE covers APMX-specific additions under
+Apache-2.0; NOTICE retains the original Microsoft APM MIT grant and attribution.
 
 ## Pinned APM backend
 

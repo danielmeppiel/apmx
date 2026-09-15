@@ -8,10 +8,11 @@ For a feature-to-review workflow instead, see the
 
 ## Set up the example
 
-Use the [installation guide](../../../docs/install.md) to put APMX on PATH.
+Use the [pinned source installation](../../../docs/install.md#run-the-current-source-checkout)
+to put APMX and its Python environment on PATH.
 You also need Git, GitHub Copilot CLI and Python 3.12 or newer. Authenticate
-with Copilot before live execution. Access to this private repository is needed
-to get the example files.
+with native Copilot before live execution. Use the example files from that
+same pinned checkout.
 
 This example selects one contract file. To connect several steps, select a
 factory directory instead, as shown in the software-factory walkthrough.
@@ -35,7 +36,7 @@ Do not remove a real project's remotes or policy to make it eligible.
 On Windows, follow the
 [PowerShell first-run walkthrough](../../../docs/install.md#windows-first-run)
 instead. It prepares a fresh copy and adjusts the checker command for the
-native Python launcher without changing the source files.
+selected native Python environment without changing the source checkout.
 
 ## Preview before executing
 
@@ -121,6 +122,6 @@ The complete runnable file is [handoff.contract.md](handoff.contract.md).
 
 ## Next steps
 
-- [Connect five steps](../software-factory/README.md) from a feature request to a review.
+- [Connect four contracts](../software-factory/README.md) from a feature request to five checked artifacts.
 - [Reuse a packaged task](../packaged-job/README.md) with bundled APM.
 - [Return to the overview](../../../README.md).

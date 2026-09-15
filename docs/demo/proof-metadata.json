@@ -1,0 +1,252 @@
+{
+  "schema": "apmx-public-native-proof/1",
+  "source_repository": "https://github.com/danielmeppiel/apmx",
+  "live_source_sha": "be9c5be19f39284fa5f7b6416de6c37764184f2c",
+  "onboarding_docs_sha": "f4fbf78ba0c1dd2cc1b2d9989f37d576d6a8b9ba",
+  "managed_appendix_docs_sha": "368946252065ad6bcd42cc5c3421a6ac25b594ae",
+  "docs_identity_note": "Live runtime was the immutable be9 source pin, not a later docs-integrated candidate.",
+  "canonical_lock_sha256": "2c162241959453d50258563a452e1b19efe097a7adf6260a378978b300f9ec65",
+  "environment": {
+    "os": "macOS26.6.2",
+    "target": "macos-arm64",
+    "python": "3.12.10",
+    "git": "git version 2.53.0",
+    "uv": "uv 0.11.26 (396ef7ce4 2026-06-30 aarch64-apple-darwin)",
+    "copilot": "GitHub Copilot CLI 1.0.84-5.",
+    "apm_backend": {
+      "version": "0.30.0",
+      "source_commit": "8c2e0d9c352e2ed0e8c56b40063a63e1dd4a1937",
+      "target": "macos-arm64",
+      "archive": "apm-darwin-arm64.tar.gz",
+      "archive_sha256": "1cbd8fefbb5f74fd0e05f196bb81cff3cec2876f8f8e1a2e45d4b78fa127a37c",
+      "executable": "libexec/apm/apm",
+      "executable_sha256": "932ca5065f3b4f9751c670e92ae2669a4ae95ff455b0db8ee985af6e10981991"
+    },
+    "behave": "1.3.3",
+    "dependency_setup": "Fresh venv and empty session-local pip cache, canonical hash-pinned export through already configured approved corporate index. Source installed without dependency resolution or build isolation.",
+    "build_backend": "setuptools84.0.0 pinned and hashed from canonical uv.lock; no separately installed wheel or other isolated build dependencies.",
+    "reuse": "Existing system Git/native Copilot and authenticated default model; no prepared APMX binary/venv or installed dependency copy.",
+    "model_override": false,
+    "scope": "Actual macOS ARM64 proof with this exact native Copilot version; not Windows/Linux live inference or default-public-transport proof."
+  },
+  "preview": {
+    "exit": 0,
+    "producer_check_install_processes": 0,
+    "observed_discovery_processes": 0,
+    "created_apm_directory": false,
+    "method": "Real CLI preview plus separate supplementary audit-guarded preview."
+  },
+  "live": {
+    "chain_id": "20260915T200148Z-c0519d4c01e9",
+    "chain_record_sha256": "991b0bd55a7ac872da3fc9009d56b442a6bf8706b170453e2036302fc478eca1",
+    "complete": true,
+    "exit": 21,
+    "outcome": "UNPROVEN",
+    "contracts_completed": 4,
+    "checks_passed": 6,
+    "artifacts": {
+      "plan.md": "9ae2c20bfeac3016719db94ac256d591ffd93f42027615789d3bdb5b9099e242",
+      "specification.md": "7c2f3d2e5ccb5415ab4ac7b5f4e4842dc9a2fbbbba1633974dcb9745c9b7ac37",
+      "changes.diff": "6c6c953580c853902a395f047ecb53f59d5d7678b328e198ee717f69e649b0f3",
+      "implementation.md": "7fd4b2e44991c7176a4c841837bd70bca87bfc2eb3f347e6bd563f8a91936ade",
+      "review.md": "f03faf1a9f7df58d7114dc513f853b6868df4bd505075d61b89273f69c2e9b00"
+    },
+    "artifact_view_digest": "a62d9bb9f1d6f2efcc42929834fb8b3fc28e03a65d235a183f2ca28918c4df45",
+    "runs": [
+      {
+        "run_id": "20260915T200148Z-6abeb56139f7",
+        "contract": "contracts/planning.contract.md",
+        "record_sha256": "54956a8d5728c546ae605f2a8b8862efba4fed8fb1c414b133d4a1205d48fc49"
+      },
+      {
+        "run_id": "20260915T200209Z-2f19f7c985fb",
+        "contract": "contracts/specification.contract.md",
+        "record_sha256": "4959b75de61f2e45555d114ea943ae988880273b374e4caa01c5f9ae46462ee5"
+      },
+      {
+        "run_id": "20260915T200228Z-1115917714d0",
+        "contract": "contracts/build.contract.md",
+        "record_sha256": "c1a79c97d0a6a0eeb1af7a8ffe48083f27ccddda6eddc16e59123b849f953542"
+      },
+      {
+        "run_id": "20260915T200300Z-cb0397d71602",
+        "contract": "contracts/review.contract.md",
+        "record_sha256": "871b52125ff5ded1a725587e7937570c5b50e452b5857fefdc8df199595dcf6f"
+      }
+    ],
+    "checks": [
+      {
+        "run_id": "20260915T200148Z-6abeb56139f7",
+        "name": "document",
+        "command": "python3 -I -B checks/documents.py planning plan.md",
+        "normalized": 0,
+        "raw_exit": 0,
+        "subject_digest": "9ae2c20bfeac3016719db94ac256d591ffd93f42027615789d3bdb5b9099e242",
+        "resources_digest": "086079188d965086f52e8ceed70321e2d7b3d81560d99915682bc0dfa63dd165",
+        "cleanup_confirmed": true
+      },
+      {
+        "run_id": "20260915T200209Z-2f19f7c985fb",
+        "name": "document",
+        "command": "python3 -I -B checks/documents.py specification specification.md",
+        "normalized": 0,
+        "raw_exit": 0,
+        "subject_digest": "7c2f3d2e5ccb5415ab4ac7b5f4e4842dc9a2fbbbba1633974dcb9745c9b7ac37",
+        "resources_digest": "086079188d965086f52e8ceed70321e2d7b3d81560d99915682bc0dfa63dd165",
+        "cleanup_confirmed": true
+      },
+      {
+        "run_id": "20260915T200228Z-1115917714d0",
+        "name": "acceptance",
+        "command": "python3 -I -B checks/acceptance.py changes.diff",
+        "normalized": 0,
+        "raw_exit": 0,
+        "subject_digest": "af732ad37e02b0c08bb306744d45a9e08685f6b40b769ceb1e7b729321eca3a2",
+        "resources_digest": "086079188d965086f52e8ceed70321e2d7b3d81560d99915682bc0dfa63dd165",
+        "cleanup_confirmed": true
+      },
+      {
+        "run_id": "20260915T200228Z-1115917714d0",
+        "name": "regression",
+        "command": "python3 -I -B checks/regression.py changes.diff",
+        "normalized": 0,
+        "raw_exit": 0,
+        "subject_digest": "af732ad37e02b0c08bb306744d45a9e08685f6b40b769ceb1e7b729321eca3a2",
+        "resources_digest": "086079188d965086f52e8ceed70321e2d7b3d81560d99915682bc0dfa63dd165",
+        "cleanup_confirmed": true
+      },
+      {
+        "run_id": "20260915T200228Z-1115917714d0",
+        "name": "report",
+        "command": "python3 -I -B checks/documents.py implementation implementation.md",
+        "normalized": 0,
+        "raw_exit": 0,
+        "subject_digest": "af732ad37e02b0c08bb306744d45a9e08685f6b40b769ceb1e7b729321eca3a2",
+        "resources_digest": "086079188d965086f52e8ceed70321e2d7b3d81560d99915682bc0dfa63dd165",
+        "cleanup_confirmed": true
+      },
+      {
+        "run_id": "20260915T200300Z-cb0397d71602",
+        "name": "document",
+        "command": "python3 -I -B checks/documents.py review review.md",
+        "normalized": 0,
+        "raw_exit": 0,
+        "subject_digest": "f03faf1a9f7df58d7114dc513f853b6868df4bd505075d61b89273f69c2e9b00",
+        "resources_digest": "086079188d965086f52e8ceed70321e2d7b3d81560d99915682bc0dfa63dd165",
+        "cleanup_confirmed": true
+      }
+    ]
+  },
+  "independent_replays": [
+    {
+      "kind": "positive",
+      "check": "acceptance",
+      "exit": 0,
+      "status": "passed",
+      "required_case_count": 14,
+      "observed_row_count": 14,
+      "failed_case_ids": [],
+      "subject_hashes": {
+        "base": "d3ea139f26b82f8c33a5e3b9c9f06279376ac0c9cda35d58f995f28d5c0cb71f",
+        "patch": "6c6c953580c853902a395f047ecb53f59d5d7678b328e198ee717f69e649b0f3",
+        "candidate": "9ee9ae4abb7233e0b2fbc8f4ce919a3692e28eab8b45d8b145018d2cad5fac62",
+        "checks": "d7863a0f0473b3ff9a27da8054c8a0b3033792b46a6b17f028dcf9be0fd29413"
+      }
+    },
+    {
+      "kind": "positive",
+      "check": "regression",
+      "exit": 0,
+      "status": "passed",
+      "required_case_count": 14,
+      "observed_row_count": 23,
+      "failed_case_ids": [],
+      "subject_hashes": {
+        "base": "d3ea139f26b82f8c33a5e3b9c9f06279376ac0c9cda35d58f995f28d5c0cb71f",
+        "patch": "6c6c953580c853902a395f047ecb53f59d5d7678b328e198ee717f69e649b0f3",
+        "candidate": "9ee9ae4abb7233e0b2fbc8f4ce919a3692e28eab8b45d8b145018d2cad5fac62",
+        "checks": "d7863a0f0473b3ff9a27da8054c8a0b3033792b46a6b17f028dcf9be0fd29413"
+      }
+    },
+    {
+      "kind": "negative",
+      "check": "acceptance",
+      "exit": 1,
+      "status": "failed",
+      "required_case_count": 14,
+      "observed_row_count": 14,
+      "failed_case_ids": [
+        "Free delivery at 5000 cents"
+      ],
+      "subject_hashes": {
+        "base": "d3ea139f26b82f8c33a5e3b9c9f06279376ac0c9cda35d58f995f28d5c0cb71f",
+        "patch": "d927f81ea13ea03fb4e34e3b34b6cea1181764745e91958f5336306646ab618c",
+        "candidate": "17e19ce1c408d4c74c09ced5270509f8bfb24d815a37ee90054664fafbbaa633",
+        "checks": "d7863a0f0473b3ff9a27da8054c8a0b3033792b46a6b17f028dcf9be0fd29413"
+      }
+    },
+    {
+      "kind": "negative",
+      "check": "regression",
+      "exit": 1,
+      "status": "failed",
+      "required_case_count": 14,
+      "observed_row_count": 23,
+      "failed_case_ids": [
+        "Free delivery at 5000 cents",
+        "test_free_shipping.FreeShippingTests.test_threshold_and_neighboring_values"
+      ],
+      "subject_hashes": {
+        "base": "d3ea139f26b82f8c33a5e3b9c9f06279376ac0c9cda35d58f995f28d5c0cb71f",
+        "patch": "d927f81ea13ea03fb4e34e3b34b6cea1181764745e91958f5336306646ab618c",
+        "candidate": "17e19ce1c408d4c74c09ced5270509f8bfb24d815a37ee90054664fafbbaa633",
+        "checks": "d7863a0f0473b3ff9a27da8054c8a0b3033792b46a6b17f028dcf9be0fd29413"
+      }
+    }
+  ],
+  "negative_control_note": "Deliberately change >= to > at5000 only in a separate copy of the actual patch after successful live execution. Both independent checkers reject the applied defect with assertion exit1. This is not a model-produced failed run.",
+  "integrity": {
+    "original_check_stdout_matches_positive_replays": true,
+    "caller_files_unchanged": 22,
+    "source_checkout_files_unchanged": 196,
+    "retained_view_files_verified": 21,
+    "original_producer_check_process_groups_now_absent": 10
+  },
+  "recordings": [
+    {
+      "cast": "apmx-native-factory.cast",
+      "html": "apmx-native-factory.html",
+      "raw_private_sha256": "1ae36843f7b4d07ab7a1c4f818bad4767f64b23bcd2a03814ec89e5270124f00",
+      "actual_recording_seconds": 97.030156,
+      "captured_output_seconds": 97.02987313270569,
+      "edited_playback_seconds": 26.265962044398,
+      "label": "APMX 0.3.0 - actual native four-contract run at be9c5be | Edited speed (3x; gaps capped at 1.5s); path/email-redacted; line-grouped.",
+      "cast_sha256": "b2eb75122fa962a3091b3893b7049464c9eb9352448afda6276498fc3c076b6a",
+      "html_sha256": "319677b018535d69adeffde842fb2d0f0b7923f810df613f3bb95cd4caa4a3b7"
+    },
+    {
+      "cast": "apmx-checker-replays.cast",
+      "html": "apmx-checker-replays.html",
+      "raw_private_sha256": "b68a432cd7d821c2b5a41c26408ef24198d856934748c5f426ddaba996ce2da1",
+      "actual_recording_seconds": 0.611073,
+      "captured_output_seconds": 0.6063840389251709,
+      "edited_playback_seconds": 0.6063840389251709,
+      "label": "Independent post-run positive and deliberately bad threshold checker replays - no model calls | Edited speed (1x; gaps capped at 1.5s); path/email-redacted; line-grouped.",
+      "cast_sha256": "6428d31a1837eccd5a469c9567e5bc2c8dd0bb7fd95541db757e9005b660fecc",
+      "html_sha256": "7ab4bc8e24e042947483ba66d84d911487db4bdcf37a5d3f7c63b11fd6aa4985"
+    }
+  ],
+  "publication_safety": {
+    "raw_transcripts_private": true,
+    "proxy_install_output_omitted": true,
+    "format": "Sanitized edited-speed asciicast v2 and standalone text-only HTML, not MP4 or screen capture.",
+    "html": "Captured output rendered using textContent only; inline JSON escapes markup; no external scripts, assets, network requests or uploads.",
+    "scope": "These files are prepared locally for publication review; nothing has been uploaded."
+  },
+  "limitations": [
+    "Local execution is not a sandbox; passing checks remain UNPROVEN/21, not production certification.",
+    "No hard model-spend cap; existing configured model was preserved.",
+    "Cleanup verification covers recorded original process groups; escaped descendants remain unobserved.",
+    "Direct public-origin downloads were not the approved route on this managed machine; this evidence proves the disclosed corporate-transport variant."
+  ]
+}

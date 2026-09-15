@@ -83,9 +83,11 @@ class _Capture:
 
 
 @contextmanager
-def _terminal(monkeypatch, *, width=80, mode="styled", encoding="ascii", fallback=False):
+def _terminal(
+    monkeypatch, *, width=80, mode="styled", encoding="ascii", fallback=False, newline=None
+):
     raw = io.BytesIO()
-    stream = _Output(raw, encoding=encoding, errors="strict", write_through=True)
+    stream = _Output(raw, encoding=encoding, errors="strict", write_through=True, newline=newline)
     stream.tty = mode != "pipe"
     rich = Console(
         file=stream,
@@ -473,11 +475,13 @@ def test_aggregate_style_follows_owner_and_stopped_runs_are_not_counted_as_compl
 @pytest.mark.parametrize("width", [40, 80, 120])
 @pytest.mark.parametrize("encoding", ["ascii", "cp1252"])
 @pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("newline", [None, "\n", "\r\n"])
 def test_color_free_tty_keeps_prose_layout_and_literal_paths(
     monkeypatch,
     width,
     encoding,
     fallback,
+    newline,
 ):
     prose = (
         "I am reading the authoritative request and specification before making the bounded edits."
@@ -491,15 +495,20 @@ def test_color_free_tty_keeps_prose_layout_and_literal_paths(
             mode=mode,
             encoding=encoding,
             fallback=fallback,
+            newline=newline,
         ) as terminal:
             logger = ContractLogger()
             _event(logger, "activity", source="harness", text=prose)
             logger._write(path)
             raw = terminal.text
-        rendered[mode] = click.unstyle(raw)
+        # CRLF is a line ending, not cursor motion. Click may rewrap ASCII
+        # streams with native newlines; lone CR must still never reach a TTY.
+        text = raw.replace("\r\n", "\n")
+        assert "\r" not in text
+        rendered[mode] = click.unstyle(text)
         assert rendered[mode].endswith("  " + path + "\n")
         if mode != "styled":
-            assert "\x1b" not in raw and "\r" not in raw
+            assert "\x1b" not in raw
         assert all(ord(character) < 128 for character in raw)
     assert rendered["styled"] == rendered["no_color"]
     for mode in ("pipe", "ci", "dumb"):
@@ -520,12 +529,13 @@ def test_terminal_width_is_refreshed_and_literal_controls_remain_sanitized(monke
         terminal.rich.width = 40
         _event(logger, "activity", source="harness", text=message)
         after = terminal.text[len(before) :]
-        _event(logger, "activity", source="harness", text="literal [green] \x1b[31m \u202e")
+        _event(logger, "activity", source="harness", text="literal [green] \r \x1b[31m \u202e")
         output = terminal.text
     assert len(before.splitlines()) == 1
     assert len(after.splitlines()) > 1
     assert "\x1b" not in output
-    assert "[green]" in output and r"\x1b[31m" in output and r"\u202e" in output
+    assert "\r" not in output.replace("\r\n", "\n")
+    assert all(token in output for token in ("[green]", r"\r", r"\x1b[31m", r"\u202e"))
 
 
 def test_wrapping_does_not_drop_the_end_of_a_full_line_accent(monkeypatch):

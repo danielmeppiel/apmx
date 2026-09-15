@@ -41,6 +41,8 @@ An interactive `NO_COLOR` terminal keeps hanging indentation without ANSI.
 Redirected output keeps logical lines, without animation or application-inserted
 wrapping. Saved artifact and record paths stay intact and copyable. The existing
 ASCII, redaction, literal-text and broken-pipe protections apply in every mode.
+Output supports LF and native Windows CRLF line endings; a lone carriage return
+from an external message is escaped rather than used to move the cursor.
 
 ## Ownership for maintainers
 

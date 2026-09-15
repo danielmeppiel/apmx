@@ -92,14 +92,44 @@ def inspect_draft(
     return release, assets
 
 
-def create_draft(repository: str, assets: Path, version: str, commit: str) -> None:
-    check_repository(repository)
-    check_candidate(repository, version, commit)
-    manifest = make_manifest(assets, version, commit)
-    notes = (
+def release_notes(version: str, commit: str) -> str:
+    return (
         f"Standalone apmx {version}; candidate commit `{commit}`.\n\n"
+        "## What's new since v0.2.0\n\n"
+        "- Run a factory directory without writing orchestration: APMX derives execution "
+        "order from the contracts' declared file dependencies.\n"
+        "- Deliver multiple output files together. Handoffs require every declared file, "
+        "complete passing checks and an intact recorded inventory; the aggregate artifact "
+        "view retains admitted outputs and the original required inputs/checks.\n"
+        "- Export real patches from private source edits with the bounded artifact tools, "
+        "without changing the original checkout.\n"
+        "- Discover selected imported skills through native Copilot skill discovery, "
+        "with clearer package-preparation progress and bounded terminal evidence.\n"
+        "- Try the software-factory example with optional Gherkin/Behave acceptance checks "
+        "and separate regression checks. Its standalone checker now supports deeply nested "
+        "Windows file paths with child-only Git configuration.\n\n"
+        "## Compatibility and migration\n\n"
+        "**BREAKING: imported skill metadata.** Previously accepted imported skills can "
+        "now fail admission without a nonempty `name` and `description` in `SKILL.md`. "
+        "Names must be 1-64 lowercase letters/digits separated by single hyphens, with "
+        "no leading or trailing hyphen. Selected context names must not collide "
+        "case-insensitively; unsupported activation metadata is rejected.\n\n"
+        "Update the authored source package (for example, `name: handoff-style` with "
+        "`description: Write concise handoffs.`), then select its updated revision through "
+        "the normal dependency workflow, keeping `apm.yml` and its lock coherent. "
+        "Do not patch generated `apm_modules` copies or edit lock digests by hand. "
+        f"[Migration guide](https://github.com/{REPOSITORY}/blob/v{version}/"
+        "docs/install.md#migrating-from-v020-to-v030).\n\n"
+        "Scalar contracts and single-contract invocations remain supported. Scalar run "
+        "records retain `apm-contract-run/0.1`; multiple-output inventories use "
+        "`apm-contract-run/0.2`. Existing saved runs are not rewritten.\n\n"
+        "Factory execution asks for consent interactively. Automation must pass "
+        "`--allow-host-access --allow-unproven-inputs`; these flags do not admit failed "
+        "or incomplete handoffs. Native execution is not a sandbox, and complete passing "
+        "checks still yield **UNPROVEN (21)**, not VERIFIED.\n\n"
+        "## Installation and assurance limits\n\n"
         "Five native onedir archives include the runtime, LICENSE, NOTICE, release metadata, "
-        "and the pinned official APM backend with its complete runtime under libexec/apm. "
+        "and the pinned official APM 0.30.0 backend with its complete runtime under libexec/apm. "
         "Extract the complete archive; do not move the executable out of its runtime directory.\n\n"
         "Git, Copilot CLI, and contract-declared checker tools are external prerequisites. "
         "The CI actor is an explicitly hermetic Copilot JSONL protocol fixture, NOT live inference. "
@@ -109,6 +139,13 @@ def create_draft(repository: str, assets: Path, version: str, commit: str) -> No
         "Checksums prove byte integrity, not publisher authentication. "
         "Do not disable platform security to run these binaries.\n"
     )
+
+
+def create_draft(repository: str, assets: Path, version: str, commit: str) -> None:
+    check_repository(repository)
+    check_candidate(repository, version, commit)
+    manifest = make_manifest(assets, version, commit)
+    notes = release_notes(version, commit)
     with tempfile.TemporaryDirectory(prefix="apmx-release-notes-") as temporary:
         path = Path(temporary) / "notes.txt"
         path.write_text(notes, encoding="utf-8")
