@@ -8,8 +8,8 @@
 
 These are authored, secret-free fixtures, not copies of a governed project.
 Copy this directory to a fresh disposable directory outside another Git
-repository. Use the [pinned source installation](../../docs/install.md#run-the-current-source-checkout),
-Python 3.12,
+repository. Use the [installation guide](../../docs/install.md) for APMX and
+the selected Python 3.12 checker environment,
 and an authenticated native Copilot CLI with access to your selected model.
 Do not remove a project's remotes or policy to make it eligible.
 
