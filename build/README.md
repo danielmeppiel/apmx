@@ -122,7 +122,7 @@ download it at runtime. The development override is not consulted by frozen apmx
 
 ## Acceptance boundary
 
-`python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.3.0`
+`python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.3.1`
 uses a temporary caller outside the checkout, isolated HOME/config directories,
 and no `PYTHONPATH` or `PYTHONHOME`. It does not import or install the application.
 It rejects source launchers and runs six mandatory frozen local/package cases:
@@ -190,6 +190,9 @@ the final artifact view, and **UNPROVEN (21)**. This reuses the existing hermeti
 actor and checker; it is not live model inference. The ten local/package cases
 remain unchanged in scope and run alongside this factory case before upload and
 again against the actual downloaded draft bytes.
+Its allowed generated writes are exactly descendants of `factory/.apm`, compared
+as native path components. Windows separators are not mistaken for unexpected
+writes, and literal POSIX backslashes are not reinterpreted as separators.
 
 That same tenth case also generates a real consumer lock with native APM against
 a genuine Git repository tagged `v9` with package version `9.0.0`. A hermetic SSH
@@ -260,9 +263,14 @@ on pushes, pull requests or tags. Only `danielmeppiel/apmx` as a public, non-for
 repository with default branch `main` is allowed by explicit `--public-release`
 policy. Calls without that flag retain the old private-only restriction.
 
+The v0.3.0 preparation stopped before draft creation because the new factory
+fixture compared native Windows paths with a POSIX string prefix. All four Unix
+builds passed; their artifacts and the existing v0.3.0 source tag remain evidence,
+not binaries to relabel. The correction targets fresh v0.3.1 builds.
+
 An operator first reviews and merges the candidate, authorizes creation of the
-`v0.3.0` tag at that exact main commit, then explicitly dispatches
-`native-notice-release.yml` on `main` with `phase=prepare` and `tag=v0.3.0`.
+`v0.3.1` tag at that exact main commit, then explicitly dispatches
+`native-notice-release.yml` on `main` with `phase=prepare` and `tag=v0.3.1`.
 Tag creation, workflow dispatch and publication are separate human-controlled
 actions, not consequences of opening or merging a source PR. Keep main at that
 reviewed revision through preparation and publication: every checkout uses

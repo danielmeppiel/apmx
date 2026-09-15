@@ -110,8 +110,16 @@ def inspect_draft(
 
 
 def release_notes(version: str, commit: str) -> str:
+    patch_notes = (
+        "## Changes in v0.3.1\n\n"
+        "Correct the factory smoke fixture's native path comparison on Windows, "
+        "without broadening the allowed `factory/.apm` writes or changing application behavior. "
+        "The v0.3.0 preparation stopped before draft creation after this fixture false alarm; "
+        "its source tag and CI evidence remain unchanged. These v0.3.1 archives are fresh builds, "
+        "not relabeled v0.3.0 artifacts.\n\n"
+    ) if version == "0.3.1" else ""
     return (
-        f"Standalone apmx {version}; candidate commit `{commit}`.\n\n"
+        f"Standalone apmx {version}; candidate commit `{commit}`.\n\n{patch_notes}"
         "## What's new since v0.2.0\n\n"
         "- Run a factory directory without writing orchestration: APMX derives execution "
         "order from the contracts' declared file dependencies.\n"

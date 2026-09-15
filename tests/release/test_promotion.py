@@ -19,6 +19,21 @@ from tests.release.test_backend import add_backend_fixture
 
 
 class PromotionTests(unittest.TestCase):
+    def test_patch_release_notes_explain_fresh_builds_and_preserved_tag(self):
+        notes = promotion.release_notes("0.3.1", "a" * 40)
+        for text in (
+            "Standalone apmx 0.3.1",
+            "factory smoke fixture",
+            "without broadening",
+            "source tag and CI evidence remain unchanged",
+            "not relabeled v0.3.0 artifacts",
+            "UNPROVEN (21)",
+            "APM 0.30.0",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, notes)
+        self.assertNotIn("Changes in v0.3.1", promotion.release_notes("0.3.0", "a" * 40))
+
     def test_release_notes_bind_candidate_and_preserve_migration_and_assurance_limits(self):
         notes = promotion.release_notes("0.3.0", "a" * 40)
         for text in (
