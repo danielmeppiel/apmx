@@ -1,19 +1,50 @@
 NOTICES
 
-This repository incorporates material as listed below or described in the code.
+APMX
+Copyright (c) 2026 Daniel Meppiel.
 
----
+APMX-specific additions are licensed under the Apache License, Version 2.0;
+see LICENSE. APMX is an independent project, not an official Microsoft or GitHub
+release. Third-party copyright and license notices remain applicable to their
+respective material.
 
-This file is generated and maintained per the Microsoft CELA "Manual NOTICE
-Generation" process. It enumerates third-party open-source components that ship
-with this project (the runtime dependencies of the `apm` Python package). Build-
-time and contributor-only tooling (test runners, linters, type-checkers, the
-PyInstaller build backend, and the `setuptools` / `wheel` build system) are not
-distributed and are intentionally omitted, as is install-time user state created
-by the CLI under `apm_modules/`. No third-party source is vendored into this
-repository.
+## Microsoft APM source and bundled backend
 
-The `apm` source code itself is licensed under the MIT License; see `LICENSE`.
+This project includes source derived from Microsoft APM. Native archives also
+bundle the official APM executable, which retains its own upstream license
+files. The original MIT grant below applies to that upstream material; it is
+not replaced by the Apache license for APMX-specific additions.
+
+```text
+MIT License
+
+Copyright (c) Microsoft Corporation.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Additional third-party notices
+
+The component notices below are retained from Microsoft APM's NOTICE inventory.
+Native archives additionally carry an installed-component license inventory
+under LICENSES/ and the bundled backend's original notices under libexec/apm/.
+These notices do not change the license of APMX-specific additions.
 
 ---
 
@@ -1375,4 +1406,3 @@ Submitted on behalf of a third-party: @richgo (PRs: #8, #25, #26, #33, #34)
 Submitted on behalf of a third-party: @ryanfk (PRs: #92)
 Submitted on behalf of a third-party: @foutoucour (PRs: #108)
 Submitted on behalf of a third-party: @Jah-yee (PRs: #184)
-

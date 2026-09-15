@@ -1,11 +1,12 @@
 # APMX
 
-APMX runs agentic software factories from the command line, without custom
-orchestration code.
+**APMX runs Agentic Software Factories from Markdown contracts. Declare the files
+each task in your factory needs, the artifacts it must deliver, and the checks
+that must pass before another factory task can use them.**
 
-It passes files to dependent tasks only after every declared output is delivered
-and every declared check passes, keeping the files and check results so you can
-inspect each handoff.
+**Start locally with your own harness. Share and version contracts through APM.
+Share not just the skills for doing the work, but the goals and checks for
+accepting it.**
 
 ## Start with a contract
 
@@ -48,6 +49,7 @@ selection.
 
 Use the [matching APMX build](docs/install.md#run-the-current-source-checkout)
 and [prepare the example](examples/contracts/software-factory/README.md#set-up).
+Current harness support is the native GitHub Copilot CLI.
 From the directory containing `feature-factory`, run:
 
 ```sh
@@ -117,6 +119,8 @@ packages and skills when needed, with no separate APM installation.
 - [Reuse a packaged task and skill](examples/contracts/packaged-job/README.md)
 - [Report a problem or contribute](https://github.com/danielmeppiel/apmx/issues) - include a small example and remove secrets from logs.
 
-This private repository requires authorized access. APMX is an independent,
-MIT-licensed extraction from Microsoft APM, not an official Microsoft release.
+This private repository requires authorized access. APMX is an independent
+project by Daniel Meppiel, licensed under Apache-2.0 for APMX-specific additions.
+Retained Microsoft APM material remains MIT-licensed; its terms and attribution
+are preserved in NOTICE. This is not an official Microsoft or GitHub release.
 [Source origin](docs/source-origin.md) | [License](LICENSE) | [Notices](NOTICE)

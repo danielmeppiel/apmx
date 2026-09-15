@@ -8,7 +8,7 @@ version = "0.3.0"
 description = "Run AI software factories with independent checks and evidence"
 readme = "README.md"
 requires-python = ">=3.12"
-license = "MIT"
+license = "Apache-2.0 AND MIT"
 dependencies = [
   "click>=8.1",
   "rich>=13",
