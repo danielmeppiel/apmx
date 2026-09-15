@@ -38,8 +38,17 @@ def test_wheel_runs_without_checkout_or_apm(tmp_path):
             == (root / "src/apmx/apm-backend.json").read_bytes()
         )
         assert not any(name.startswith("apm_cli/") for name in names)
-        assert any(name.endswith("/LICENSE") for name in names)
-        assert any(name.endswith("/NOTICE") for name in names)
+        for filename in ("LICENSE", "NOTICE"):
+            (entry,) = [name for name in names if name.endswith(f"/{filename}")]
+            assert archive.read(entry) == (root / filename).read_bytes()
+        (license_entry,) = [name for name in names if name.endswith("/LICENSE")]
+        assert b"Apache License" in archive.read(license_entry)
+        (notice_entry,) = [name for name in names if name.endswith("/NOTICE")]
+        notices = archive.read(notice_entry)
+        assert b"Copyright (c) 2026 Daniel Meppiel." in notices
+        assert b"Copyright (c) Microsoft Corporation." in notices
+        assert b"Permission is hereby granted, free of charge" in notices
+        assert not any(name.startswith("WIP/") or "/WIP/" in name for name in names)
         archive.extractall(installed)
 
     script = """
@@ -55,6 +64,7 @@ import apmx
 assert Path(apmx.__file__).is_relative_to(Path(sys.argv[1]))
 assert importlib.util.find_spec("apm_cli") is None
 dist = importlib.metadata.distribution("apmx")
+assert dist.metadata["License-Expression"] == "Apache-2.0 AND MIT"
 assert any(ep.name == "apmx" and ep.value == "apmx.cli:main" for ep in dist.entry_points)
 assert not any("apm-cli" in req.lower() or "apm_cli" in req.lower() for req in dist.requires or ())
 assert (Path(apmx.__file__).parent / "core/_child_tls/_apm_tls_bootstrap.py").is_file()

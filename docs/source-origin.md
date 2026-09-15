@@ -7,8 +7,17 @@ read-only migration sources. Their full history is preserved separately in the
 private `danielmeppiel/apm-apmx-backup` repository and immutable
 `apmx-canonical-2026-09-12` pin.
 
-Microsoft's copyright and MIT terms remain in `LICENSE` and `NOTICE`. Changes
-here are an independent standalone extraction, not an official Microsoft release.
+APMX-specific additions are copyright (c) 2026 Daniel Meppiel and licensed under
+Apache-2.0; see [LICENSE](../LICENSE). Retained Microsoft APM source remains
+MIT-licensed, with Microsoft's original copyright and full MIT terms preserved
+in [NOTICE](../NOTICE). The source distribution's SPDX expression is
+`Apache-2.0 AND MIT`: the licenses apply to their respective material, not as
+alternative licenses for all APMX code.
+
+The bundled APM executable retains its own license files. Redistributing it
+requires preserving those notices; it does not require licensing APMX-specific
+additions under MIT. Existing MIT grants are not revoked by this change.
+APMX is an independent project, not an official Microsoft or GitHub release.
 
 ## Extracted owners
 
