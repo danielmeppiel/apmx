@@ -257,7 +257,9 @@ aggregate `artifacts/` view.
    rejects behavior; `2` means missing tooling, invalid inputs or incomplete
    execution. For a missing Behave import, return to `APMX_SOURCE`, rerun
    `uv sync --frozen --python 3.12 --extra factory`, and reselect the documented
-   PATH. Do not replace a failed check with a skip or treat exit `21` as success.
+   PATH. For a managed installation, use the
+   [approved hash-verified repair process](../../../docs/install.md#managed-environment-installation-optional)
+   instead of `uv sync`. Do not replace a failed check with a skip or treat exit `21` as success.
    For storage/cleanup failures, resolve the reported condition before retrying.
 3. **Revise with your own harness, outside retained evidence.** Copy the failed
    run's `baseline/` and available `artifacts/` contents into a separate scratch
