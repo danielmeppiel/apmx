@@ -40,12 +40,14 @@ def add_backend_fixture(bundle: Path, target: str) -> None:
     shutil.copyfile(release.BACKEND_PIN, bundle / "apm-backend.json")
     (bundle / "_internal/apmx").mkdir(parents=True)
     shutil.copyfile(release.BACKEND_PIN, bundle / "_internal/apmx/apm-backend.json")
+    native_notices = release.collect_native_notices(bundle, target)
     (bundle / "RELEASE.json").write_text(
         json.dumps(
             {
                 "target": target,
                 "apm_backend_pin_sha256": release.digest(release.BACKEND_PIN),
                 "apm_backend": release.backend_provenance(bundle / "libexec/apm", pin, target),
+                "native_notice_manifest_sha256": release.digest(native_notices),
             }
         )
     )

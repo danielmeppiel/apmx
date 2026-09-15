@@ -1,0 +1,3 @@
+# Preserve the reviewed upstream copyright document byte-for-byte.
+build/notices/libffi/*.txt -text
+build/notices/libffi/ubuntu-source-copyright.txt whitespace=-blank-at-eol

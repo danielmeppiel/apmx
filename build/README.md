@@ -32,6 +32,29 @@ Missing Python license or a missing file declared by installed metadata blocks
 the build. The archive-root LICENSE covers APMX-specific additions under
 Apache-2.0; NOTICE retains the original Microsoft APM MIT grant and attribution.
 
+`LICENSES/native-manifest.json` separately inventories actual native-file
+signatures and SHA-256 identities in both runtimes. Every redistributed Linux
+`libffi*.so*` file must independently match a reviewed Ubuntu Noble
+`libffi8 3.4.6-1build1` library identity. Its exact upstream 3.4.6 LICENSE and full
+Ubuntu source-package copyright file are copied under `LICENSES/native/libffi/`.
+The source copyright file retains file-scoped holders and grants; its separate
+build/test-tool licenses are not relabeled as the runtime library's MIT grant.
+
+Unknown library bytes, missing/truncated/changed notices, inventory omissions,
+and a changed inventory hash in `RELEASE.json` block archiving and extracted
+bundle verification. Matching a reviewed package member establishes byte
+identity, not original acquisition or an APT signature chain. A `_ctypes`
+consumer with undefined `ffi_*` symbols is not assigned an embedded libffi
+implementation or an invented version. Runtime provider resolution and full
+system-loader closure are not claimed by the notice inventory.
+
+Builds require a clean committed tree. `RELEASE.json` binds `source_commit` and
+the native-notice inventory digest; public draft creation rechecks all five
+archives against the reviewed commit before upload. The original backend
+runtime and upstream grants are not rewritten. Required notice source files
+are hash-checked and exempted from Git line-ending conversion; only the exact
+Ubuntu copyright file permits its upstream trailing whitespace.
+
 ## Pinned APM backend
 
 `src/apmx/apm-backend.json` is the single version/source/asset authority. Builds
