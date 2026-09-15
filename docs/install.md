@@ -153,8 +153,11 @@ APMX uses that private backend, never a global APM from PATH. Do not run the
 source route's `provision-apm` step for a native installation.
 Checksums detect changed bytes; they are not publisher signatures. These
 bundles are not publisher-signed or macOS-notarized. Do not disable OS security
-checks to run them. If your platform or policy cannot run the native bundle,
-use the [source fallback](#run-the-current-source-checkout).
+checks to run them. The [source fallback](#run-the-current-source-checkout)
+still provisions a native official APM backend: your platform must be compatible
+with that backend, and your organization's policy must permit it. Source APMX
+is not a workaround for Alpine/musl, older glibc compatibility or restrictions
+on unsigned binaries.
 
 To return in another terminal, add this same extracted directory to PATH and
 reselect the checker environment described below. Keep the version, target and
