@@ -168,6 +168,8 @@ def materialize(root: Path, patch: str, area: Path) -> tuple[Path, dict[str, Any
     command = [
         git,
         "-c",
+        "core.longpaths=true",
+        "-c",
         "core.autocrlf=false",
         "-c",
         "core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol",

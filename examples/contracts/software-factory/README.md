@@ -178,6 +178,8 @@ Each checker prints bounded JSON with baseline, patch, candidate and check
 resource hashes, required example identities and observed statuses. APMX
 retains check stdout with its ordinary evidence; the example does not invent
 runtime records. The checker removes its own private reconstruction directory.
+Its Git apply commands enable native Windows long paths for that child process
+only; they do not change global Git configuration or normalize captured bytes.
 
 Checker exit codes:
 

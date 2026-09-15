@@ -55,6 +55,12 @@ def seed(root: Path) -> Path:
     return root
 
 
+def _write_patch_file(path: Path, raw: bytes, *, crlf: bool) -> None:
+    if crlf:
+        raw = raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    path.write_bytes(raw)
+
+
 def authored_patch(
     root: Path, variant: str = "good", tests: str = GENERATED_TESTS, *, crlf: bool = False
 ) -> bytes:
@@ -65,7 +71,7 @@ def authored_patch(
         path = working / name
         path.parent.mkdir(parents=True, exist_ok=True)
         raw = (EXAMPLE / name).read_bytes()
-        path.write_bytes(raw.replace(b"\n", b"\r\n") if crlf else raw)
+        _write_patch_file(path, raw, crlf=crlf)
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
 
@@ -113,7 +119,7 @@ def authored_patch(
         ("tests/test_free_shipping.py", tests),
     ):
         raw = content.encode("ascii")
-        (working / name).write_bytes(raw.replace(b"\n", b"\r\n") if crlf else raw)
+        _write_patch_file(working / name, raw, crlf=crlf)
     git("add", "--intent-to-add", "--", "tests/test_free_shipping.py")
     raw = git("diff", "--no-ext-diff", "--no-textconv", "--no-renames")
     safe_rmtree(working, root)

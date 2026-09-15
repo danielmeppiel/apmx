@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import test_software_factory_support as fixtures
 from test_software_factory_support import (
     EXAMPLE,
     GENERATED_TESTS,
@@ -442,16 +443,23 @@ def test_patch_path_must_be_relative_and_contained(candidate: Path, name: str) -
 
 @pytest.mark.windows_compat
 @pytest.mark.parametrize("checker", ["regression.py", pytest.param("acceptance.py", marks=BDD)])
+@pytest.mark.parametrize("checkout_crlf", [False, True])
 def test_matching_crlf_baseline_and_patch_preserve_byte_identity(
     candidate: Path,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     checker: str,
+    checkout_crlf: bool,
 ) -> None:
+    checkout = seed(tmp_path / "checkout")
     names = ("src/__init__.py", "src/pricing.py", "src/checkout.py", "tests/test_checkout.py")
     for name in names:
-        path = candidate / name
-        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+        raw = (checkout / name).read_bytes().replace(b"\r\n", b"\n")
+        (checkout / name).write_bytes(raw.replace(b"\n", b"\r\n") if checkout_crlf else raw)
+        (candidate / name).write_bytes(raw.replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(fixtures, "EXAMPLE", checkout)
     patch = authored_patch(tmp_path, "crlf", crlf=True)
+    assert b"\r\r\n" not in patch
     (candidate / "changes.diff").write_bytes(patch)
     code, report = invoke(candidate, checker, "changes.diff")
     assert code == 0, report
@@ -460,6 +468,36 @@ def test_matching_crlf_baseline_and_patch_preserve_byte_identity(
         report["subject"]["base_files"]["src/pricing.py"]["sha256"]
         == hashlib.sha256((candidate / "src/pricing.py").read_bytes()).hexdigest()
     )
+
+
+@pytest.mark.windows_compat
+@pytest.mark.parametrize("checker", ["regression.py", pytest.param("acceptance.py", marks=BDD)])
+def test_patch_checks_really_apply_beyond_native_windows_path_limit(
+    candidate: Path, factory: SimpleNamespace, checker: str
+) -> None:
+    root = candidate / "long paths"
+    while len(str(root / "src/checkout.py")) < 280:
+        root /= "long-component"
+    seed(root)
+    patch = root / "changes.diff"
+    patch.write_bytes((candidate / "changes.diff").read_bytes())
+    control = subprocess.run(
+        ["git", "-c", "core.longpaths=false", "apply", "--check", str(patch)],
+        cwd=root,
+        env=factory.support.clean_environment(root.parent),
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if os.name == "nt":
+        assert control.returncode != 0
+        assert b"too long" in control.stderr.lower(), control.stderr
+    else:
+        assert control.returncode == 0, control.stderr
+    code, report = invoke(root, checker, "changes.diff")
+    assert code == 0 and report["status"] == "passed", report
+    assert report["subject"]["patch"] == hashlib.sha256(patch.read_bytes()).hexdigest()
+    assert not list(root.glob(".software-factory-check-*"))
 
 
 @BDD
