@@ -475,15 +475,27 @@ def test_matching_crlf_baseline_and_patch_preserve_byte_identity(
 def test_patch_checks_really_apply_beyond_native_windows_path_limit(
     candidate: Path, factory: SimpleNamespace, checker: str
 ) -> None:
-    root = candidate / "long paths"
-    while len(str(root / "src/checkout.py")) < 280:
-        root /= "long-component"
+    area_name = ".software-factory-check-" + "0" * 32
+    root = candidate / "long-path-check"
+    padding = max(0, 254 - len(str(root / area_name / "candidate")))
+    root = root.with_name(root.name + "x" * padding)
     seed(root)
     patch = root / "changes.diff"
     patch.write_bytes((candidate / "changes.diff").read_bytes())
+    control_area = root / area_name
+    control_candidate = control_area / "candidate"
+    control_candidate.mkdir(parents=True)
+    for name in factory.support.BASE_FILES:
+        destination = control_candidate / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((root / name).read_bytes())
+    assert len(str(control_candidate / "tests/test_free_shipping.py")) > 280
+    if os.name == "nt":
+        # CreateProcess requires a valid cwd even when Git supports long files.
+        assert len(str(control_candidate)) < 260
     control = subprocess.run(
         ["git", "-c", "core.longpaths=false", "apply", "--check", str(patch)],
-        cwd=root,
+        cwd=control_candidate,
         env=factory.support.clean_environment(root.parent),
         capture_output=True,
         timeout=15,
@@ -494,6 +506,7 @@ def test_patch_checks_really_apply_beyond_native_windows_path_limit(
         assert b"too long" in control.stderr.lower(), control.stderr
     else:
         assert control.returncode == 0, control.stderr
+    fixtures.safe_rmtree(control_area, root)
     code, report = invoke(root, checker, "changes.diff")
     assert code == 0 and report["status"] == "passed", report
     assert report["subject"]["patch"] == hashlib.sha256(patch.read_bytes()).hexdigest()
