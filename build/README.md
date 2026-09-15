@@ -89,7 +89,7 @@ download it at runtime. The development override is not consulted by frozen apmx
 
 ## Acceptance boundary
 
-`python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.2.0`
+`python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.3.0`
 uses a temporary caller outside the checkout, isolated HOME/config directories,
 and no `PYTHONPATH` or `PYTHONHOME`. It does not import or install the application.
 It rejects source launchers and runs six mandatory frozen local/package cases:
@@ -148,6 +148,16 @@ must match the original sources. An unselected dependency's skill and an unsuppo
 must be absent from the prompt and the entire producer workspace; the supporting script must
 never execute. The original single-skill gates remain separate.
 
+An additional **factory** case previews a directory without creating execution
+state or invoking the producer, then executes two dependent contracts. The first
+delivers two files; the second consumes both and delivers a third. It checks
+complete records, both explicit consent flags, scalar and multiple-output record
+schemas, independent check and producer cleanup, immutable original inputs/checks,
+the final artifact view, and **UNPROVEN (21)**. This reuses the existing hermetic
+actor and checker; it is not live model inference. The ten local/package cases
+remain unchanged in scope and run alongside this factory case before upload and
+again against the actual downloaded draft bytes.
+
 That same tenth case also generates a real consumer lock with native APM against
 a genuine Git repository tagged `v9` with package version `9.0.0`. A hermetic SSH
 transport serves actual Git objects; it does not replace APM, its resolver,
@@ -197,47 +207,87 @@ spaces to exercise native argument handling.
 On Windows, build a native actor with
 `uv run --frozen --extra dev --extra build python scripts/smoke.py --build-actor dist/smoke-actor`
 and pass `--actor /absolute/copilot.exe` to smoke. This does not test or authorize
-shell interpolation of arbitrary prompts through a `.cmd` launcher. CI retains
-the Windows fixture as separate, run-scoped test support, never as a release asset.
+shell interpolation of arbitrary prompts through a `.cmd` launcher. The new
+workflows build this fixture locally in each Windows job and never upload it.
 The actor is a PyInstaller **onedir** bundle: keep its `_internal` directory beside
-`copilot.exe`, including when transferring it to a fresh verification runner.
+`copilot.exe`. Downloaded-byte verification builds its own ephemeral actor, rather
+than transferring fixture binaries without accompanying notices between runners.
 One-file extraction is deliberately avoided because terminating a lingering
 descendant also terminates its extraction-cleanup process, leaving fixture-only
 temporary files. The strict app temporary-file cleanup check is not relaxed.
 `--report PATH` retains a JSON report containing the validated fixture records.
 
-## Private promotion
+## Manual public experimental promotion
 
-Ordinary CI builds and tests all five native targets. Release runs only for a
-`vMAJOR.MINOR.PATCH` tag or an explicit manual request naming an existing tag.
-The tag must match `pyproject.toml`, and jobs use its resolved commit throughout.
-All Actions are official and SHA-pinned; dependency installation uses the frozen
-public-index lock. Candidate, build/test, and workflow-default permissions remain
-`contents: read`. Draft creation, downloaded-asset verification, and publication
-jobs explicitly receive `contents: write`: GitHub's private draft APIs reject
-read-only integration tokens even for inspection/download requests. Verification
-uses `GH_TOKEN` only in the download step, never in frozen smoke execution, and
-checkout does not persist credentials. No PAT, new secret, or global permission
-change is required; exact asset/hash checks and publication gates are unchanged.
+The legacy CI, tag-release and bootstrap workflow identities remain disabled.
+Do not enable or rerun them to publish older branches or quarantined archives.
+The replacement `native-notice-build.yml` is reusable/call-only;
+`native-notice-release.yml` is manual-only. Neither starts five-platform builds
+on pushes, pull requests or tags. Only `danielmeppiel/apmx` as a public, non-fork
+repository with default branch `main` is allowed by explicit `--public-release`
+policy. Calls without that flag retain the old private-only restriction.
 
-The release workflow reuses native CI, collects exactly five archives plus their
-sidecars, and uploads them with a commit/version/hash manifest to a private draft.
-Fresh native runners download the **actual draft release assets by asset ID**.
-The manifest digest is anchored in the draft job's output, and the full candidate
-asset identity fingerprint must remain unchanged. No app sources or app
-installation are present in these verification checkouts. Each runner verifies
-checksums, extracts with traversal/link/special-file guards, and repeats all ten
-functional cases. Publication requires every downloaded-asset job to pass and
-rechecks repository privacy, tag identity, draft identity, and asset fingerprint.
+An operator first reviews and merges the candidate, authorizes creation of the
+`v0.3.0` tag at that exact main commit, then explicitly dispatches
+`native-notice-release.yml` on `main` with `phase=prepare` and `tag=v0.3.0`.
+Tag creation, workflow dispatch and publication are separate human-controlled
+actions, not consequences of opening or merging a source PR. Keep main at that
+reviewed revision through preparation and publication: every checkout uses
+the trusted workflow's `github.sha`, and the tag must equal it. The workflows
+never execute arbitrarily selected historical source with current write tokens.
 
-A failure leaves the release as a draft for inspection. Existing releases are
-never overwritten or silently reused. To retry a failed draft, an operator must
-inspect it and explicitly remove it before rerunning, or choose a new version/tag;
-the workflow does not delete releases. Access remains limited to the private
-`danielmeppiel/apmx` repository. Running this workflow is an explicit release
-request; no AI credentials, corporate signing keys, or native auth profiles are
-copied into CI. A separate operator-run downloaded-binary test against genuine
-authenticated Copilot is required before claiming live model execution.
+Preparation builds fresh archives on these standard public GitHub runners:
+
+| Target | Runner |
+| --- | --- |
+| Linux x86_64 | `ubuntu-24.04` |
+| Linux ARM64 | `ubuntu-24.04-arm` |
+| macOS x86_64 | `macos-15-intel` |
+| macOS ARM64 | `macos-15` |
+| Windows x86_64 | `windows-2025` |
+
+These are not larger/paid runners; actual startup availability must still be
+observed. Archive-transfer artifacts are uncompressed and retained for one day;
+JSON license/provenance/smoke evidence and the verification receipt for seven
+days. There are no dependency caches or actor-binary uploads. All Actions are
+official and SHA-pinned; dependencies come from the frozen public-index lock.
+Candidate/build/default permissions are `contents: read`. Only draft creation,
+draft download and explicit publication receive `contents: write`, because draft
+release APIs require it. Verification receives `GH_TOKEN` only in the download
+step, not when running native bytes; checkouts do not persist credentials.
+
+Before upload, preparation independently extracts all five archives, checks
+required native notices/inventories and source-commit metadata, and creates an
+**experimental prerelease draft**, never a latest release. Exactly five archives,
+their sidecars and a commit/version/hash manifest are uploaded. Fresh runners
+then download the **actual draft release assets by numeric asset ID**, require
+the original manifest digest and unchanged full asset identity fingerprint,
+apply checksum/traversal/link/special-file gates, and repeat all ten original
+functional cases plus the multi-output factory case. Verification checkouts
+contain release helpers, not application source or an installed application.
+
+Only successful downloaded-byte checks for every target produce the small
+`verified-native-draft` artifact containing `verified-draft.json`. **Preparation
+stops there; it cannot publish.** Review actual bundled-component notice coverage
+and cold installer/download evidence before authorizing exposure. No old archive
+is relabeled or silently repacked, and the distribution hold remains until fresh
+downloads actually work.
+
+For a separately approved publication, dispatch the same workflow on the same
+main revision with `phase=publish`, the same tag, and the preparation's
+`verified_run_id`, `release_id` and `assets_fingerprint`. This phase **never
+rebuilds**. It verifies the successful manual run, trusted source/workflow,
+all five downloaded job results, unexpired numeric receipt artifact and its
+GitHub ZIP SHA-256, and exact receipt identity/attempt. It then rechecks the tag,
+draft and full asset fingerprint before publishing that same draft, preserving
+`prerelease=true` and `make_latest=false`. An expired, stale, failed or changed
+receipt/candidate refuses; there is no automatic bypass.
+
+A failure leaves the draft for inspection. Existing releases are never
+overwritten, silently reused or deleted by these helpers. Do not repeatedly
+dispatch or replace assets to hide a failure; stop for an explicit operator
+decision. No new PAT, AI credentials, corporate signing keys or native auth
+profiles are copied into CI. Hermetic native smoke is not live-model proof.
 
 Each native job provisions the real pinned backend before running source tests,
 passing only its explicit path to that test step. The existing non-skippable

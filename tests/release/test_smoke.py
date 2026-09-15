@@ -93,6 +93,7 @@ class SmokeFixtureTests(unittest.TestCase):
                 ),
                 patch.object(smoke, "run_binary", return_value=result),
                 patch.object(smoke, "run_case", return_value={}) as run,
+                patch.object(smoke, "run_factory_case", return_value={}) as factory,
                 patch.object(
                     sys, "argv", ["smoke.py", "--binary", str(binary), "--version", "0.1.0"]
                 ),
@@ -100,8 +101,37 @@ class SmokeFixtureTests(unittest.TestCase):
             ):
                 smoke.main()
             self.assertEqual(run.call_count, 10)
+            factory.assert_called_once()
+            self.assertEqual(factory.call_args.args[1], factory.call_args.args[1].resolve())
             for call in run.call_args_list:
                 self.assertEqual(call.args[1], call.args[1].resolve())
+
+    def test_factory_fixture_exercises_real_source_dispatch_before_frozen_matrix(self):
+        """The CI invocation uses frozen bytes; this test checks the fixture against source."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            actor = None
+            if os.name == "nt":
+                smoke.build_actor(root / "native-actor")
+                actor = root / "native-actor/copilot.exe"
+            run = smoke.run_binary
+
+            def source(binary, arguments, caller, environment, timeout=90):
+                return run(
+                    Path(sys.executable),
+                    ["-B", "-m", "apmx", *arguments],
+                    caller,
+                    environment,
+                    timeout,
+                )
+
+            with patch.object(smoke, "run_binary", side_effect=source):
+                result = smoke.run_factory_case(Path(sys.executable), root / "factory", actor)
+            self.assertEqual(result["preview_exit"], 0)
+            self.assertEqual(result["exit_code"], 21)
+            self.assertEqual(
+                (result["contracts"], result["checks"], result["delivered_files"]), (2, 2, 3)
+            )
 
     def test_environment_does_not_copy_credentials_or_python_fallback(self):
         with tempfile.TemporaryDirectory() as temporary:

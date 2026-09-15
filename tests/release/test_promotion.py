@@ -2,10 +2,14 @@
 
 import argparse
 import copy
+import hashlib
+import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -87,6 +91,45 @@ class PromotionTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "private"),
         ):
             promotion.check_repository(promotion.REPOSITORY)
+
+    def test_public_promotion_requires_explicit_standalone_nonfork_main_policy(self):
+        metadata = {
+            "private": False,
+            "full_name": promotion.REPOSITORY,
+            "fork": False,
+            "default_branch": "main",
+        }
+        with patch.object(promotion, "gh_json", return_value=metadata):
+            promotion.check_repository(promotion.REPOSITORY, public_release=True)
+        for field, value in (
+            ("private", True),
+            ("full_name", "other/repository"),
+            ("fork", True),
+            ("default_branch", "unexpected"),
+        ):
+            with (
+                self.subTest(field=field),
+                patch.object(promotion, "gh_json", return_value={**metadata, field: value}),
+                self.assertRaisesRegex(ValueError, "public"),
+            ):
+                promotion.check_repository(promotion.REPOSITORY, public_release=True)
+
+    def test_public_draft_must_remain_an_experimental_prerelease(self):
+        with (
+            patch.object(
+                promotion,
+                "gh_json",
+                side_effect=[self.release, self.assets],
+            ),
+            self.assertRaisesRegex(ValueError, "prerelease"),
+        ):
+            promotion.inspect_draft(
+                promotion.REPOSITORY,
+                123,
+                self.version,
+                self.commit,
+                public_release=True,
+            )
 
     def test_candidate_requires_unchanged_tag_including_annotated_tags(self):
         with patch.object(
@@ -181,6 +224,7 @@ class PromotionTests(unittest.TestCase):
     def test_download_rejects_substituted_manifest_before_extracting(self):
         with tempfile.TemporaryDirectory() as temporary:
             args = argparse.Namespace(
+                public_release=False,
                 repository=promotion.REPOSITORY,
                 release_id=123,
                 version=self.version,
@@ -232,6 +276,7 @@ class PromotionTests(unittest.TestCase):
                 for asset in self.assets
             ]
             args = argparse.Namespace(
+                public_release=False,
                 repository=promotion.REPOSITORY,
                 release_id=123,
                 version=self.version,
@@ -264,6 +309,7 @@ class PromotionTests(unittest.TestCase):
 
     def test_publish_fails_closed_without_mutation_when_asset_identity_changes(self):
         args = argparse.Namespace(
+            public_release=False,
             repository=promotion.REPOSITORY,
             release_id=123,
             version=self.version,
@@ -279,6 +325,261 @@ class PromotionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "changed"):
                 promotion.publish(args)
             mutate.assert_not_called()
+
+    def test_public_draft_preflight_rejects_wrong_inner_source_before_upload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            for metadata in (
+                {"version": self.version},
+                {"version": self.version, "source_commit": "d" * 40},
+                {"version": "9.9.9", "source_commit": self.commit},
+            ):
+                (bundle / "RELEASE.json").write_text(json.dumps(metadata), encoding="utf-8")
+                with (
+                    self.subTest(metadata=metadata),
+                    patch.object(promotion, "check_repository"),
+                    patch.object(promotion, "check_candidate"),
+                    patch.object(promotion, "make_manifest"),
+                    patch.object(promotion, "extract_archive", return_value=bundle),
+                    patch.object(promotion.subprocess, "run") as upload,
+                    self.assertRaisesRegex(ValueError, "reviewed source candidate"),
+                ):
+                    promotion.create_draft(
+                        promotion.REPOSITORY,
+                        root,
+                        self.version,
+                        self.commit,
+                        public_release=True,
+                    )
+                upload.assert_not_called()
+
+    def verification_fixture(self, receipt_changes=None):
+        args = argparse.Namespace(
+            repository=promotion.REPOSITORY,
+            version=self.version,
+            commit=self.commit,
+            release_id=123,
+            assets_fingerprint=promotion.asset_fingerprint(self.assets),
+            public_release=True,
+            verified_run_id=456,
+        )
+        run = {
+            "id": 456,
+            "status": "completed",
+            "conclusion": "success",
+            "event": "workflow_dispatch",
+            "path": promotion.PUBLIC_WORKFLOW,
+            "head_sha": self.commit,
+            "head_branch": "main",
+            "repository": {"full_name": promotion.REPOSITORY},
+            "head_repository": {"full_name": promotion.REPOSITORY},
+            "run_attempt": 1,
+        }
+        jobs = {
+            "total_count": 5,
+            "jobs": [
+                {"name": f"Downloaded {target}", "conclusion": "success"} for target in TARGETS
+            ],
+        }
+        receipt = {
+            "schema": promotion.VERIFICATION_SCHEMA,
+            "repository": promotion.REPOSITORY,
+            "version": self.version,
+            "commit": self.commit,
+            "release_id": 123,
+            "manifest_sha": "c" * 64,
+            "assets_fingerprint": args.assets_fingerprint,
+            "workflow": promotion.PUBLIC_WORKFLOW,
+            "run_id": 456,
+            "run_attempt": 1,
+            **(receipt_changes or {}),
+        }
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr(promotion.VERIFICATION_FILE, json.dumps(receipt))
+        payload = stream.getvalue()
+        artifacts = {
+            "total_count": 1,
+            "artifacts": [
+                {
+                    "id": 789,
+                    "name": promotion.VERIFICATION_ARTIFACT,
+                    "expired": False,
+                    "size_in_bytes": len(payload),
+                    "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
+                    "workflow_run": {"id": 456, "head_sha": self.commit},
+                }
+            ],
+        }
+        return args, [run, jobs, artifacts], payload
+
+    def test_verified_receipt_requires_exact_successful_new_workflow_and_source(self):
+        args, responses, payload = self.verification_fixture()
+        with (
+            patch.object(promotion, "gh_json", side_effect=responses),
+            patch.object(promotion.subprocess, "check_output", return_value=payload),
+        ):
+            receipt = promotion.check_verified_receipt(args)
+        self.assertEqual(receipt["release_id"], 123)
+        for field, value in (
+            ("status", "in_progress"),
+            ("conclusion", "failure"),
+            ("event", "push"),
+            ("path", ".github/workflows/release.yml"),
+            ("head_sha", "d" * 40),
+            ("head_branch", "unreviewed"),
+            ("head_repository", {"full_name": "fork/apmx"}),
+        ):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(responses)
+                changed[0][field] = value
+                with (
+                    patch.object(promotion, "gh_json", side_effect=changed),
+                    patch.object(promotion.subprocess, "check_output") as download,
+                    self.assertRaisesRegex(ValueError, "trusted source workflow"),
+                ):
+                    promotion.check_verified_receipt(args)
+                download.assert_not_called()
+
+    def test_missing_or_skipped_downloaded_target_never_authorizes_publication(self):
+        for missing in (True, False):
+            args, responses, _ = self.verification_fixture()
+            if missing:
+                responses[1]["jobs"].pop()
+                responses[1]["total_count"] -= 1
+            else:
+                responses[1]["jobs"][0]["conclusion"] = "skipped"
+            with (
+                self.subTest(missing=missing),
+                patch.object(promotion, "gh_json", side_effect=responses),
+                patch.object(promotion.subprocess, "check_output") as download,
+                self.assertRaisesRegex(ValueError, "downloaded-byte verification"),
+            ):
+                promotion.check_verified_receipt(args)
+            download.assert_not_called()
+
+    def test_receipt_substitution_expiry_and_transfer_tampering_fail_closed(self):
+        for changes in (
+            {"release_id": 124},
+            {"assets_fingerprint": "d" * 64},
+            {"commit": "d" * 40},
+            {"run_attempt": 2},
+            {"manifest_sha": "not-a-hash"},
+            {"manifest_sha": None},
+        ):
+            args, responses, payload = self.verification_fixture(changes)
+            with (
+                self.subTest(changes=changes),
+                patch.object(promotion, "gh_json", side_effect=responses),
+                patch.object(promotion.subprocess, "check_output", return_value=payload),
+                self.assertRaisesRegex(ValueError, "receipt|manifest anchor"),
+            ):
+                promotion.check_verified_receipt(args)
+        args, responses, payload = self.verification_fixture()
+        responses[2]["artifacts"][0]["expired"] = True
+        with (
+            patch.object(promotion, "gh_json", side_effect=responses),
+            self.assertRaisesRegex(ValueError, "expired"),
+        ):
+            promotion.check_verified_receipt(args)
+        args, responses, payload = self.verification_fixture()
+        with (
+            patch.object(promotion, "gh_json", side_effect=responses),
+            patch.object(promotion.subprocess, "check_output", return_value=payload[:-1] + b"x"),
+            self.assertRaisesRegex(ValueError, "transfer/hash"),
+        ):
+            promotion.check_verified_receipt(args)
+
+    def test_public_publish_requires_receipt_before_any_release_mutation(self):
+        args, _, _ = self.verification_fixture()
+        with (
+            patch.object(promotion, "check_repository"),
+            patch.object(promotion, "check_candidate"),
+            patch.object(
+                promotion, "check_verified_receipt", side_effect=ValueError("unverified run")
+            ),
+            patch.object(promotion, "inspect_draft") as inspect,
+            patch.object(promotion.subprocess, "run") as mutate,
+            self.assertRaisesRegex(ValueError, "unverified run"),
+        ):
+            promotion.publish(args)
+        inspect.assert_not_called()
+        mutate.assert_not_called()
+
+    def test_public_publish_uses_verified_draft_only_and_preserves_prerelease(self):
+        args, responses, payload = self.verification_fixture()
+        repository = {
+            "private": False,
+            "full_name": promotion.REPOSITORY,
+            "fork": False,
+            "default_branch": "main",
+        }
+        responses = [
+            repository,
+            {"object": {"type": "commit", "sha": self.commit}},
+            *responses,
+            {**self.release, "prerelease": True},
+            self.assets,
+            {"draft": False, "prerelease": True, "html_url": "https://example.test/release"},
+        ]
+        with (
+            patch.object(promotion, "gh_json", side_effect=responses),
+            patch.object(promotion.subprocess, "check_output", return_value=payload),
+            patch.object(promotion.subprocess, "run") as mutate,
+            patch.object(promotion, "output_values"),
+        ):
+            promotion.publish(args)
+        mutate.assert_called_once()
+        command = mutate.call_args.args[0]
+        self.assertIn(f"repos/{promotion.REPOSITORY}/releases/123", command)
+        self.assertIn("draft=false", command)
+        self.assertIn("make_latest=false", command)
+        self.assertNotIn("create", command)
+
+    def test_receipt_creation_is_bound_to_trusted_workflow_context_and_never_overwrites(self):
+        args, _, _ = self.verification_fixture()
+        args.manifest_sha = "c" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            args.receipt = Path(temporary) / promotion.VERIFICATION_FILE
+            environment = {
+                "GITHUB_REPOSITORY": promotion.REPOSITORY,
+                "GITHUB_SHA": self.commit,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_EVENT_NAME": "workflow_dispatch",
+                "GITHUB_WORKFLOW_REF": (
+                    f"{promotion.REPOSITORY}/{promotion.PUBLIC_WORKFLOW}@refs/heads/main"
+                ),
+                "GITHUB_RUN_ID": "456",
+                "GITHUB_RUN_ATTEMPT": "1",
+            }
+            with (
+                patch.dict(os.environ, environment, clear=True),
+                patch.object(promotion, "output_values"),
+            ):
+                promotion.write_verification(args)
+                self.assertEqual(json.loads(args.receipt.read_text())["commit"], self.commit)
+                with self.assertRaises(FileExistsError):
+                    promotion.write_verification(args)
+                with (
+                    patch.dict(os.environ, {"GITHUB_SHA": "d" * 40}),
+                    self.assertRaisesRegex(ValueError, "trusted public preparation"),
+                ):
+                    promotion.write_verification(args)
+
+    def test_public_archive_metadata_must_match_reviewed_version_and_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary)
+            metadata = bundle / "RELEASE.json"
+            metadata.write_text(json.dumps({"version": self.version, "source_commit": self.commit}))
+            promotion.check_public_bundle(bundle, self.version, self.commit)
+            for change in ({"source_commit": "d" * 40}, {"version": "99.0.0"}):
+                metadata.write_text(
+                    json.dumps({"version": self.version, "source_commit": self.commit, **change})
+                )
+                with self.assertRaisesRegex(ValueError, "reviewed source candidate"):
+                    promotion.check_public_bundle(bundle, self.version, self.commit)
 
 
 if __name__ == "__main__":

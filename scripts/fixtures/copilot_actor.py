@@ -117,7 +117,19 @@ def main():
         candidate = json.loads(Path("notes.md").read_text(encoding="utf-8"))
         if mode == "reject":
             candidate["value"] = -1
-        Path("handoff.json").write_text(json.dumps(candidate) + "\n", encoding="utf-8")
+        outputs = ["handoff.json"]
+        if os.environ.get("APMX_FACTORY_SMOKE") == "1":
+            if "FACTORY_FIXTURE_FIRST" in prompt:
+                outputs = ["first.json", "second.json"]
+            elif "FACTORY_FIXTURE_SECOND" in prompt:
+                for name in ("first.json", "second.json"):
+                    if json.loads(Path(name).read_text(encoding="utf-8")) != candidate:
+                        raise RuntimeError("Factory handoff differs from original input")
+                outputs = ["final.json"]
+            else:
+                raise RuntimeError("Unexpected factory fixture contract")
+        for name in outputs:
+            Path(name).write_text(json.dumps(candidate) + "\n", encoding="utf-8")
         Path("checks/check.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
     if mode == "linger":
         start_child()

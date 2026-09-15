@@ -1,0 +1,243 @@
+name: Experimental verified native release
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Prepare builds and verifies a draft; publish never rebuilds
+        type: choice
+        options: [prepare, publish]
+        default: prepare
+        required: true
+      tag:
+        description: Existing version tag at this trusted main/workflow commit
+        type: string
+        default: v0.3.0
+        required: true
+      verified_run_id:
+        description: Publish only - successful preparation workflow run ID
+        type: string
+      release_id:
+        description: Publish only - exact reviewed draft ID from the receipt
+        type: string
+      assets_fingerprint:
+        description: Publish only - exact reviewed asset fingerprint from the receipt
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: experimental-native-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.26"
+  UV_NO_CONFIG: "true"
+  UV_DEFAULT_INDEX: https://pypi.org/simple
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  candidate:
+    if: github.repository == 'danielmeppiel/apmx' && github.event.repository.private == false && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.project.outputs.sha }}
+      version: ${{ steps.project.outputs.version }}
+      matrix: ${{ steps.project.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Validate the explicit phase
+        env:
+          RELEASE_PHASE: ${{ inputs.phase }}
+        run: |
+          case "$RELEASE_PHASE" in prepare|publish) ;; *) exit 1 ;; esac
+      - name: Bind the existing tag and notice gate to the trusted workflow source
+        id: project
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python scripts/release.py validate --require-native-notices --tag "$RELEASE_TAG"
+
+  build:
+    if: inputs.phase == 'prepare'
+    needs: candidate
+    uses: ./.github/workflows/native-notice-build.yml
+    with:
+      candidate: ${{ needs.candidate.outputs.sha }}
+    permissions:
+      contents: read
+
+  draft:
+    if: inputs.phase == 'prepare'
+    needs: [candidate, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+      manifest_sha: ${{ steps.draft.outputs.manifest_sha }}
+      assets_fingerprint: ${{ steps.draft.outputs.assets_fingerprint }}
+    env:
+      VERSION: ${{ needs.candidate.outputs.version }}
+      COMMIT: ${{ needs.candidate.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: apmx-*
+          path: ${{ runner.temp }}/candidate-assets
+          merge-multiple: true
+      - name: Recheck every notice-complete archive and create a new prerelease draft
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.promotion draft --public-release --version "$VERSION" \
+            --commit "$COMMIT" --assets "$RUNNER_TEMP/candidate-assets"
+
+  verify-downloaded:
+    if: inputs.phase == 'prepare'
+    needs: [candidate, draft]
+    name: Downloaded ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.candidate.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.candidate.outputs.version }}
+      COMMIT: ${{ needs.candidate.outputs.sha }}
+      RELEASE_ID: ${{ needs.draft.outputs.release_id }}
+      MANIFEST_SHA: ${{ needs.draft.outputs.manifest_sha }}
+      ASSETS_FINGERPRINT: ${{ needs.draft.outputs.assets_fingerprint }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check out helpers only, without application source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install pinned Windows fixture build tools without installing APMX
+        if: runner.os == 'Windows'
+        run: |
+          python -m pip --isolated --disable-pip-version-check install \
+            --index-url https://pypi.org/simple "uv==$UV_VERSION"
+          uv sync --frozen --extra build --no-install-project
+          uv run --no-sync python scripts/smoke.py --build-actor "$RUNNER_TEMP/hermetic-actor"
+      - name: Download exact draft IDs and verify manifest, notices and candidate bytes
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.promotion download --public-release --version "$VERSION" \
+            --commit "$COMMIT" --release-id "$RELEASE_ID" --manifest-sha "$MANIFEST_SHA" \
+            --assets-fingerprint "$ASSETS_FINGERPRINT" --target "$TARGET" \
+            --destination "$RUNNER_TEMP/released-assets"
+      - name: Exercise the downloaded native runner without a GitHub write token
+        env:
+          BUNDLE: ${{ steps.download.outputs.bundle }}
+        run: |
+          args=()
+          executable=apmx
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            executable=apmx.exe
+            args+=(--actor "$RUNNER_TEMP/hermetic-actor/copilot.exe")
+          fi
+          python scripts/smoke.py --binary "$BUNDLE/$executable" --version "$VERSION" \
+            --report "$RUNNER_TEMP/released-smoke.json" "${args[@]}"
+      - name: Retain downloaded-byte verification JSON
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: released-smoke-${{ matrix.target }}
+          path: ${{ runner.temp }}/released-smoke.json
+          if-no-files-found: error
+          retention-days: 7
+
+  verified:
+    if: inputs.phase == 'prepare'
+    needs: [candidate, draft, verify-downloaded]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.candidate.outputs.version }}
+      COMMIT: ${{ needs.candidate.outputs.sha }}
+      RELEASE_ID: ${{ needs.draft.outputs.release_id }}
+      MANIFEST_SHA: ${{ needs.draft.outputs.manifest_sha }}
+      ASSETS_FINGERPRINT: ${{ needs.draft.outputs.assets_fingerprint }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Record the exact verified draft for a separate publication decision
+        run: |
+          python -m scripts.promotion record --public-release --version "$VERSION" \
+            --commit "$COMMIT" --release-id "$RELEASE_ID" --manifest-sha "$MANIFEST_SHA" \
+            --assets-fingerprint "$ASSETS_FINGERPRINT" --receipt "$RUNNER_TEMP/verified-draft.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-native-draft
+          path: ${{ runner.temp }}/verified-draft.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: inputs.phase == 'publish'
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      VERSION: ${{ needs.candidate.outputs.version }}
+      COMMIT: ${{ needs.candidate.outputs.sha }}
+      VERIFIED_RUN_ID: ${{ inputs.verified_run_id }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      ASSETS_FINGERPRINT: ${{ inputs.assets_fingerprint }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Publish only the explicitly selected, already verified experimental draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.promotion publish --public-release --version "$VERSION" \
+            --commit "$COMMIT" --release-id "$RELEASE_ID" \
+            --assets-fingerprint "$ASSETS_FINGERPRINT" --verified-run-id "$VERIFIED_RUN_ID"
