@@ -11,6 +11,7 @@ import platform
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import sysconfig
@@ -18,7 +19,7 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -32,6 +33,32 @@ TARGETS = {
 }
 VERSION = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
 BACKEND_PIN = ROOT / "src/apmx/apm-backend.json"
+NATIVE_NOTICE_SCHEMA = "apmx-native-notices/1"
+NATIVE_NOTICE_MANIFEST = "LICENSES/native-manifest.json"
+LIBFFI_NOTICES = {
+    "ubuntu-source-copyright.txt": {
+        "sha256": "737ff68f0eb104d3b0d96b291c3a8f40a775a3ec2b53f9b2e4bcfe3188bde118",
+        "source": "https://changelogs.ubuntu.com/changelogs/pool/main/libf/libffi/libffi_3.4.6-1build1/copyright",
+    },
+    "upstream-v3.4.6-LICENSE.txt": {
+        "sha256": "67894089811f93fca47a76f85e017da6f8582d4ba0905963c6e0f1ad6df7a195",
+        "source": "https://raw.githubusercontent.com/libffi/libffi/v3.4.6/LICENSE",
+    },
+}
+LIBFFI_IDENTITIES = {
+    "linux-x86_64": {
+        "sha256": "00f593fe192f2851b8ce23b25cec2488d769beb5a8f63e8c9e563071e1075153",
+        "package": "libffi8_3.4.6-1build1_amd64.deb",
+        "package_sha256": "637e6a7744de08cd331a41f4efd0d24e6ea9064843dea9d1c6ca87bdb5f038a2",
+        "package_member": "usr/lib/x86_64-linux-gnu/libffi.so.8.1.4",
+    },
+    "linux-arm64": {
+        "sha256": "9dd873a938c4d7df76912d01f6a28aa4aa73d583bd20485a0dbfe5aa9673a191",
+        "package": "libffi8_3.4.6-1build1_arm64.deb",
+        "package_sha256": "a4d4607144bc599328a913d7312761fd8f4a650d67c7d5058f1f3667d771d37c",
+        "package_member": "usr/lib/aarch64-linux-gnu/libffi.so.8.1.4",
+    },
+}
 
 
 def digest(path: Path) -> str:
@@ -234,6 +261,7 @@ def check_bundle(bundle: Path, target: str) -> None:
         if not (path.is_file() or path.is_dir()):
             raise ValueError("Unsupported file in bundle")
     check_backend_metadata(bundle, target)
+    check_native_notices(bundle, target)
 
 
 def archive_bundle(bundle: Path, output: Path, version: str, target: str) -> Path:
@@ -403,6 +431,294 @@ def native_target() -> str:
     return f"{system}-{arch}"
 
 
+def validate_notice_sources() -> None:
+    for name, notice in LIBFFI_NOTICES.items():
+        path = ROOT / "build/notices/libffi" / name
+        if not path.is_file() or path.is_symlink() or digest(path) != notice["sha256"]:
+            raise ValueError(f"Missing or changed reviewed libffi notice source: {name}")
+
+
+def macho_ffi_symbols(data: bytes, *, require_symbols: bool = False) -> set[str]:
+    """Inspect bounded Mach-O symbol tables without executing platform binaries."""
+    thin_formats = {
+        b"\xcf\xfa\xed\xfe": ("<", 64), b"\xfe\xed\xfa\xcf": (">", 64),
+        b"\xce\xfa\xed\xfe": ("<", 32), b"\xfe\xed\xfa\xce": (">", 32),
+    }
+    fat_formats = {
+        b"\xca\xfe\xba\xbe": (">", 32), b"\xbe\xba\xfe\xca": ("<", 32),
+        b"\xca\xfe\xba\xbf": (">", 64), b"\xbf\xba\xfe\xca": ("<", 64),
+    }
+
+    def read(blob: bytes, fmt: str, offset: int):
+        if offset < 0 or offset + struct.calcsize(fmt) > len(blob):
+            raise ValueError("Malformed Mach-O native notice evidence")
+        return struct.unpack_from(fmt, blob, offset)
+
+    def thin(blob: bytes) -> set[str]:
+        if blob[:4] not in thin_formats:
+            raise ValueError("Unsupported Mach-O slice in native notice evidence")
+        endian, bits = thin_formats[blob[:4]]
+        header_size = 32 if bits == 64 else 28
+        count, command_size = read(blob, endian + "II", 16)
+        end = header_size + command_size
+        if end > len(blob) or count > command_size // 8:
+            raise ValueError("Malformed Mach-O load commands")
+        cursor = header_size
+        table = None
+        for _ in range(count):
+            command, size = read(blob, endian + "II", cursor)
+            if size < 8 or cursor + size > end:
+                raise ValueError("Malformed Mach-O load command size")
+            if command == 2:  # LC_SYMTAB
+                if table is not None or size != 24:
+                    raise ValueError("Malformed Mach-O symbol table command")
+                table = read(blob, endian + "IIII", cursor + 8)
+            cursor += size
+        if cursor != end:
+            raise ValueError("Malformed Mach-O load command extent")
+        if table is None:
+            if require_symbols:
+                raise ValueError("Unsupported Mach-O Python runtime without symbol evidence")
+            return set()
+        symoff, symbol_count, stroff, string_size = table
+        symbol_size = 16 if bits == 64 else 12
+        if (
+            symoff < end or symoff + symbol_count * symbol_size > len(blob)
+            or stroff < end or stroff + string_size > len(blob)
+            or (require_symbols and symbol_count == 0)
+        ):
+            raise ValueError("Malformed or missing Mach-O symbol evidence")
+        strings = blob[stroff:stroff + string_size]
+        found = set()
+        for index in range(symbol_count):
+            string_index, kind, _, _, _ = read(
+                blob, endian + ("IBBHQ" if bits == 64 else "IBBHI"),
+                symoff + index * symbol_size,
+            )
+            if string_index >= len(strings):
+                raise ValueError("Malformed Mach-O symbol string offset")
+            terminator = strings.find(b"\0", string_index)
+            if terminator < 0:
+                raise ValueError("Malformed Mach-O symbol string")
+            name = strings[string_index:terminator]
+            # N_SECT definitions count; N_UNDF imports and debugging records do not.
+            if not kind & 0xE0 and kind & 0x0E == 0x0E and name.startswith(b"_ffi_"):
+                try:
+                    found.add(name[1:].decode("ascii"))
+                except UnicodeError as error:
+                    raise ValueError("Malformed Mach-O libffi symbol name") from error
+        return found
+
+    if data[:4] not in fat_formats:
+        return thin(data)
+    endian, bits = fat_formats[data[:4]]
+    count, = read(data, endian + "I", 4)
+    entry_size = 32 if bits == 64 else 20
+    table_end = 8 + count * entry_size
+    if count == 0 or table_end > len(data):
+        raise ValueError("Malformed Mach-O universal architecture table")
+    spans = []
+    found = set()
+    for index in range(count):
+        values = read(data, endian + ("iiQQII" if bits == 64 else "iiIII"), 8 + index * entry_size)
+        offset, size = values[2:4]
+        if offset < table_end or size < 28 or offset + size > len(data):
+            raise ValueError("Malformed Mach-O universal slice")
+        if any(offset < previous_end and previous_start < offset + size for previous_start, previous_end in spans):
+            raise ValueError("Overlapping Mach-O universal slices")
+        spans.append((offset, offset + size))
+        found.update(thin(data[offset:offset + size]))
+    return found
+
+
+def native_inventory(bundle: Path, target: str) -> dict:
+    """Observe actual files; a dependency consumer is not an embedded implementation."""
+    if target not in TARGETS:
+        raise ValueError("Unknown native notice inventory target")
+    files = []
+    components = []
+    # Preserve the producing target's order even when another host verifies its archive.
+    path_type = PureWindowsPath if target.startswith("windows-") else PurePosixPath
+    for path in sorted(bundle.rglob("*"), key=lambda item: path_type(*item.relative_to(bundle).parts)):
+        if not path.resolve().is_relative_to(bundle.resolve()):
+            raise ValueError("Native notice inventory path escapes bundle")
+        if not path.is_file():
+            continue
+        relative = path.relative_to(bundle).as_posix()
+        python_core = path.name == "Python" or re.fullmatch(r"libpython3[^/]*\.dylib", path.name) is not None
+        with path.open("rb") as stream:
+            header = stream.read(4)
+        kind = (
+            "ELF" if header == b"\x7fELF"
+            else "PE" if header[:2] == b"MZ"
+            else "Mach-O" if header in {
+                b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe",
+                b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce", b"\xbe\xba\xfe\xca",
+                b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",
+            }
+            else None
+        )
+        if target.startswith("macos-") and python_core and kind != "Mach-O":
+            raise ValueError(f"Unsupported Mach-O Python runtime evidence: {relative}")
+        is_libffi = re.fullmatch(r"libffi[^/]*\.so(?:\.[0-9]+)*", path.name) is not None
+        if kind is None and not is_libffi:
+            continue
+        hashed = digest(path)
+        if kind == "Mach-O":
+            symbols = macho_ffi_symbols(path.read_bytes(), require_symbols=python_core)
+            if symbols:
+                raise ValueError(
+                    f"Unsupported embedded libffi implementation requires interpreter/native notice review: "
+                    f"{relative} (sha256={hashed}, defined={','.join(sorted(symbols)[:5])})"
+                )
+        if kind:
+            files.append({
+                "path": relative, "sha256": hashed, "format": kind,
+                "symlink": path.is_symlink(),
+            })
+        if not is_libffi:
+            continue
+        identity = LIBFFI_IDENTITIES.get(target)
+        if kind != "ELF" or identity is None or hashed != identity["sha256"]:
+            raise ValueError(
+                f"Unsupported Linux libffi bytes require notice review: {relative} "
+                f"(target={target}, sha256={hashed})"
+            )
+        if relative.startswith("libexec/apm/_internal/"):
+            scope = "bundled-apm"
+        elif relative.startswith("_internal/"):
+            scope = "apmx"
+        else:
+            raise ValueError(f"Unexpected redistributed libffi location: {relative}")
+        components.append({
+            "component": "libffi", "runtime": scope, "path": relative,
+            "sha256": hashed, "upstream_version": "3.4.6",
+            "license_expression": "MIT",
+            "distribution": "Ubuntu Noble libffi8 3.4.6-1build1",
+            "identified_package": dict(identity),
+            "identification": (
+                "Exact library bytes match the documented distribution package member; "
+                "not an original acquisition or APT signature-chain claim."
+            ),
+            "notices": [
+                {"path": f"native/libffi/{name}", **notice}
+                for name, notice in LIBFFI_NOTICES.items()
+            ],
+        })
+    return {
+        "schema": NATIVE_NOTICE_SCHEMA, "target": target,
+        "scope": (
+            "Actual native file signatures in both runtimes, plus required notices for "
+            "each redistributed Linux libffi library; unmapped Mach-O embedded libffi "
+            "definitions refuse distribution. Not a runtime dependency-resolution "
+            "trace or a substitute for Python/package license inventories."
+        ),
+        "source_notice_scope": (
+            "The complete Ubuntu source copyright file retains file-scoped holders and "
+            "grants. Its separate build/test-tool licenses are not relabeled as the "
+            "runtime library's MIT license."
+        ),
+        "native_files": files, "required_components": components,
+    }
+
+
+def collect_native_notices(bundle: Path, target: str) -> Path:
+    validate_notice_sources()
+    inventory = native_inventory(bundle, target)
+    destination = bundle / "LICENSES"
+    destination.mkdir(exist_ok=True)
+    if inventory["required_components"]:
+        notices = destination / "native/libffi"
+        notices.mkdir(parents=True)
+        for name in LIBFFI_NOTICES:
+            shutil.copyfile(ROOT / "build/notices/libffi" / name, notices / name)
+    manifest = bundle / NATIVE_NOTICE_MANIFEST
+    if manifest.exists():
+        raise ValueError("Native notice collection requires a fresh inventory")
+    manifest.write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return manifest
+
+
+def check_native_notices(bundle: Path, target: str) -> None:
+    manifest = bundle / NATIVE_NOTICE_MANIFEST
+    if not manifest.is_file() or manifest.is_symlink():
+        raise ValueError("Missing required native notice inventory")
+    try:
+        inventory = json.loads(manifest.read_text(encoding="utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("Malformed native notice inventory") from error
+    if inventory != native_inventory(bundle, target):
+        raise ValueError("Native notice inventory differs from actual redistributed files")
+    for component in inventory["required_components"]:
+        for notice in component["notices"]:
+            path = bundle / "LICENSES" / notice["path"]
+            if not path.is_file() or path.is_symlink() or digest(path) != notice["sha256"]:
+                raise ValueError(f"Missing or malformed required libffi notice: {notice['path']}")
+    metadata = json.loads((bundle / "RELEASE.json").read_text(encoding="utf-8"))
+    if metadata.get("native_notice_manifest_sha256") != digest(manifest):
+        raise ValueError("Release metadata does not bind the native notice inventory")
+    profile = metadata.get("build_interpreter")
+    if (
+        not isinstance(profile, dict)
+        or profile.get("schema") != "apmx-build-interpreter/1"
+        or profile.get("implementation") != "CPython"
+        or profile.get("selection_verified") is not True
+        or not isinstance(profile.get("version"), str)
+        or not re.fullmatch(VERSION, profile["version"])
+        or not isinstance(profile.get("executable_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", profile["executable_sha256"])
+        or (target.startswith("macos-") and profile.get("framework") != "Python")
+    ):
+        raise ValueError("Missing or unsupported recorded build interpreter profile")
+
+
+def source_commit(root: Path = ROOT) -> str:
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True, encoding="utf-8",
+    ).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("Expected immutable build source commit")
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=root, text=True, encoding="utf-8",
+    )
+    if status:
+        raise ValueError("Native release build requires a clean committed source tree")
+    return commit
+
+
+def interpreter_identity() -> dict:
+    actual = Path(sys._base_executable).resolve()
+    selected = os.environ.get("APMX_BUILD_PYTHON")
+    selected_path = Path(selected).resolve() if selected else None
+    if (
+        (selected_path and (not selected_path.is_file() or not actual.samefile(selected_path)))
+        or (os.environ.get("GITHUB_ACTIONS") == "true" and not selected)
+    ):
+        raise ValueError("Python does not match the explicitly selected build interpreter")
+    return {
+        "schema": "apmx-build-interpreter/1",
+        "implementation": platform.python_implementation(),
+        "version": platform.python_version(), "build": list(platform.python_build()),
+        "executable_sha256": digest(actual), "selection_verified": bool(selected),
+        "framework": sysconfig.get_config_var("PYTHONFRAMEWORK") or None,
+    }
+
+
+def build_interpreter(target: str) -> dict:
+    identity = interpreter_identity()
+    if identity["implementation"] != "CPython":
+        raise ValueError("Native release builds require CPython")
+    if target.startswith("macos-") and identity["framework"] != "Python":
+        raise ValueError(
+            "macOS native builds require a selected framework Python; unsupported static "
+            "install-only runtimes need their complete verified native licenses, not a generic Python LICENSE"
+        )
+    if not identity["selection_verified"]:
+        raise ValueError("Native builds require an explicitly selected build interpreter in APMX_BUILD_PYTHON")
+    return identity
+
+
 def collect_licenses(bundle: Path) -> None:
     """Preserve installed notices; inventory the build-environment superset honestly."""
     destination = bundle / "LICENSES"
@@ -481,6 +797,9 @@ def build(target: str, output: Path) -> Path:
         raise ValueError("Build target must match the native runner architecture")
     version = read_project(ROOT)
     validate_lock(ROOT / "uv.lock")
+    validate_notice_sources()
+    interpreter = build_interpreter(target)
+    commit = source_commit()
     bundle = output / f"apmx-{target}"
     if bundle.exists():
         raise ValueError("Build destination already exists; use a fresh output directory")
@@ -499,13 +818,17 @@ def build(target: str, output: Path) -> Path:
     collect_licenses(bundle)
     provenance = provision_backend(target, bundle / "libexec/apm")
     shutil.copyfile(BACKEND_PIN, bundle / "apm-backend.json")
+    native_notices = collect_native_notices(bundle, target)
     (bundle / "RELEASE.json").write_text(
         json.dumps({
-            "version": version, "target": target,
+            "version": version, "target": target, "source_commit": commit,
+            "build_interpreter": interpreter,
             "publisher_signed": False, "apple_notarized": False,
             "external_prerequisites": ["Git", "Copilot CLI", "contract-declared checker tools"],
             "test_actor": "hermetic Copilot JSONL protocol fixture, not live inference",
             "license_inventory": "LICENSES/manifest.json",
+            "native_notice_inventory": NATIVE_NOTICE_MANIFEST,
+            "native_notice_manifest_sha256": digest(native_notices),
             "apm_backend_pin_sha256": digest(BACKEND_PIN),
             "apm_backend": provenance,
         }, indent=2) + "\n",
@@ -530,6 +853,7 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate")
     validate.add_argument("--tag")
+    validate.add_argument("--require-native-notices", action="store_true")
     builder = commands.add_parser("build")
     builder.add_argument("--target", choices=TARGETS, required=True)
     builder.add_argument("--output", type=Path, default=ROOT / "dist")
@@ -548,6 +872,8 @@ def main() -> None:
         version = read_project(ROOT, args.tag)
         validate_lock(ROOT / "uv.lock")
         read_backend_pin()
+        if args.require_native_notices:
+            validate_notice_sources()
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         if args.tag:
             tagged = subprocess.check_output(

@@ -1,13 +1,16 @@
 """Installed license/NOTICE files survive packaging without source assumptions."""
 
+import copy
 import json
 import tempfile
 import unittest
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts import release
+from tests.release.test_backend import add_backend_fixture
 
 
 class LicenseTests(unittest.TestCase):
@@ -91,6 +94,250 @@ class LicenseTests(unittest.TestCase):
             ["metadata-only", "not-provided"],
         )
         warning.assert_called_once()
+
+    def test_archiving_rejects_uninventoried_libffi_in_each_redistributed_runtime(self):
+        for runtime in ("_internal", "libexec/apm/_internal"):
+            with self.subTest(runtime=runtime):
+                bundle = self.root / runtime.replace("/", "-") / "apmx-linux-x86_64"
+                bundle.mkdir(parents=True)
+                (bundle / "_internal").mkdir()
+                (bundle / "LICENSES").mkdir()
+                for name in (
+                    "apmx",
+                    "LICENSE",
+                    "NOTICE",
+                    "LICENSES/Python-LICENSE.txt",
+                    "LICENSES/manifest.json",
+                ):
+                    (bundle / name).write_text("Structural unit fixture, not native proof\n")
+                add_backend_fixture(bundle, "linux-x86_64")
+                (bundle / runtime / "libffi.so.8").write_bytes(b"Uninventoried library fixture")
+                with self.assertRaisesRegex(ValueError, "libffi|native notice"):
+                    release.archive_bundle(
+                        bundle, bundle.parent / "assets", "0.3.0", "linux-x86_64"
+                    )
+
+    def native_bundle(self, target):
+        bundle = self.root / f"apmx-{target}"
+        (bundle / "_internal").mkdir(parents=True)
+        (bundle / "LICENSES").mkdir()
+        for name in ("apmx", "LICENSE", "NOTICE", "LICENSES/Python-LICENSE.txt"):
+            (bundle / name).write_text("Structural unit fixture, not native proof\n")
+        (bundle / "LICENSES/manifest.json").write_text("{}\n")
+        add_backend_fixture(bundle, target)
+        payload = b"\x7fELF structural libffi unit fixture; never executed"
+        identities = copy.deepcopy(release.LIBFFI_IDENTITIES)
+        for runtime in ("_internal", "libexec/apm/_internal"):
+            library = bundle / runtime / "libffi.so.8"
+            library.write_bytes(payload)
+        identities[target]["sha256"] = release.digest(bundle / "_internal/libffi.so.8")
+        (bundle / release.NATIVE_NOTICE_MANIFEST).unlink()
+        return bundle, identities
+
+    def bind_native_manifest(self, bundle):
+        metadata = json.loads((bundle / "RELEASE.json").read_text())
+        metadata["native_notice_manifest_sha256"] = release.digest(
+            bundle / release.NATIVE_NOTICE_MANIFEST
+        )
+        (bundle / "RELEASE.json").write_text(json.dumps(metadata))
+
+    def test_native_inventory_uses_declared_target_order_on_every_verifier_host(self):
+        names = (
+            "_internal/VCRUNTIME140.dll",
+            "_internal/_bz2.pyd",
+            "_internal/alpha.dll",
+            "_internal/alpha/runtime.dll",
+        )
+        for name in names:
+            path = self.bundle / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"MZ structural ordering fixture; never executed")
+        for target in release.TARGETS:
+            with self.subTest(target=target):
+                path_type = PureWindowsPath if target.startswith("windows-") else PurePosixPath
+                inventory = release.native_inventory(self.bundle, target)
+                self.assertEqual(
+                    [entry["path"] for entry in inventory["native_files"]],
+                    sorted(names, key=path_type),
+                )
+
+    def windows_order_bundle(self):
+        target = "windows-x86_64"
+        bundle = self.root / f"apmx-{target}"
+        (bundle / "_internal").mkdir(parents=True)
+        (bundle / "LICENSES").mkdir()
+        for name in (
+            "apmx.exe",
+            "LICENSE",
+            "NOTICE",
+            "LICENSES/Python-LICENSE.txt",
+            "LICENSES/manifest.json",
+        ):
+            (bundle / name).write_text("Structural unit fixture, not native proof\n")
+        for name in ("VCRUNTIME140.dll", "_bz2.pyd"):
+            (bundle / "_internal" / name).write_bytes(b"MZ never-executed fixture " + name.encode())
+        add_backend_fixture(bundle, target)
+        manifest = bundle / release.NATIVE_NOTICE_MANIFEST
+        inventory = json.loads(manifest.read_bytes())
+        # Reproduce the original Windows producer's wire order, independent of this host.
+        inventory["native_files"].sort(key=lambda entry: PureWindowsPath(entry["path"]))
+        manifest.write_text(json.dumps(inventory), encoding="utf-8")
+        self.bind_native_manifest(bundle)
+        return bundle
+
+    def test_windows_produced_inventory_survives_portable_zip_validation_unchanged(self):
+        bundle = self.windows_order_bundle()
+        original = (bundle / release.NATIVE_NOTICE_MANIFEST).read_bytes()
+        archive = self.root / release.archive_name("0.3.1", "windows-x86_64")
+        with zipfile.ZipFile(archive, "w") as stream:
+            for path in bundle.rglob("*"):
+                stream.write(path, path.relative_to(bundle.parent).as_posix())
+        extracted = release.extract_archive(archive, self.root / "extracted-windows")
+        self.assertEqual((extracted / release.NATIVE_NOTICE_MANIFEST).read_bytes(), original)
+        release.archive_bundle(extracted, self.root / "assets", "0.3.1", "windows-x86_64")
+
+    def test_target_order_preserves_exact_record_fields_multiplicity_and_case(self):
+        bundle = self.windows_order_bundle()
+        manifest = bundle / release.NATIVE_NOTICE_MANIFEST
+        original = json.loads(manifest.read_bytes())
+        release.check_bundle(bundle, "windows-x86_64")
+        for mutation in (
+            "duplicate",
+            "omission",
+            "reordered",
+            "case",
+            "sha256",
+            "format",
+            "symlink",
+            "extra-field",
+        ):
+            with self.subTest(mutation=mutation):
+                inventory = copy.deepcopy(original)
+                files = inventory["native_files"]
+                if mutation == "duplicate":
+                    files.append(copy.deepcopy(files[0]))
+                elif mutation == "omission":
+                    files.pop()
+                elif mutation == "reordered":
+                    files.reverse()
+                elif mutation == "case":
+                    files[0]["path"] = files[0]["path"].swapcase()
+                elif mutation == "sha256":
+                    files[0]["sha256"] = "0" * 64
+                elif mutation == "format":
+                    files[0]["format"] = "ELF"
+                elif mutation == "symlink":
+                    files[0]["symlink"] = True
+                else:
+                    files[0]["unexpected"] = "not an observed field"
+                manifest.write_text(json.dumps(inventory), encoding="utf-8")
+                self.bind_native_manifest(bundle)
+                with self.assertRaisesRegex(ValueError, "inventory differs"):
+                    release.check_bundle(bundle, "windows-x86_64")
+
+    def test_reviewed_grants_and_each_actual_runtime_identity_survive_archive_round_trip(self):
+        for target in release.LIBFFI_IDENTITIES:
+            with self.subTest(target=target):
+                bundle, identities = self.native_bundle(target)
+                with patch.object(release, "LIBFFI_IDENTITIES", identities):
+                    manifest = release.collect_native_notices(bundle, target)
+                    self.bind_native_manifest(bundle)
+                    inventory = json.loads(manifest.read_bytes())
+                    components = inventory["required_components"]
+                    self.assertEqual(
+                        {entry["runtime"] for entry in components}, {"apmx", "bundled-apm"}
+                    )
+                    self.assertEqual(len(components), 2)
+                    for component in components:
+                        self.assertEqual(
+                            component["sha256"], release.digest(bundle / component["path"])
+                        )
+                        self.assertEqual(component["license_expression"], "MIT")
+                        for notice in component["notices"]:
+                            copied = bundle / "LICENSES" / notice["path"]
+                            self.assertEqual(release.digest(copied), notice["sha256"])
+                    archive = release.archive_bundle(bundle, self.root / "assets", "0.3.0", target)
+                    extracted = release.extract_archive(archive, self.root / f"extracted-{target}")
+                    self.assertEqual(
+                        (extracted / release.NATIVE_NOTICE_MANIFEST).read_bytes(),
+                        manifest.read_bytes(),
+                    )
+
+    def test_missing_or_truncated_copyright_and_permission_grants_fail_verification(self):
+        target = "linux-x86_64"
+        bundle, identities = self.native_bundle(target)
+        with patch.object(release, "LIBFFI_IDENTITIES", identities):
+            release.collect_native_notices(bundle, target)
+            self.bind_native_manifest(bundle)
+            for name in release.LIBFFI_NOTICES:
+                path = bundle / "LICENSES/native/libffi" / name
+                original = path.read_bytes()
+                for replacement in (None, b"MIT\n", b"Copyright without permission grant\n"):
+                    with self.subTest(name=name, replacement=replacement):
+                        if replacement is None:
+                            path.unlink()
+                        else:
+                            path.write_bytes(replacement)
+                        with self.assertRaisesRegex(ValueError, "required libffi notice"):
+                            release.check_bundle(bundle, target)
+                        path.write_bytes(original)
+
+    def test_rewriting_manifest_hashes_cannot_bless_a_modified_required_notice(self):
+        target = "linux-arm64"
+        bundle, identities = self.native_bundle(target)
+        with patch.object(release, "LIBFFI_IDENTITIES", identities):
+            manifest = release.collect_native_notices(bundle, target)
+            inventory = json.loads(manifest.read_text())
+            notice = inventory["required_components"][0]["notices"][0]
+            path = bundle / "LICENSES" / notice["path"]
+            path.write_text("Unrelated permission grant\n")
+            for component in inventory["required_components"]:
+                component["notices"][0]["sha256"] = release.digest(path)
+            manifest.write_text(json.dumps(inventory))
+            self.bind_native_manifest(bundle)
+            with self.assertRaisesRegex(ValueError, "inventory differs"):
+                release.check_bundle(bundle, target)
+
+    def test_added_changed_or_unmapped_runtime_bytes_fail_notice_inventory(self):
+        target = "linux-arm64"
+        bundle, identities = self.native_bundle(target)
+        with patch.object(release, "LIBFFI_IDENTITIES", identities):
+            release.collect_native_notices(bundle, target)
+            self.bind_native_manifest(bundle)
+            library = bundle / "libexec/apm/_internal/libffi.so.8"
+            original = library.read_bytes()
+            library.write_bytes(original + b" changed")
+            with self.assertRaisesRegex(ValueError, "Unsupported Linux libffi"):
+                release.check_bundle(bundle, target)
+            library.write_bytes(original)
+            added = bundle / "libexec/apm/_internal/libffi.so.8.1.4"
+            added.write_bytes(original)
+            with self.assertRaisesRegex(ValueError, "inventory differs"):
+                release.check_bundle(bundle, target)
+            added.unlink()
+            manifest = bundle / release.NATIVE_NOTICE_MANIFEST
+            manifest.write_text("{")
+            with self.assertRaisesRegex(ValueError, "Malformed native notice inventory"):
+                release.check_bundle(bundle, target)
+
+    def test_dependency_consumer_is_not_mislabeled_as_an_embedded_libffi_copy(self):
+        bundle = self.root / "consumer"
+        extension = bundle / "libexec/apm/_internal/python3.12/lib-dynload/_ctypes.so"
+        extension.parent.mkdir(parents=True)
+        extension.write_bytes(b"\x7fELF undefined ffi_call, DT_NEEDED libffi.so.8 fixture")
+        inventory = release.native_inventory(bundle, "linux-arm64")
+        self.assertEqual(inventory["required_components"], [])
+        self.assertEqual(len(inventory["native_files"]), 1)
+        self.assertEqual(
+            inventory["native_files"][0]["path"], extension.relative_to(bundle).as_posix()
+        )
+
+    def test_reviewed_source_notices_cannot_be_replaced_before_collection(self):
+        with (
+            patch.object(release, "ROOT", self.root),
+            self.assertRaisesRegex(ValueError, "reviewed libffi notice source"),
+        ):
+            release.validate_notice_sources()
 
 
 if __name__ == "__main__":

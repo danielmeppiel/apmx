@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,6 +19,40 @@ from tests.release.test_backend import add_backend_fixture
 
 
 class SmokeFixtureTests(unittest.TestCase):
+    def test_factory_write_boundary_uses_real_path_flavor(self):
+        for relative in (
+            PureWindowsPath(
+                r"factory\.apm\runs\20260915T232133Z-501a98a0f053\producer\.git\refs\heads\master"
+            ),
+            PureWindowsPath("factory/.apm/chains/id/artifacts/first.json"),
+            PurePosixPath("factory/.apm/runs/id/record.json"),
+            PurePosixPath(r"factory/.apm/runs/literal\backslash"),
+            Path("factory/.apm/runs/native-path"),
+        ):
+            with self.subTest(relative=relative):
+                smoke.require_factory_state_file(relative)
+
+    def test_factory_write_boundary_rejects_outside_paths_and_posix_backslash_impostors(self):
+        for relative in (
+            PureWindowsPath(r"factory\.apm-old\state"),
+            PureWindowsPath(r"C:\factory\.apm\state"),
+            PureWindowsPath(r"\\server\share\factory\.apm\state"),
+            PureWindowsPath(r"factory\.apm\..\unowned"),
+            PureWindowsPath(r"factory\.apm"),
+            PurePosixPath("/factory/.apm/state"),
+            PurePosixPath("factory/.apm-old/state"),
+            PurePosixPath("factory/.apm/../unowned"),
+            PurePosixPath("factory/.apm"),
+            PurePosixPath(r"factory\.apm\runs\impostor"),
+            PurePosixPath(r"factory/.apm\state/impostor"),
+            PurePosixPath("unowned"),
+        ):
+            with (
+                self.subTest(relative=relative),
+                self.assertRaisesRegex(AssertionError, "Unexpected factory write"),
+            ):
+                smoke.require_factory_state_file(relative)
+
     def test_canonical_local_identity_requires_original_absolute_package_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             original = Path(temporary).resolve() / "original-source"
@@ -93,6 +127,7 @@ class SmokeFixtureTests(unittest.TestCase):
                 ),
                 patch.object(smoke, "run_binary", return_value=result),
                 patch.object(smoke, "run_case", return_value={}) as run,
+                patch.object(smoke, "run_factory_case", return_value={}) as factory,
                 patch.object(
                     sys, "argv", ["smoke.py", "--binary", str(binary), "--version", "0.1.0"]
                 ),
@@ -100,8 +135,37 @@ class SmokeFixtureTests(unittest.TestCase):
             ):
                 smoke.main()
             self.assertEqual(run.call_count, 10)
+            factory.assert_called_once()
+            self.assertEqual(factory.call_args.args[1], factory.call_args.args[1].resolve())
             for call in run.call_args_list:
                 self.assertEqual(call.args[1], call.args[1].resolve())
+
+    def test_factory_fixture_exercises_real_source_dispatch_before_frozen_matrix(self):
+        """The CI invocation uses frozen bytes; this test checks the fixture against source."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            actor = None
+            if os.name == "nt":
+                smoke.build_actor(root / "native-actor")
+                actor = root / "native-actor/copilot.exe"
+            run = smoke.run_binary
+
+            def source(binary, arguments, caller, environment, timeout=90):
+                return run(
+                    Path(sys.executable),
+                    ["-B", "-m", "apmx", *arguments],
+                    caller,
+                    environment,
+                    timeout,
+                )
+
+            with patch.object(smoke, "run_binary", side_effect=source):
+                result = smoke.run_factory_case(Path(sys.executable), root / "factory", actor)
+            self.assertEqual(result["preview_exit"], 0)
+            self.assertEqual(result["exit_code"], 21)
+            self.assertEqual(
+                (result["contracts"], result["checks"], result["delivered_files"]), (2, 2, 3)
+            )
 
     def test_environment_does_not_copy_credentials_or_python_fallback(self):
         with tempfile.TemporaryDirectory() as temporary:

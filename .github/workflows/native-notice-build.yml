@@ -1,0 +1,129 @@
+name: Notice-complete native build
+
+on:
+  workflow_call:
+    inputs:
+      candidate:
+        description: Must equal the trusted calling workflow commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.26"
+  UV_NO_CONFIG: "true"
+  UV_DEFAULT_INDEX: https://pypi.org/simple
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  validate:
+    if: github.repository == 'danielmeppiel/apmx' && github.event.repository.private == false && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.project.outputs.matrix }}
+      version: ${{ steps.project.outputs.version }}
+      sha: ${{ steps.project.outputs.sha }}
+    steps:
+      - name: Reject a candidate different from the trusted workflow revision
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
+        run: test "$CANDIDATE" = "$GITHUB_SHA"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - id: project
+        name: Require the reviewed native-notice gate and public lock
+        run: python scripts/release.py validate --require-native-notices
+
+  native:
+    needs: validate
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validate.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Bind all dependency and native tools to the selected interpreter
+        env:
+          SELECTED_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          echo "UV_PYTHON=$SELECTED_PYTHON" >> "$GITHUB_ENV"
+          echo "APMX_BUILD_PYTHON=$SELECTED_PYTHON" >> "$GITHUB_ENV"
+      - name: Install pinned dependency manager on the public runner
+        run: python -m pip --isolated --disable-pip-version-check install --index-url https://pypi.org/simple "uv==$UV_VERSION"
+      - name: Install the frozen lock and optional factory tools
+        run: uv sync --frozen --extra dev --extra build --extra factory
+      - name: Verify and record the actual selected native-build interpreter
+        run: uv run --frozen --extra dev --extra build --extra factory python -c "import json; from scripts.release import build_interpreter, native_target; print(json.dumps(build_interpreter(native_target()), sort_keys=True))"
+      - name: Provision the genuine pinned backend for source tests
+        id: backend
+        run: uv run --frozen --extra dev --extra build --extra factory python scripts/release.py provision-apm --target "$TARGET" --output dist/apm-backend
+      - name: Run all source-free built-wheel, source and release tests
+        env:
+          APMX_APM_BACKEND: ${{ steps.backend.outputs.backend }}
+        run: uv run --frozen --extra dev --extra build --extra factory python -m pytest tests/unit tests/release -q --basetemp "$RUNNER_TEMP/source-tests"
+      - name: Build a local-only Windows hermetic protocol actor
+        if: runner.os == 'Windows'
+        run: uv run --frozen --extra dev --extra build --extra factory python scripts/smoke.py --build-actor dist/smoke-actor
+      - name: Build fresh archives with required native notices
+        id: build
+        run: uv run --frozen --extra dev --extra build --extra factory python scripts/release.py build --target "$TARGET"
+      - name: Verify and safely extract the candidate outside the checkout
+        id: extract
+        env:
+          ARCHIVE: ${{ steps.build.outputs.archive }}
+        run: python scripts/release.py extract --archive "$ARCHIVE" --destination "$RUNNER_TEMP/frozen-bundle"
+      - name: Exercise the real frozen runner and bundled APM
+        env:
+          BUNDLE: ${{ steps.extract.outputs.bundle }}
+        run: |
+          args=()
+          executable=apmx
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            executable=apmx.exe
+            args+=(--actor "$GITHUB_WORKSPACE/dist/smoke-actor/copilot.exe")
+          fi
+          python scripts/smoke.py --binary "$BUNDLE/$executable" --version "$VERSION" \
+            --report "$RUNNER_TEMP/build-smoke.json" "${args[@]}"
+      - name: Retain verified native archives only for draft transfer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apmx-${{ matrix.target }}
+          path: dist/assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Retain JSON native-notice and smoke evidence, never actor binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-evidence-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/build-smoke.json
+            dist/apmx-${{ matrix.target }}/LICENSES/native-manifest.json
+            dist/apmx-${{ matrix.target }}/LICENSES/manifest.json
+            dist/apmx-${{ matrix.target }}/RELEASE.json
+          if-no-files-found: error
+          retention-days: 7
