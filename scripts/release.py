@@ -19,7 +19,7 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -537,7 +537,9 @@ def native_inventory(bundle: Path, target: str) -> dict:
         raise ValueError("Unknown native notice inventory target")
     files = []
     components = []
-    for path in sorted(bundle.rglob("*")):
+    # Preserve the producing target's order even when another host verifies its archive.
+    path_type = PureWindowsPath if target.startswith("windows-") else PurePosixPath
+    for path in sorted(bundle.rglob("*"), key=lambda item: path_type(*item.relative_to(bundle).parts)):
         if not path.resolve().is_relative_to(bundle.resolve()):
             raise ValueError("Native notice inventory path escapes bundle")
         if not path.is_file():

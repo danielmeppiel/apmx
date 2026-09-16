@@ -19,6 +19,30 @@ from tests.release.test_backend import add_backend_fixture
 
 
 class PromotionTests(unittest.TestCase):
+    def test_inventory_patch_notes_distinguish_portable_preflight_from_factory_smoke(self):
+        notes = promotion.release_notes("0.3.2", "a" * 40)
+        for text in (
+            "Standalone apmx 0.3.2",
+            "declared target's path-component ordering",
+            "exact whole-inventory equality",
+            "record multiplicity",
+            "case-sensitive path identity",
+            "never reordered or rewritten",
+            "All five v0.3.1 native builds and smoke matrices passed",
+            "stopped before release creation",
+            "Windows inventory-order false alarm",
+            "separate from the v0.3.0 factory smoke fixture",
+            "v0.3.0 and v0.3.1 tags and archive evidence remain unchanged",
+            "not repacked or relabeled earlier artifacts",
+            "UNPROVEN (21)",
+            "APM 0.30.0",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, notes)
+        for earlier in ("0.3.0", "0.3.1"):
+            with self.subTest(earlier=earlier):
+                self.assertNotIn("Changes in v0.3.2", promotion.release_notes(earlier, "a" * 40))
+
     def test_patch_release_notes_explain_fresh_builds_and_preserved_tag(self):
         notes = promotion.release_notes("0.3.1", "a" * 40)
         for text in (

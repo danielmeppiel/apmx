@@ -4,7 +4,8 @@ import copy
 import json
 import tempfile
 import unittest
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -139,6 +140,100 @@ class LicenseTests(unittest.TestCase):
             bundle / release.NATIVE_NOTICE_MANIFEST
         )
         (bundle / "RELEASE.json").write_text(json.dumps(metadata))
+
+    def test_native_inventory_uses_declared_target_order_on_every_verifier_host(self):
+        names = (
+            "_internal/VCRUNTIME140.dll",
+            "_internal/_bz2.pyd",
+            "_internal/alpha.dll",
+            "_internal/alpha/runtime.dll",
+        )
+        for name in names:
+            path = self.bundle / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"MZ structural ordering fixture; never executed")
+        for target in release.TARGETS:
+            with self.subTest(target=target):
+                path_type = PureWindowsPath if target.startswith("windows-") else PurePosixPath
+                inventory = release.native_inventory(self.bundle, target)
+                self.assertEqual(
+                    [entry["path"] for entry in inventory["native_files"]],
+                    sorted(names, key=path_type),
+                )
+
+    def windows_order_bundle(self):
+        target = "windows-x86_64"
+        bundle = self.root / f"apmx-{target}"
+        (bundle / "_internal").mkdir(parents=True)
+        (bundle / "LICENSES").mkdir()
+        for name in (
+            "apmx.exe",
+            "LICENSE",
+            "NOTICE",
+            "LICENSES/Python-LICENSE.txt",
+            "LICENSES/manifest.json",
+        ):
+            (bundle / name).write_text("Structural unit fixture, not native proof\n")
+        for name in ("VCRUNTIME140.dll", "_bz2.pyd"):
+            (bundle / "_internal" / name).write_bytes(b"MZ never-executed fixture " + name.encode())
+        add_backend_fixture(bundle, target)
+        manifest = bundle / release.NATIVE_NOTICE_MANIFEST
+        inventory = json.loads(manifest.read_bytes())
+        # Reproduce the original Windows producer's wire order, independent of this host.
+        inventory["native_files"].sort(key=lambda entry: PureWindowsPath(entry["path"]))
+        manifest.write_text(json.dumps(inventory), encoding="utf-8")
+        self.bind_native_manifest(bundle)
+        return bundle
+
+    def test_windows_produced_inventory_survives_portable_zip_validation_unchanged(self):
+        bundle = self.windows_order_bundle()
+        original = (bundle / release.NATIVE_NOTICE_MANIFEST).read_bytes()
+        archive = self.root / release.archive_name("0.3.1", "windows-x86_64")
+        with zipfile.ZipFile(archive, "w") as stream:
+            for path in bundle.rglob("*"):
+                stream.write(path, path.relative_to(bundle.parent).as_posix())
+        extracted = release.extract_archive(archive, self.root / "extracted-windows")
+        self.assertEqual((extracted / release.NATIVE_NOTICE_MANIFEST).read_bytes(), original)
+        release.archive_bundle(extracted, self.root / "assets", "0.3.1", "windows-x86_64")
+
+    def test_target_order_preserves_exact_record_fields_multiplicity_and_case(self):
+        bundle = self.windows_order_bundle()
+        manifest = bundle / release.NATIVE_NOTICE_MANIFEST
+        original = json.loads(manifest.read_bytes())
+        release.check_bundle(bundle, "windows-x86_64")
+        for mutation in (
+            "duplicate",
+            "omission",
+            "reordered",
+            "case",
+            "sha256",
+            "format",
+            "symlink",
+            "extra-field",
+        ):
+            with self.subTest(mutation=mutation):
+                inventory = copy.deepcopy(original)
+                files = inventory["native_files"]
+                if mutation == "duplicate":
+                    files.append(copy.deepcopy(files[0]))
+                elif mutation == "omission":
+                    files.pop()
+                elif mutation == "reordered":
+                    files.reverse()
+                elif mutation == "case":
+                    files[0]["path"] = files[0]["path"].swapcase()
+                elif mutation == "sha256":
+                    files[0]["sha256"] = "0" * 64
+                elif mutation == "format":
+                    files[0]["format"] = "ELF"
+                elif mutation == "symlink":
+                    files[0]["symlink"] = True
+                else:
+                    files[0]["unexpected"] = "not an observed field"
+                manifest.write_text(json.dumps(inventory), encoding="utf-8")
+                self.bind_native_manifest(bundle)
+                with self.assertRaisesRegex(ValueError, "inventory differs"):
+                    release.check_bundle(bundle, "windows-x86_64")
 
     def test_reviewed_grants_and_each_actual_runtime_identity_survive_archive_round_trip(self):
         for target in release.LIBFFI_IDENTITIES:

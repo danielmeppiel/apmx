@@ -118,6 +118,19 @@ def release_notes(version: str, commit: str) -> str:
         "its source tag and CI evidence remain unchanged. These v0.3.1 archives are fresh builds, "
         "not relabeled v0.3.0 artifacts.\n\n"
     ) if version == "0.3.1" else ""
+    if version == "0.3.2":
+        patch_notes = (
+            "## Changes in v0.3.2\n\n"
+            "Use the declared target's path-component ordering for native inventories, "
+            "rather than the verifier host's ordering. Keep exact whole-inventory equality, "
+            "record multiplicity, case-sensitive path identity and every hash/format/symlink field. "
+            "Stored manifests are never reordered or rewritten.\n\n"
+            "All five v0.3.1 native builds and smoke matrices passed, but Linux draft staging "
+            "stopped before release creation on a Windows inventory-order false alarm. "
+            "This is separate from the v0.3.0 factory smoke fixture path comparison corrected "
+            "in v0.3.1. The v0.3.0 and v0.3.1 tags and archive evidence remain unchanged. "
+            "These v0.3.2 archives are fresh builds, not repacked or relabeled earlier artifacts.\n\n"
+        )
     return (
         f"Standalone apmx {version}; candidate commit `{commit}`.\n\n{patch_notes}"
         "## What's new since v0.2.0\n\n"
