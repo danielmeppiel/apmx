@@ -1,6 +1,6 @@
 # Install APMX
 
-**The v0.3.1 prebuilt instructions are staged; the new downloads are not
+**The v0.3.2 prebuilt instructions are staged; the new downloads are not
 published yet.** Until they are published and verified, use the
 [working pinned source route](#run-the-current-source-checkout).
 Do not substitute the withheld v0.1/v0.2 archives.
@@ -14,7 +14,7 @@ tools**: this factory uses Python 3.12 and Behave 1.3.3.
 
 | Route | What you get |
 | --- | --- |
-| [Prebuilt v0.3.1](#install-a-prebuilt-archive) | The intended default once published: download, verify and extract a complete native bundle. No Python runtime installation for APMX itself. |
+| [Prebuilt v0.3.2](#install-a-prebuilt-archive) | The intended default once published: download, verify and extract a complete native bundle. No Python runtime installation for APMX itself. |
 | [Pinned source](#run-the-current-source-checkout) | A working fallback or development route, including the [approved-client alternative](#managed-environment-installation-optional) for managed environments. |
 
 Keep the current guide open while following either route. The example/source
@@ -25,7 +25,7 @@ runner. A version string alone does not identify a build.
 
 ## Install a prebuilt archive
 
-**Publication gate:** do not run these download blocks until the new v0.3.1
+**Publication gate:** do not run these download blocks until the new v0.3.2
 assets are published and verified. The filenames and layout below are the
 confirmed release contract, not a claim that a download is currently available.
 
@@ -39,11 +39,11 @@ Choose the archive matching your operating system and CPU:
 
 | Machine | Archive |
 | --- | --- |
-| macOS, Apple Silicon | `apmx-0.3.1-macos-arm64.tar.gz` |
-| macOS, Intel | `apmx-0.3.1-macos-x86_64.tar.gz` |
-| Linux, x86-64 | `apmx-0.3.1-linux-x86_64.tar.gz` |
-| Linux, ARM64 | `apmx-0.3.1-linux-arm64.tar.gz` |
-| Windows, x86-64 | `apmx-0.3.1-windows-x86_64.zip` |
+| macOS, Apple Silicon | `apmx-0.3.2-macos-arm64.tar.gz` |
+| macOS, Intel | `apmx-0.3.2-macos-x86_64.tar.gz` |
+| Linux, x86-64 | `apmx-0.3.2-linux-x86_64.tar.gz` |
+| Linux, ARM64 | `apmx-0.3.2-linux-arm64.tar.gz` |
+| Windows, x86-64 | `apmx-0.3.2-windows-x86_64.zip` |
 
 Each archive has a same-name `.sha256` sidecar. `release-manifest.json` binds
 the five archives to the release version and full source commit.
@@ -56,7 +56,7 @@ The download commands use `curl` and do not need GitHub CLI authentication.
 Change `target` to one of the four macOS/Linux targets in the table:
 
 ```sh
-version=0.3.1
+version=0.3.2
 target=macos-arm64
 archive="apmx-$version-$target.tar.gz"
 install_dir="$HOME/.local/share/apmx/$version"
@@ -91,7 +91,7 @@ command -v apmx
 apmx --version
 ```
 
-Expect the command under `APMX_NATIVE_ROOT` and version `0.3.1`. This PATH applies
+Expect the command under `APMX_NATIVE_ROOT` and version `0.3.2`. This PATH applies
 to the current terminal. Keep the full extracted directory in place, then
 continue with [example checker setup](#macos-and-linux-checker-setup).
 
@@ -103,7 +103,7 @@ launched from PowerShell. Do not mix native Windows and WSL tools; inside WSL,
 use the Linux archive and instructions instead.
 
 ```powershell
-$version = "0.3.1"
+$version = "0.3.2"
 $archive = "apmx-$version-windows-x86_64.zip"
 $installDir = Join-Path $env:LOCALAPPDATA "apmx\$version"
 $releaseUrl = "https://github.com/danielmeppiel/apmx/releases/download/v$version"
@@ -125,7 +125,7 @@ apmx --version
 if ($LASTEXITCODE -ne 0) { throw "APMX version check failed." }
 ```
 
-Expect `apmx.exe` in the extracted directory, version `0.3.1`, native
+Expect `apmx.exe` in the extracted directory, version `0.3.2`, native
 `copilot.exe`, and `sh.exe` from Git for Windows. If `sh` is missing, add your
 actual Git for Windows `bin` directory to this terminal's PATH. Continue with
 [Windows checker setup](#windows-checker-setup).
@@ -477,7 +477,7 @@ installation process, not an unqualified `uv sync`.
 
 The historical v0.1/v0.2 archives remain withheld and are not an installation
 fallback. Their Linux bundles omitted the required libffi MIT notice. The new
-v0.3.1 distribution must pass the corrected third-party notice gates before it
+v0.3.2 distribution must pass the corrected third-party notice gates before it
 is offered; it does not make those older archives acceptable.
 
 For source history, v0.2.0 corresponds to
