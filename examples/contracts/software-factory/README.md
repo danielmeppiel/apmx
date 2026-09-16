@@ -11,12 +11,18 @@ Both pricing and checkout totals must agree.
 
 ## Set up
 
-Complete the [pinned source installation](../../../docs/install.md#run-the-current-source-checkout)
-first, including backend provisioning and the `factory` extra. Stay in that
-terminal: `APMX_SOURCE` identifies the checkout and PATH selects its APMX and
-Python 3.12. **Behave 1.3.3 is optional for APMX**, but required for this
-example's Gherkin checks. This preview is source-only;
-[native downloads are temporarily withheld](../../../docs/install.md#native-downloads-temporarily-withheld).
+Install the [prebuilt v0.3.2 release](../../../docs/install.md#install-a-prebuilt-archive)
+and complete its
+[example checker setup](../../../docs/install.md#example-tools-for-a-native-installation);
+the bundle supplies APMX and APM, not this example's checker tools. Alternatively,
+use the
+[pinned source fallback](../../../docs/install.md#run-the-current-source-checkout)
+with backend provisioning and the `factory` extra. Old v0.1/v0.2 archives remain
+withheld.
+
+Stay in that terminal: `APMX_SOURCE` identifies the pinned example checkout,
+and PATH selects APMX plus the checker environment. **Behave 1.3.3 is optional
+for APMX**, but required in Python 3.12 for this example's Gherkin checks.
 
 On macOS or Linux, check the selected tools before copying anything:
 
@@ -27,9 +33,11 @@ git --version
 copilot --version
 ```
 
-APMX and Python must come from the source checkout's `.venv/bin/`, and Behave
-must report `1.3.3`. Copilot must be installed and authenticated through its own
-CLI; a version response does not establish login. Stop on any missing tool.
+With a prebuilt installation, APMX must come from the extracted native directory
+and Python from `.apmx-checks/bin/`. With the source fallback, both come from the
+checkout's `.venv/bin/`. Behave must report `1.3.3`. Copilot must be installed
+and authenticated through its own CLI; a version response does not establish
+login. Stop on any missing tool.
 
 Create a fresh caller outside Git and copy the example. This uses a unique
 temporary directory rather than overwriting earlier runs:
@@ -55,11 +63,14 @@ a real project's remotes or policy to bypass admission.
 
 ### Windows
 
-Complete the [Windows source installation](../../../docs/install.md#windows-source-installation)
-first. In that same PowerShell session, make a new caller and adjust only the
-disposable contract copies to use `python` from the selected `.venv\Scripts`
-environment. A separate `py -3.12` launcher could select an environment without
-Behave, so it is not used here.
+Complete either the [Windows native installation](../../../docs/install.md#windows-native-installation)
+and [checker setup](../../../docs/install.md#windows-checker-setup), or the
+[Windows source fallback](../../../docs/install.md#windows-source-installation).
+In that same PowerShell session, make a new caller and adjust only the disposable
+contract copies to use `python` from the selected checker environment
+(`.apmx-checks\Scripts` for native, `.venv\Scripts` for source).
+A separate `py -3.12` launcher could select an environment without Behave, so
+it is not used here.
 
 ```powershell
 $demo = Join-Path $env:TEMP ("apmx-demo-" + [guid]::NewGuid().ToString("N"))
@@ -256,9 +267,13 @@ aggregate `artifacts/` view.
    itself mean outputs/checks passed.
 2. **Distinguish a defect from incomplete execution.** A check's exit `1`
    rejects behavior; `2` means missing tooling, invalid inputs or incomplete
-   execution. For a missing Behave import, return to `APMX_SOURCE`, rerun
-   `uv sync --frozen --python 3.12 --extra factory`, and reselect the documented
-   PATH. For a managed installation, use the
+   execution. For a missing Behave import, return to `APMX_SOURCE` and repair
+   the environment for your installation route. With a prebuilt APMX, repeat
+   the dependency repair for the existing
+   [checks-only environment](../../../docs/install.md#example-tools-for-a-native-installation)
+   without recloning or installing APMX into it. With source, rerun
+   `uv sync --frozen --python 3.12 --extra factory` and reselect the documented
+   PATH. For a managed source installation, use the
    [approved hash-verified repair process](../../../docs/install.md#managed-environment-installation-optional)
    instead of `uv sync`. Do not replace a failed check with a skip or treat exit `21` as success.
    For storage/cleanup failures, resolve the reported condition before retrying.

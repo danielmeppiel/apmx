@@ -8,16 +8,18 @@ For a feature-to-review workflow instead, see the
 
 ## Set up the example
 
-Use the [pinned source installation](../../../docs/install.md#run-the-current-source-checkout)
-to put APMX and its Python environment on PATH.
+Use the [installation guide](../../../docs/install.md) to put APMX on PATH.
+For a prebuilt installation, complete its checker setup to select a separate
+Python environment; the source fallback prepares its own environment.
 You also need Git, GitHub Copilot CLI and Python 3.12 or newer. Authenticate
 with native Copilot before live execution. Use the example files from that
-same pinned checkout.
+same pinned example checkout.
 
 This example selects one contract file. To connect several steps, select a
 factory directory instead, as shown in the software-factory walkthrough.
 Use example files matching your runtime, as explained in the installation guide.
-APMX includes its APM backend; you do not install APM separately.
+The native bundle includes its APM backend; the source route provisions it.
+Neither route needs a global APM installation.
 
 On macOS or Linux, start at the source checkout's root. Copy the supplied
 example to a new folder outside any Git repository:

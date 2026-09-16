@@ -8,13 +8,14 @@ that must pass before another factory task can use them.**
 Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
-**Experimental source preview.** Start with the
-[pinned source installation](docs/install.md#run-the-current-source-checkout),
-then [copy, preview and run the factory](examples/contracts/software-factory/README.md#set-up).
-This preview is **source-only**:
-[native downloads are temporarily withheld](docs/install.md#native-downloads-temporarily-withheld)
-pending third-party notice remediation. Current harness support is **native
-GitHub Copilot CLI only**; authenticate with Copilot before execution.
+**Experimental v0.3.2 prebuilt downloads are available.**
+[Download the release](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2)
+and follow the [native installation guide](docs/install.md#install-a-prebuilt-archive),
+then [set up and run the factory](examples/contracts/software-factory/README.md#set-up).
+The [pinned source route](docs/install.md#run-the-current-source-checkout)
+remains available as a fallback.
+Current harness support is **native GitHub Copilot CLI only**; authenticate
+with Copilot before execution.
 
 ## Start with a contract
 
@@ -55,7 +56,7 @@ A **factory** is a directory of contracts, checks and starting inputs. APMX
 resolves their `needs` into execution order. No pipeline file or last-step
 selection.
 
-After [source installation](docs/install.md#run-the-current-source-checkout)
+After [APMX installation](docs/install.md)
 and [example setup](examples/contracts/software-factory/README.md#set-up),
 preview with `apmx ./feature-factory --on copilot --plan` from the disposable
 directory containing `feature-factory`. Continue only if the preview succeeds,

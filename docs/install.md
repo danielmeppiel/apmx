@@ -1,23 +1,279 @@
 # Install APMX
 
-**Start from pinned source for the experimental factory walkthrough.**
-Install APMX and its private **official APM 0.30.0** backend together, then use
-the [factory guide](../examples/contracts/software-factory/README.md#set-up)
-to preview, execute and inspect the example. No global APM installation or
-experimental activation command is needed.
+**Start with the [v0.3.2 prebuilt release](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2).**
+Download the archive for your platform, verify its checksum and extract it using
+the [native installation steps](#install-a-prebuilt-archive) below.
+The [pinned source route](#run-the-current-source-checkout) remains a fallback;
+do not substitute the withheld v0.1/v0.2 archives.
+
+The new native bundles include the APMX Python runtime and private **official
+APM 0.30.0** backend. They need no APMX build, global APM installation or
+experimental activation command. **Contract checks still need their own
+tools**: this factory uses Python 3.12 and Behave 1.3.3.
 
 ## Choose release or current source
 
 | Route | What you get |
 | --- | --- |
-| [Pinned source below](#run-the-current-source-checkout) **(recommended)** | Factory execution, multiple-artifact handoffs, native skill discovery and current logs, with matching example files. |
-| [Native archives](#native-downloads-temporarily-withheld) | **Temporarily withheld.** This source preview does not offer or endorse native binary downloads. |
+| [Prebuilt v0.3.2](#install-a-prebuilt-archive) **(recommended)** | Download, verify and extract a complete native bundle. No Python runtime installation for APMX itself. |
+| [Pinned source](#run-the-current-source-checkout) | A working fallback or development route, including the [approved-client alternative](#managed-environment-installation-optional) for managed environments. |
 
-The pinned source reports version 0.3.0; that is not a published release,
-tag or native archive. Its full commit ID, not `apmx --version`, identifies
-the runtime and examples used here. No v0.3.0 archive is required or claimed.
-Keep this guide open: these onboarding instructions are newer than the pinned
-checkout's README, but use its unchanged runtime, contracts and check resources.
+Keep the current guide open while following either route. The example/source
+pin below deliberately stays at the earlier proven revision
+`be9c5be19f39284fa5f7b6416de6c37764184f2c`; it is not the new native release's
+source identity. Its factory resources are compatible with the new native
+runner. A version string alone does not identify a build.
+
+## Install a prebuilt archive
+
+The [public v0.3.2 prerelease](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2)
+provides the five platform archives below, their checksum sidecars and the
+release manifest. Downloads do not require GitHub authentication.
+
+You need **Git** and the [native GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart).
+Authenticate through Copilot itself. APMX currently supports native Copilot
+only; a Copilot account with model access is required, and model work can incur
+usage charges. The APMX executable does **not** require a separately installed
+Python, but Python is required for the example's checks described below.
+
+Choose the archive matching your operating system and CPU:
+
+| Machine | Archive |
+| --- | --- |
+| macOS, Apple Silicon | `apmx-0.3.2-macos-arm64.tar.gz` |
+| macOS, Intel | `apmx-0.3.2-macos-x86_64.tar.gz` |
+| Linux, x86-64 | `apmx-0.3.2-linux-x86_64.tar.gz` |
+| Linux, ARM64 | `apmx-0.3.2-linux-arm64.tar.gz` |
+| Windows, x86-64 | `apmx-0.3.2-windows-x86_64.zip` |
+
+Each archive has a same-name `.sha256` sidecar. `release-manifest.json` binds
+the five archives to the release version and full source commit.
+Use a new installation directory, not an existing installation or evidence
+directory. Stop on any failed download, checksum, extraction or version check.
+
+### macOS and Linux native installation
+
+The download commands use `curl` and do not need GitHub CLI authentication.
+Change `target` to one of the four macOS/Linux targets in the table:
+
+```sh
+version=0.3.2
+target=macos-arm64
+archive="apmx-$version-$target.tar.gz"
+install_dir="$HOME/.local/share/apmx/$version"
+release_url="https://github.com/danielmeppiel/apmx/releases/download/v$version"
+mkdir -p "$HOME/.local/share/apmx" &&
+mkdir "$install_dir" &&
+(
+  cd "$install_dir" &&
+  curl --fail --location --output "$archive" "$release_url/$archive" &&
+  curl --fail --location --output "$archive.sha256" "$release_url/$archive.sha256"
+)
+```
+
+Verify **before extracting**. On macOS:
+
+```sh
+(cd "$install_dir" && shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive")
+```
+
+On Linux:
+
+```sh
+(cd "$install_dir" && sha256sum -c "$archive.sha256" && tar -xzf "$archive")
+```
+
+Only after verification and extraction succeed:
+
+```sh
+export APMX_NATIVE_ROOT="$install_dir/apmx-$target"
+export PATH="$APMX_NATIVE_ROOT:$PATH"
+command -v apmx
+apmx --version
+```
+
+Expect the command under `APMX_NATIVE_ROOT` and version `0.3.2`. This PATH applies
+to the current terminal. Keep the full extracted directory in place, then
+continue with [example checker setup](#macos-and-linux-checker-setup).
+
+### Windows native installation
+
+Use PowerShell, **Git for Windows** with its `sh.exe` on PATH, and genuine native
+**`copilot.exe`**, not an npm `.cmd` shim. Checks use `sh -c` even when APMX is
+launched from PowerShell. Do not mix native Windows and WSL tools; inside WSL,
+use the Linux archive and instructions instead.
+
+```powershell
+$version = "0.3.2"
+$archive = "apmx-$version-windows-x86_64.zip"
+$installDir = Join-Path $env:LOCALAPPDATA "apmx\$version"
+$releaseUrl = "https://github.com/danielmeppiel/apmx/releases/download/v$version"
+New-Item -ItemType Directory -Path $installDir -ErrorAction Stop | Out-Null
+$archivePath = Join-Path $installDir $archive
+Invoke-WebRequest "$releaseUrl/$archive" -OutFile $archivePath -ErrorAction Stop
+Invoke-WebRequest "$releaseUrl/$archive.sha256" -OutFile "$archivePath.sha256" -ErrorAction Stop
+$expected = (Get-Content "$archivePath.sha256" -Raw).Trim().Split()[0]
+if ($expected -notmatch '^[0-9a-fA-F]{64}$') { throw "Invalid SHA-256 sidecar." }
+$actual = (Get-FileHash $archivePath -Algorithm SHA256).Hash
+if ($actual -ne $expected) { throw "Checksum mismatch; do not extract this archive." }
+Expand-Archive -LiteralPath $archivePath -DestinationPath $installDir -ErrorAction Stop
+$env:APMX_NATIVE_ROOT = Join-Path $installDir "apmx-windows-x86_64"
+$env:PATH = "$env:APMX_NATIVE_ROOT;$env:PATH"
+(Get-Command apmx -ErrorAction Stop).Source
+(Get-Command copilot -ErrorAction Stop).Source
+(Get-Command sh -ErrorAction Stop).Source
+apmx --version
+if ($LASTEXITCODE -ne 0) { throw "APMX version check failed." }
+```
+
+Expect `apmx.exe` in the extracted directory, version `0.3.2`, native
+`copilot.exe`, and `sh.exe` from Git for Windows. If `sh` is missing, add your
+actual Git for Windows `bin` directory to this terminal's PATH. Continue with
+[Windows checker setup](#windows-checker-setup).
+
+### Keep the whole native bundle
+
+Do not move just the executable. Keep its runtime, backend and notices together:
+
+```text
+apmx-<target>/
+  apmx                    # apmx.exe on Windows
+  _internal/
+  LICENSE
+  NOTICE
+  LICENSES/
+    manifest.json
+  RELEASE.json
+  apm-backend.json
+  libexec/apm/
+    apm                   # apm.exe on Windows
+    _internal/
+```
+
+APMX uses that private backend, never a global APM from PATH. Do not run the
+source route's `provision-apm` step for a native installation.
+Checksums detect changed bytes; they are not publisher signatures. These
+bundles are not publisher-signed or macOS-notarized. Do not disable OS security
+checks to run them. The [source fallback](#run-the-current-source-checkout)
+still provisions a native official APM backend: your platform must be compatible
+with that backend, and your organization's policy must permit it. Source APMX
+is not a workaround for Alpine/musl, older glibc compatibility or restrictions
+on unsigned binaries.
+
+To return in another terminal, add this same extracted directory to PATH and
+reselect the checker environment described below. Keep the version, target and
+release-manifest identity when reporting problems; do not infer that a historical
+source run proves live execution on every native target.
+
+## Example tools for a native installation
+
+Use this section only after installing a verified factory-capable native APMX
+archive. The executable includes its own Python runtime and APM backend, but
+does not supply the tools used by a contract's independent checks.
+The software-factory example needs **Python 3.12** and **Behave 1.3.3**.
+Other contracts may use different tools.
+
+The commands below clone the known example revision and create a **checks-only**
+environment. They do not install APMX from source or replace the downloaded
+executable. Do not run `uv sync` or install this checkout into the check
+environment. Keep your organization's approved package proxy and certificate
+configuration when installing Behave; do not disable certificate verification.
+
+### macOS and Linux checker setup
+
+With the native APMX directory already on PATH, use a new `apmx-examples`
+directory and a native Python 3.12 installation with `venv` support:
+
+```sh
+git clone https://github.com/danielmeppiel/apmx.git apmx-examples &&
+cd apmx-examples &&
+git checkout --detach be9c5be19f39284fa5f7b6416de6c37764184f2c &&
+test "$(git rev-parse HEAD)" = be9c5be19f39284fa5f7b6416de6c37764184f2c &&
+python3.12 -m venv .apmx-checks &&
+.apmx-checks/bin/python -m pip install 'behave==1.3.3'
+```
+
+Stop if setup fails. With some relocatable or uv-managed Python installations,
+`python3.12 -m venv` can fail during `ensurepip` or standard-library discovery.
+This is checker-environment setup, not evidence of a native APMX failure.
+Preserve the failed environment and diagnostics. In a fresh pinned example
+checkout with no `.apmx-checks` yet, the verified alternative is to replace
+the two environment/dependency commands above with:
+
+```sh
+UV_PYTHON_DOWNLOADS=never uv venv --python 3.12 .apmx-checks &&
+python3.12 -m pip --python .apmx-checks/bin/python install 'behave==1.3.3'
+```
+
+This requires an already installed Python 3.12 and a working, preconfigured
+system pip client. `UV_PYTHON_DOWNLOADS=never` prevents a new interpreter
+download. The approved system client installs only Behave and its dependencies
+into the new environment; pip need not be installed inside it. Keep your approved
+proxy and certificate settings. Do not use `uv sync` or install source APMX.
+
+After either setup succeeds, select the checker environment:
+
+```sh
+export APMX_SOURCE="$PWD"
+export APMX_CHECKS="$APMX_SOURCE/.apmx-checks"
+export PATH="$APMX_CHECKS/bin:$PATH"
+command -v apmx
+if [ "$(command -v apmx)" = "$APMX_NATIVE_ROOT/apmx" ]; then
+  python3 -c 'import sys, behave; print(sys.executable); print("Behave", behave.__version__)'
+else
+  printf '%s\n' "Stop: restore the downloaded APMX directory on PATH." >&2
+  false
+fi
+```
+
+Expect `apmx` from the extracted native directory, Python from `.apmx-checks/bin/`
+and Behave `1.3.3`. `APMX_SOURCE` identifies the example checkout here; it does
+not mean APMX was installed from source. Keep both directories in place and this
+PATH active. Continue with the [factory copy](../examples/contracts/software-factory/README.md#set-up).
+
+### Windows checker setup
+
+With native APMX on PATH and native Python 3.12 available through `py -3.12`,
+use PowerShell:
+
+```powershell
+git clone https://github.com/danielmeppiel/apmx.git apmx-examples
+if ($LASTEXITCODE -ne 0) { throw "Clone failed; stop here." }
+Set-Location apmx-examples
+git checkout --detach be9c5be19f39284fa5f7b6416de6c37764184f2c
+if ($LASTEXITCODE -ne 0) { throw "Pinned checkout failed; stop here." }
+$revision = git rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $revision -ne "be9c5be19f39284fa5f7b6416de6c37764184f2c") {
+  throw "Example revision mismatch; stop here."
+}
+py -3.12 -m venv .apmx-checks
+if ($LASTEXITCODE -ne 0) { throw "Install native Python 3.12 with venv support first." }
+& .\.apmx-checks\Scripts\python.exe -m pip install "behave==1.3.3"
+if ($LASTEXITCODE -ne 0) { throw "Checker dependencies failed to install." }
+$env:APMX_SOURCE = (Get-Location).Path
+$env:APMX_CHECKS = Join-Path $env:APMX_SOURCE ".apmx-checks"
+$env:PATH = "$(Join-Path $env:APMX_CHECKS 'Scripts');$env:PATH"
+$apmxPath = (Get-Command apmx -ErrorAction Stop).Source
+Write-Output $apmxPath
+if ($apmxPath -ne (Join-Path $env:APMX_NATIVE_ROOT "apmx.exe")) {
+  throw "Restore the downloaded APMX directory on PATH."
+}
+python -c 'import sys, behave; print(sys.executable); print("Behave", behave.__version__)'
+if ($LASTEXITCODE -ne 0) { throw "Check Python/Behave setup before continuing." }
+```
+
+Expect native APMX from the extracted archive and Python from
+`.apmx-checks\Scripts`. No activation script or execution-policy change is
+needed. The `py` launcher creates the environment; subsequent checks use its
+`python`, not a separate launcher environment without Behave. Continue with
+the [Windows factory copy](../examples/contracts/software-factory/README.md#windows).
+
+To repair checker dependencies later, reselect the existing checks-only
+environment and run `python -m pip install 'behave==1.3.3'` through your approved
+package configuration. Do not repeat the clone or install APMX into that
+environment. If it was created by `uv venv` without pip, return to the example
+checkout and use the approved system client instead:
+`python3.12 -m pip --python .apmx-checks/bin/python install 'behave==1.3.3'`.
 
 ## Run the current source checkout
 
@@ -216,21 +472,20 @@ APMX/Python/Behave checks above, then continue to the same factory copy and run
 commands. For later dependency repairs, repeat the approved hash-verified
 installation process, not an unqualified `uv sync`.
 
-## Native downloads temporarily withheld
+<a id="native-downloads-temporarily-withheld"></a>
 
-This experimental preview is **source-only**. APMX native binary distribution
-is on hold pending third-party notice remediation: historical v0.1/v0.2 Linux
-archives omitted the required libffi MIT notice. Those legacy archives are
-not an offered or endorsed installation route, and this guide provides no
-release or CI-binary download commands. Locally rebuilding a bundle does not
-by itself establish that its third-party notices are complete.
+## Legacy native archives remain withheld
+
+The historical v0.1/v0.2 archives remain withheld and are not an installation
+fallback. Their Linux bundles omitted the required libffi MIT notice. The new
+v0.3.2 distribution passed the corrected third-party notice gates;
+its availability does not make those older archives acceptable.
 
 For source history, v0.2.0 corresponds to
 `2f0356d3e7ebb07f62911768198f9b0cd120cca9` and supports the older
-single-contract runner, not this factory. The pinned source route above is
-the installation path for this preview.
+single-contract runner, not this factory.
 
-The hold concerns redistributed native bundles, not the APMX source license.
+The historical hold concerns redistributed native bundles, not the APMX source license.
 The source's Apache-2.0 terms and retained upstream MIT notices are unchanged.
 Source installation still provisions the complete, checksum-verified
 **official APM 0.30.0** backend from its upstream release; that acquisition is
@@ -238,9 +493,10 @@ separate from the withheld APMX archives.
 
 ## Migrating from v0.2.0 to v0.3.0
 
-This section describes migration from older source or installations to the
-pinned v0.3.0 source candidate. A version bump in source is not binary
-publication; native downloads are temporarily withheld as explained above.
+This section describes migration from older source or installations to v0.3.0.
+These compatibility changes also apply to v0.3.2. Use the
+[prebuilt v0.3.2 release](#install-a-prebuilt-archive) or the pinned source
+fallback; old native archives remain withheld.
 
 **Breaking compatibility change: imported skill metadata.** A skill accepted by
 v0.2.0 can now fail admission unless its authored `SKILL.md` declares a nonempty
@@ -311,9 +567,10 @@ specific checker arguments.
 
 ### Windows first run
 
-For the smaller single-contract example, first complete the Windows source
-installation above. Keep its native Python environment on PATH; a separate
-`py -3.12` launcher is not required. Run:
+For the smaller single-contract example, first complete either the Windows
+native installation and checker setup, or the Windows source installation.
+Keep the selected Python environment on PATH; a separate `py -3.12` launcher
+is not used for these checks. Run:
 
 ```powershell
 python --version
