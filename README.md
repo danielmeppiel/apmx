@@ -8,12 +8,12 @@ that must pass before another factory task can use them.**
 Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
-**Experimental v0.3.2 prebuilt release - publication pending.**
-The [prebuilt installation guide](docs/install.md#install-a-prebuilt-archive)
-is staged for the new release; use the working
-[pinned source fallback](docs/install.md#run-the-current-source-checkout)
-until its downloads are published and verified. Older v0.1/v0.2 archives remain
-withheld. Then [set up and run the factory](examples/contracts/software-factory/README.md#set-up).
+**Experimental v0.3.2 prebuilt downloads are available.**
+[Download the release](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2)
+and follow the [native installation guide](docs/install.md#install-a-prebuilt-archive),
+then [set up and run the factory](examples/contracts/software-factory/README.md#set-up).
+The [pinned source route](docs/install.md#run-the-current-source-checkout)
+remains available as a fallback.
 Current harness support is **native GitHub Copilot CLI only**; authenticate
 with Copilot before execution.
 

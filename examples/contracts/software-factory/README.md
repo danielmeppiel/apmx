@@ -11,11 +11,11 @@ Both pricing and checkout totals must agree.
 
 ## Set up
 
-Complete the [installation guide](../../../docs/install.md) first. For a new
-prebuilt archive, also complete its
+Install the [prebuilt v0.3.2 release](../../../docs/install.md#install-a-prebuilt-archive)
+and complete its
 [example checker setup](../../../docs/install.md#example-tools-for-a-native-installation);
-the bundle supplies APMX and APM, not this example's checker tools. Until the
-new downloads pass their publication gate, use the
+the bundle supplies APMX and APM, not this example's checker tools. Alternatively,
+use the
 [pinned source fallback](../../../docs/install.md#run-the-current-source-checkout)
 with backend provisioning and the `factory` extra. Old v0.1/v0.2 archives remain
 withheld.

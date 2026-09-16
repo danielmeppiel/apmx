@@ -1,9 +1,10 @@
 # Install APMX
 
-**The v0.3.2 prebuilt instructions are staged; the new downloads are not
-published yet.** Until they are published and verified, use the
-[working pinned source route](#run-the-current-source-checkout).
-Do not substitute the withheld v0.1/v0.2 archives.
+**Start with the [v0.3.2 prebuilt release](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2).**
+Download the archive for your platform, verify its checksum and extract it using
+the [native installation steps](#install-a-prebuilt-archive) below.
+The [pinned source route](#run-the-current-source-checkout) remains a fallback;
+do not substitute the withheld v0.1/v0.2 archives.
 
 The new native bundles include the APMX Python runtime and private **official
 APM 0.30.0** backend. They need no APMX build, global APM installation or
@@ -14,7 +15,7 @@ tools**: this factory uses Python 3.12 and Behave 1.3.3.
 
 | Route | What you get |
 | --- | --- |
-| [Prebuilt v0.3.2](#install-a-prebuilt-archive) | The intended default once published: download, verify and extract a complete native bundle. No Python runtime installation for APMX itself. |
+| [Prebuilt v0.3.2](#install-a-prebuilt-archive) **(recommended)** | Download, verify and extract a complete native bundle. No Python runtime installation for APMX itself. |
 | [Pinned source](#run-the-current-source-checkout) | A working fallback or development route, including the [approved-client alternative](#managed-environment-installation-optional) for managed environments. |
 
 Keep the current guide open while following either route. The example/source
@@ -25,9 +26,9 @@ runner. A version string alone does not identify a build.
 
 ## Install a prebuilt archive
 
-**Publication gate:** do not run these download blocks until the new v0.3.2
-assets are published and verified. The filenames and layout below are the
-confirmed release contract, not a claim that a download is currently available.
+The [public v0.3.2 prerelease](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2)
+provides the five platform archives below, their checksum sidecars and the
+release manifest. Downloads do not require GitHub authentication.
 
 You need **Git** and the [native GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart).
 Authenticate through Copilot itself. APMX currently supports native Copilot
@@ -477,8 +478,8 @@ installation process, not an unqualified `uv sync`.
 
 The historical v0.1/v0.2 archives remain withheld and are not an installation
 fallback. Their Linux bundles omitted the required libffi MIT notice. The new
-v0.3.2 distribution must pass the corrected third-party notice gates before it
-is offered; it does not make those older archives acceptable.
+v0.3.2 distribution passed the corrected third-party notice gates;
+its availability does not make those older archives acceptable.
 
 For source history, v0.2.0 corresponds to
 `2f0356d3e7ebb07f62911768198f9b0cd120cca9` and supports the older
@@ -493,7 +494,8 @@ separate from the withheld APMX archives.
 ## Migrating from v0.2.0 to v0.3.0
 
 This section describes migration from older source or installations to v0.3.0.
-Use only the new release after its publication gate, or the pinned source
+These compatibility changes also apply to v0.3.2. Use the
+[prebuilt v0.3.2 release](#install-a-prebuilt-archive) or the pinned source
 fallback; old native archives remain withheld.
 
 **Breaking compatibility change: imported skill metadata.** A skill accepted by
