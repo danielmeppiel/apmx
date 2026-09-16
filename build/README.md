@@ -41,7 +41,13 @@ the build. The archive-root LICENSE covers APMX-specific additions under
 Apache-2.0; NOTICE retains the original Microsoft APM MIT grant and attribution.
 
 `LICENSES/native-manifest.json` separately inventories actual native-file
-signatures and SHA-256 identities in both runtimes. Every redistributed Linux
+signatures and SHA-256 identities in both runtimes. Inventory traversal uses the
+declared target's path-component ordering, not the verifier host's: Windows
+ordering for Windows archives, POSIX ordering otherwise. Stored path spelling,
+all record fields, multiplicity and whole-inventory equality remain exact;
+verification never reorders or rewrites the stored manifest.
+
+Every redistributed Linux
 `libffi*.so*` file must independently match a reviewed Ubuntu Noble
 `libffi8 3.4.6-1build1` library identity. Its exact upstream 3.4.6 LICENSE and full
 Ubuntu source-package copyright file are copied under `LICENSES/native/libffi/`.
@@ -266,11 +272,19 @@ policy. Calls without that flag retain the old private-only restriction.
 The v0.3.0 preparation stopped before draft creation because the new factory
 fixture compared native Windows paths with a POSIX string prefix. All four Unix
 builds passed; their artifacts and the existing v0.3.0 source tag remain evidence,
-not binaries to relabel. The correction targets fresh v0.3.1 builds.
+not binaries to relabel. That fixture correction was included in v0.3.1.
+
+All five v0.3.1 builds and native smoke matrices then passed, but Linux draft
+staging stopped before release creation: host-dependent path sorting reordered
+the otherwise identical Windows native inventory. The v0.3.2 correction uses
+the declared target's path-component ordering while preserving exact inventory
+comparison, field values and record multiplicity. Both earlier source tags and
+their archive evidence stay unchanged; v0.3.2 requires fresh builds, not
+repacked or relabeled earlier archives.
 
 An operator first reviews and merges the candidate, authorizes creation of the
-`v0.3.1` tag at that exact main commit, then explicitly dispatches
-`native-notice-release.yml` on `main` with `phase=prepare` and `tag=v0.3.1`.
+`v0.3.2` tag at that exact main commit, then explicitly dispatches
+`native-notice-release.yml` on `main` with `phase=prepare` and `tag=v0.3.2`.
 Tag creation, workflow dispatch and publication are separate human-controlled
 actions, not consequences of opening or merging a source PR. Keep main at that
 reviewed revision through preparation and publication: every checkout uses
