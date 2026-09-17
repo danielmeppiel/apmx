@@ -32,7 +32,7 @@ def invoke_contract(
 
     if logger is None:
         logger = ContractLogger(verbose=verbose)
-    if not planning:
+    if not planning and factory_root is None:
         logger.execution_context()
     chain_result = None
     try:
@@ -82,6 +82,8 @@ def invoke_contract(
                         "Factory changed during confirmation. Preview it again.",
                         code="plan_changed",
                     )
+            if not planning:
+                logger.execution_context(factory=True)
         if not planning and not allow_advisory:
             raise ContractError(
                 "Copilot, APM and checks can use host files, network and available login details. "

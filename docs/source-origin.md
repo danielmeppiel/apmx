@@ -255,9 +255,11 @@ not survive. Missing or changed evidence cannot authorize downstream work.
 
 Without an explicit local-development exception, the handoff policy requires
 VERIFIED. The current native profile cannot emit that result. For an interactive
-factory invocation without consent flags, APMX describes the local host access,
-checked-output handoffs and local execution limits, then asks for confirmation. The
-default is no. No installation or model work starts before a positive answer.
+factory invocation without consent flags, APMX first lists every contract's
+outputs and planned checks, with total contract, artifact and check counts.
+It then describes local host access, package installation and model costs once,
+immediately before asking for confirmation. The default is no. No installation,
+model or check work starts before a positive answer.
 This permission is invocation-local and recorded, not remembered globally.
 
 Automation supplies `--allow-host-access --allow-unproven-inputs` explicitly.

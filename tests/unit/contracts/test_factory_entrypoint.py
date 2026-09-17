@@ -167,13 +167,19 @@ def test_interactive_yes_records_both_permissions_before_preparation(caller, mon
     monkeypatch.setattr(contract_source, "prepare_imports", prepare)
     result = CliRunner().invoke(main, [str(caller), "--on", "copilot"], input=answer)
     assert result.exit_code == 0 and len(calls) == 2, result.output
-    assert result.output.count("Run this factory locally? [y/N]") == 1
+    assert result.output.count("Run these 2 contracts with Copilot? [y/N]") == 1
+    assert (
+        result.output.index("Contract 2/2: a-target")
+        < result.output.index("Execution: local")
+        < result.output.index("Run these 2 contracts")
+    )
+    assert result.output.count("Execution: local") == 1
     for notice in (
         "host files, network and available logins",
-        "required checks all passed",
+        "Required checks must pass before dependent work starts.",
         "not sandboxed",
         "Run only contracts you trust",
-        "Model usage may cost money",
+        "model usage may cost money",
     ):
         assert notice in result.output
     assert document(caller)["complete"] is True
@@ -189,7 +195,8 @@ def test_decline_eof_and_incomplete_input_never_prepare_or_run(caller, monkeypat
     monkeypatch.setattr(contract_source, "prepare_imports", prepare)
     result = CliRunner().invoke(main, [str(caller), "--on", "copilot"], input=answer)
     assert result.exit_code == 21, result.output
-    assert result.output.count("Run this factory locally? [y/N]") == 1
+    assert result.output.count("Run these 2 contracts with Copilot? [y/N]") == 1
+    assert "Factory not started:" in result.output
     assert calls == [] and not (caller / ".apm").exists()
     prepare.assert_not_called()
 
@@ -294,6 +301,9 @@ def test_explicit_flags_never_prompt_or_imply_other_permission(
     )
     confirm.assert_not_called()
     if host:
+        assert result.output.count("Execution: local") == 1
+        assert result.output.index("Execution: local") < result.output.index("Contract 1/2:")
+        assert "Package dependencies may be installed" in result.output
         assert_consent(caller, "flag", unproven)
         assert document(caller)["complete"] is unproven
     else:
@@ -307,7 +317,8 @@ def test_preview_never_prompts_and_changes_no_input(caller, monkeypatch):
     can_confirm = Mock(side_effect=AssertionError("preview must not even consider confirmation"))
     monkeypatch.setattr(ContractLogger, "can_confirm_factory", can_confirm)
     result = CliRunner().invoke(main, [str(caller), "--on", "copilot", "--plan"])
-    assert result.exit_code == 0 and "Factory preview: 2 contracts" in result.output
+    assert result.exit_code == 0 and "2 contracts / 2 artifacts / 2 planned checks" in result.output
+    assert "Execution:" not in result.output and "[y/N]" not in result.output
     assert calls == [] and before == {p.name: p.read_bytes() for p in caller.iterdir()}
     can_confirm.assert_not_called()
 

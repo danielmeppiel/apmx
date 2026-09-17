@@ -116,9 +116,10 @@ def test_preview_is_free_symbolic_and_engine_refuses_it(
     before = {p.name: p.read_bytes() for p in caller.iterdir()}
     result = CliRunner().invoke(main, [str(caller), "--on", "copilot", "--plan"])
     assert result.exit_code == 0, result.output
-    assert "2 contracts" in result.output and "from an earlier step" in result.output
+    assert "2 contracts" in result.output and "dependent work" in result.output
     assert "VERIFIED-only" in result.output and "Every run starts fresh" in result.output
-    assert "Final outputs: last.txt" in result.output
+    assert "Produces: first.txt" in result.output and "Produces: last.txt" in result.output
+    assert "Final outputs:" not in result.output
     assert before == {p.name: p.read_bytes() for p in caller.iterdir()}
     planned = prepare(caller).nodes[-1].plan
     with pytest.raises(ContractError, match="Preview dependencies"):

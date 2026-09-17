@@ -21,11 +21,27 @@ Headings/activity use cyan; metadata is subordinate. Both modes show actual
 output names under Produces, engine-owned PASS/FAIL under Checks, and final
 counts plus copyable artifact-directory and record paths under Evidence.
 
+Before interactive factory consent, the work preview lists contract, artifact
+and planned-check counts, then every contract's Produces and Checks names.
+Contract identities match execution: a unique basename, or a root-relative
+path when names collide. Full source paths, input provenance and check commands
+are verbose detail. No check result is claimed before execution, and Evidence
+says where it **will be saved**, not that a record already exists.
+
+The local-access, package-installation and cost disclosure follows the work
+preview exactly once, immediately before `Run these 4 contracts with Copilot?
+[y/N]` (or `Run this contract with Copilot? [y/N]` for one contract). The default
+is no; declining starts no package, model or check work. Headings are cyan,
+context and the prompt are neutral, and no success or warning color precedes
+execution. `--plan` shows the same work hierarchy and the selected handoff policy,
+without execution disclosure or a consent prompt. Explicit consent flags still
+disclose local execution before action.
+
 | Indicator | Meaning |
 | --- | --- |
 | Cyan `[>]` | Work in progress |
 | Green `[+]` | An engine-owned PASS check or finalized COMPLETE result |
-| Yellow `[!]` | UNPROVEN, incomplete work or a consent warning |
+| Yellow `[!]` | UNPROVEN or incomplete work, including declined consent |
 | Red `[x]` | Failure, rejection or halted execution |
 
 Words and ASCII indicators carry the meaning even without color. A completed

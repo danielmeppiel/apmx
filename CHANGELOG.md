@@ -18,5 +18,10 @@
   and checker details without hiding live progress or failure diagnostics.
 - Preserve published v0.3.2 downloads and historical demo behavior. This
   source change does not rebuild or release native assets.
+- Put factory work before consent: list every declared artifact and planned
+  check with literal counts and execution-matching contract names. Disclose
+  local access, package installation and cost once, immediately before the
+  default-No prompt. Preview evidence paths describe future storage, not an
+  existing record; `--plan` remains free of execution disclosure and consent.
 
 See [result meanings and migration](docs/results.md).

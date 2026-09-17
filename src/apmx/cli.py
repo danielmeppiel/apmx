@@ -84,8 +84,6 @@ def main(
     configure_process_tls_trust()
     ctx.ensure_object(dict)
     logger = ContractLogger(verbose=verbose)
-    if not planning:
-        logger.execution_context()
     caller_root = Path.cwd().resolve()
     limits = ContractLimits()
     result = None
@@ -93,6 +91,8 @@ def main(
     try:
         selected = Path(contract).expanduser().absolute()
         factory_root = selected if package_ref is None and selected.is_dir() else None
+        if not planning and factory_root is None:
+            logger.execution_context()
         if factory_root is None and not contract.endswith(".contract.md"):
             raise click.UsageError(
                 "Select a local factory directory or one explicit .contract.md file. "

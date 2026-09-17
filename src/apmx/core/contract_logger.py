@@ -520,6 +520,7 @@ class ContractLogger:
         self._last_human_activity = 0.0
         self._caller_root = Path.cwd()
         self._display_root: Path | None = None
+        self._factory_contract_count = 0
         self._produces = "saved output"
         self._activity_label = "Working"
         self._checks_heading_shown = False
@@ -1322,29 +1323,51 @@ class ContractLogger:
 
     def render_factory_work(self, graph: Graph) -> None:
         self.stop_activity()
+        count = self._factory_contract_count = len(graph.order)
+        artifacts = sum(len(contract.outputs) for contract in graph.order)
+        checks = sum(len(contract.checks) for contract in graph.order)
         self._write(f"Factory: {self._path(graph.root)}", severity="heading", indent=0)
         self._write(
-            f"Resolved {len(graph.order)} contracts; their file dependencies determine order."
+            f"{count} {'contract' if count == 1 else 'contracts'} / "
+            f"{artifacts} {'artifact' if artifacts == 1 else 'artifacts'} / "
+            f"{checks} planned {'check' if checks == 1 else 'checks'}",
+            layout=_Layout.PROSE,
         )
+        catalog = tuple(contract.path for contract in graph.order)
         for index, contract in enumerate(graph.order, start=1):
-            self._write(
-                f"{index}. {contract.path.relative_to(graph.root).as_posix()} -> {contract.output_label}"
-            )
-            self._write("Checks: " + ", ".join(check.name for check in contract.checks), indent=4)
-        outputs = [
-            name
-            for contract in graph.order
-            if contract.path in graph.targets
-            for name in contract.outputs
-        ]
-        self._write("Final outputs: " + ", ".join(outputs))
+            self.chain_node(index, count, contract.path, catalog=catalog)
+            self._write("Produces: " + ", ".join(contract.outputs))
+            self._write("Checks: " + ", ".join(check.name for check in contract.checks))
+            self._write(f"Source: {self._path(contract.path)}", severity="detail", detail=True)
+            for value in contract.needs:
+                kind = (
+                    "from an earlier step" if value in graph.inputs(contract) else "starting file"
+                )
+                self._write(f"Input: {value} ({kind})", severity="detail", detail=True)
+            for check in contract.checks:
+                self._write(f"Check {check.name}: {check.command}", severity="detail", detail=True)
+        self._display.gap()
+        self._write(
+            f"Evidence: will be saved under {self._path(graph.root / '.apm')}/",
+            indent=0,
+        )
+        self._write(
+            "Required checks must pass before dependent work starts.",
+            indent=0,
+            layout=_Layout.PROSE,
+        )
+        self._display.gap()
 
     def confirm_factory(self) -> bool:
         """Ask once, default NO, without conflating EOF with interruption."""
-        self.execution_context()
-        self._write("Package dependencies may be installed before execution.")
-        self._write("Only outputs whose required checks all passed can move to another step.")
-        self._write("Run this factory locally? [y/N]", indent=0)
+        self.execution_context(factory=True)
+        subject = (
+            "this contract"
+            if self._factory_contract_count == 1
+            else f"these {self._factory_contract_count} contracts"
+        )
+        prompt = f"Run {subject} with Copilot? [y/N]"
+        self._write(prompt, accent=prompt, indent=0)
         if not self._display.enabled:
             return False
         try:
@@ -1370,18 +1393,29 @@ class ContractLogger:
         identity = identity.removesuffix(".contract.md")
         self._write(f"Contract {index}/{count}: {identity}", severity="heading", indent=0)
 
-    def execution_context(self) -> None:
+    def execution_context(self, *, factory: bool = False) -> None:
         """Disclose the invocation's local execution profile before consent or action."""
         if self._display.disclosure_shown:
             return
         self._display.disclosure_shown = True
         self._write("Execution: local (not sandboxed)", severity="notice", indent=0)
-        self._write("Agents and checks can use host files, network and available logins.")
-        self._write("Model usage may cost money. Run only contracts you trust.")
+        if factory:
+            self._write(
+                "Agents and checks can access host files, network and available logins.",
+                layout=_Layout.PROSE,
+            )
+            self._write(
+                "Package dependencies may be installed; model usage may cost money.",
+                layout=_Layout.PROSE,
+            )
+            self._write("Run only contracts you trust.")
+        else:
+            self._write("Agents and checks can use host files, network and available logins.")
+            self._write("Model usage may cost money. Run only contracts you trust.")
         self._display.gap()
 
     def render_chain_plan(self, plan: ChainPlan) -> None:
-        self._write(f"Factory preview: {len(plan.nodes)} contracts", severity="heading", indent=0)
+        self.render_factory_work(plan.graph)
         self._write(f"{plan.nodes[0].plan.harness} / {plan.nodes[0].plan.model or 'default model'}")
         self._write("Nothing will execute or download. Dependency resolution uses no model calls.")
         policy = (
@@ -1390,24 +1424,6 @@ class ContractLogger:
             else "strict VERIFIED-only; native outputs block"
         )
         self._write(f"Handoff policy: {policy}")
-        terminals = [
-            node.plan.contract.output_label
-            for node in plan.nodes
-            if node.plan.contract.path in plan.graph.targets
-        ]
-        self._write("Final outputs: " + ", ".join(terminals))
-        for index, node in enumerate(plan.nodes, start=1):
-            contract = node.plan.contract
-            name = contract.path.relative_to(plan.graph.root).as_posix()
-            self._write(f"{index}. {name} -> {contract.output_label}")
-            for value in contract.needs:
-                kind = (
-                    "from an earlier step"
-                    if value in node.plan.deferred_inputs
-                    else "starting file"
-                )
-                self._write(f"Input: {value} ({kind})", indent=4)
-            self._write("Checks: " + ", ".join(check.name for check in contract.checks), indent=4)
         self._write("Every run starts fresh; APMX does not cap model charges.")
         self._write(
             f"Limits: {plan.nodes[0].plan.limits.chain_contracts} discovered contracts; "

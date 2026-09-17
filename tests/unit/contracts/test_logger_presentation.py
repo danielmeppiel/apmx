@@ -856,9 +856,10 @@ def test_factory_preview_distinguishes_strict_policy_from_explicit_native_opt_in
     if not allow_unproven:
         assert "--allow-host-access" in output
         assert "COMPLETE does not certify isolation." in output
-    assert "Final outputs: output.txt" in output
-    assert "Input: seed.txt (starting file)" in output
+    assert "Produces: output.txt" in output and "Final outputs:" not in output
+    assert ("Input: seed.txt (starting file)" in output) is verbose
     assert "Checks: structure" in output
-    assert "PRIVATE_" not in output and "[+]" not in output
+    assert "PRIVATE_PROMPT" not in output and "[+]" not in output
+    assert ("PRIVATE_CHECK" in output) is verbose
     assert "Contract COMPLETE" not in output and "Factory COMPLETE" not in output
     assert list(tmp_path.iterdir()) == []
