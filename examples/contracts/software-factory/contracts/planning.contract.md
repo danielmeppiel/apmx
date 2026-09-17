@@ -2,7 +2,7 @@
 needs: request.md
 produces: plan.md
 verify:
-  document: python3 -I -B checks/documents.py planning plan.md
+  plan-sections: python3 -I -B checks/documents.py planning plan.md
 ---
 Plan the checkout change described in request.md. The request governs the
 feature; your plan proposes the work, not a new business rule.

@@ -11,9 +11,9 @@ produces:
   - changes.diff
   - implementation.md
 verify:
-  acceptance: python3 -I -B checks/acceptance.py changes.diff
-  regression: python3 -I -B checks/regression.py changes.diff
-  report: python3 -I -B checks/documents.py implementation implementation.md
+  shipping-examples: python3 -I -B checks/acceptance.py changes.diff
+  checkout-regression: python3 -I -B checks/regression.py changes.diff
+  implementation-report-sections: python3 -I -B checks/documents.py implementation implementation.md
 ---
 Implement the admitted checkout specification. Read the request, specification,
 source, existing tests and supplied feature. The request and supplied acceptance

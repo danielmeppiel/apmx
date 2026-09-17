@@ -7,7 +7,7 @@ needs:
   - checks/features/free-shipping.feature
 produces: specification.md
 verify:
-  document: python3 -I -B checks/documents.py specification specification.md
+  specification-sections: python3 -I -B checks/documents.py specification specification.md
 ---
 Turn the admitted plan into a precise, concise specification for the checkout
 feature. Read request.md, plan.md, the source and supplied Gherkin. The request

@@ -31,15 +31,24 @@ def consent_graph(root):
             tuple(CheckSpec(check, f"check-{check}") for check in checks),
         )
         for name, needs, outputs, checks in (
-            ("planning", ("request.md",), "plan.md", ("document",)),
-            ("specification", ("plan.md",), "spec.md", ("document",)),
+            ("planning", ("request.md",), "plan.md", ("plan-sections",)),
+            (
+                "specification",
+                ("plan.md",),
+                "spec.md",
+                ("specification-sections",),
+            ),
             (
                 "build",
                 ("spec.md",),
                 ("changes.diff", "implementation.md"),
-                ("acceptance", "regression", "report"),
+                (
+                    "shipping-examples",
+                    "checkout-regression",
+                    "implementation-report-sections",
+                ),
             ),
-            ("review", ("implementation.md",), "review.md", ("document",)),
+            ("review", ("implementation.md",), "review.md", ("review-sections",)),
         )
     )
     edges = tuple(
@@ -76,12 +85,12 @@ def test_work_precedes_single_disclosure_and_default_no(
         "4 contracts / 5 artifacts / 6 planned checks",
         "Contract 1/4: planning",
         "Produces: plan.md",
-        "Checks: document",
+        "Checks: plan-sections",
         "Contract 2/4: specification",
         "Produces: spec.md",
         "Contract 3/4: build",
         "Produces: changes.diff, implementation.md",
-        "Checks: acceptance, regression, report",
+        "Checks: shipping-examples, checkout-regression, implementation-report-sections",
         "Contract 4/4: review",
         "Produces: review.md",
         "Evidence: will be saved under feature-factory/.apm/",
@@ -98,7 +107,7 @@ def test_work_precedes_single_disclosure_and_default_no(
     assert words.count("Execution:") == 1
     assert words.count("model usage may cost money") == 1
     assert ".contract.md" in words if verbose else ".contract.md" not in words
-    assert ("check-acceptance" in words) is verbose
+    assert ("check-shipping-examples" in words) is verbose
     for name in ("plan.md", "spec.md", "implementation.md"):
         assert (f"Input: {name} (from an earlier step)" in words) is verbose
         assert f"Input: {name} (starting file)" not in words

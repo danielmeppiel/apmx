@@ -31,7 +31,7 @@ with its instructions shortened:
 needs: request.md
 produces: plan.md
 verify:
-  document: python3 -I -B checks/documents.py planning plan.md
+  plan-sections: python3 -I -B checks/documents.py planning plan.md
 ---
 Plan the checkout change in request.md. Write plan.md with
 Goal, Changes, Validation and Risks sections.
@@ -102,9 +102,9 @@ Scenario: Free delivery at 5000 cents
   Then delivery is 0 cents and the total is 5000 cents
 ```
 
-Use your own verification commands and tools. A document check can assess
-structure; it does not prove the reasoning is correct. Generated tests do not
-replace the example's original acceptance checks.
+Use your own verification commands and tools. A section check can assess
+document structure; it does not prove the reasoning is correct. Generated tests
+do not replace the example's original acceptance checks.
 
 ## Follow the evidence
 

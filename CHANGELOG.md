@@ -23,5 +23,8 @@
   local access, package installation and cost once, immediately before the
   default-No prompt. Preview evidence paths describe future storage, not an
   existing record; `--plan` remains free of execution disclosure and consent.
+- Give the six software-factory hero checks outcome-oriented names so consent
+  states what each command proves, while keeping commands and validation
+  semantics unchanged.
 
 See [result meanings and migration](docs/results.md).

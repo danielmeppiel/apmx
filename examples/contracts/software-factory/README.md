@@ -120,9 +120,9 @@ produces:
   - changes.diff
   - implementation.md
 verify:
-  acceptance: python3 -I -B checks/acceptance.py changes.diff
-  regression: python3 -I -B checks/regression.py changes.diff
-  report: python3 -I -B checks/documents.py implementation implementation.md
+  shipping-examples: python3 -I -B checks/acceptance.py changes.diff
+  checkout-regression: python3 -I -B checks/regression.py changes.diff
+  implementation-report-sections: python3 -I -B checks/documents.py implementation implementation.md
 ```
 
 Copilot edits its private source copies and uses the runtime's bounded Git
@@ -199,9 +199,11 @@ inputs/check resources. Do not edit retained records or artifacts. A directory
 existing, a green line or exit `21` is not proof of completion. Open the chain
 record and confirm `complete: true`, all four `nodes` are `completed`, no
 `result.stop_reason`, and all six checks have `normalized: 0` in the node
-results/per-run records. Check names repeat across contracts: planning and
-specification each have `document`, build has `acceptance`, `regression` and
-`report`, and review has `document`.
+results/per-run records. The six check names state what each command establishes:
+`plan-sections`, `specification-sections`, `shipping-examples`,
+`checkout-regression`, `implementation-report-sections` and `review-sections`.
+The four `*-sections` checks validate required Markdown structure, not the
+semantic correctness or quality of the documents.
 
 The completed artifact view must contain all five deliveries:
 `plan.md`, `specification.md`, `changes.diff`, `implementation.md` and `review.md`.

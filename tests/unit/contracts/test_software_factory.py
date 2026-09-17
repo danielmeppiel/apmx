@@ -27,6 +27,17 @@ DELIVERIES = {
     "review.contract.md": ("review.md",),
 }
 
+CHECKS = {
+    "planning.contract.md": ("plan-sections",),
+    "specification.contract.md": ("specification-sections",),
+    "build.contract.md": (
+        "shipping-examples",
+        "checkout-regression",
+        "implementation-report-sections",
+    ),
+    "review.contract.md": ("review-sections",),
+}
+
 
 def prepare_example(root: Path, renamed: bool = False) -> dict[str, tuple[str, ...]]:
     seed(root)
@@ -47,6 +58,15 @@ def prepare_example(root: Path, renamed: bool = False) -> dict[str, tuple[str, .
             path = path.rename(path.with_name(f"stage-{9 - index}.contract.md"))
         deliveries[path.name] = files
     return deliveries
+
+
+def test_factory_check_names_describe_the_proven_outcomes() -> None:
+    actual = {
+        name: tuple(load_frontmatter_document(EXAMPLE / "contracts" / name).metadata["verify"])
+        for name in DELIVERIES
+    }
+    assert actual == CHECKS
+    assert sum(map(len, actual.values())) == 6
 
 
 @pytest.mark.parametrize(
@@ -135,6 +155,7 @@ def test_factory_native_preview_and_four_real_leaf_handoffs(
     data = json.loads(aggregate.read_bytes())
     assert data["complete"] is True and data["result"]["outcome"]["name"] == "COMPLETE"
     assert data["consent_source"] == ("interactive" if interactive else "flag")
+    assert [tuple(item["checks"]) for item in data["graph"]["order"]] == list(CHECKS.values())
     assert Path.cwd() == caller.parent and not (caller.parent / ".apm").exists()
     previous = {}
     for plan, snapshot, directory in calls:

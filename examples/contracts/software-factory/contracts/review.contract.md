@@ -6,7 +6,7 @@ needs:
   - implementation.md
 produces: review.md
 verify:
-  document: python3 -I -B checks/documents.py review review.md
+  review-sections: python3 -I -B checks/documents.py review review.md
 ---
 Give a fresh-context advisory review of the supplied checkout change. Compare
 the specification, actual patch and implementation report with request.md.
