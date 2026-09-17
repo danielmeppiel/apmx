@@ -16,22 +16,26 @@ reasoning or turn retained-only protocol events into public messages.
 
 ## Reading the output
 
-Steps and result blocks have clear blank-line boundaries. Headings use the
-terminal's default foreground; metadata is subordinate rather than competing
-with the result.
+Contract headings and result blocks have clear blank-line boundaries.
+Headings/activity use cyan; metadata is subordinate. Both modes show actual
+output names under Produces, engine-owned PASS/FAIL under Checks, and final
+counts plus copyable artifact-directory and record paths under Evidence.
 
 | Indicator | Meaning |
 | --- | --- |
 | Cyan `[>]` | Work in progress |
-| Green `[+]` | An engine-owned passed check |
+| Green `[+]` | An engine-owned PASS check or finalized COMPLETE result |
 | Yellow `[!]` | UNPROVEN, incomplete work or a consent warning |
 | Red `[x]` | Failure, rejection or halted execution |
 
 Words and ASCII indicators carry the meaning even without color. A completed
-native factory remains **UNPROVEN / exit 21**. Green check results do not imply
-isolation, correct software or production certification.
+native factory returns **COMPLETE / exit 0** in 0.4.0 source, only after
+validated durable finalization. The local-access/cost disclosure appears once
+before consent/action, not as repeated per-leaf warnings. Green results do not
+imply isolation, correct software or production certification. Published v0.3.2
+and historical recordings retain UNPROVEN/21; see [migration](results.md).
 
-Routine tool activity and passing checker stdout belong in verbose output.
+Routine model narration, tool activity and passing checker stdout belong in verbose output.
 Default output still shows stderr and explicit diagnostics. A failed or
 incomplete check shows its normalized result and a bounded stdout excerpt;
 the saved transcript provides the retained detail. Check output is evidence

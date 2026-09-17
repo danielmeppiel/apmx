@@ -140,7 +140,7 @@ def test_actual_leaf_chain_preserves_caller_and_assurance(
     result = chain.run_chain(
         prepare(caller, allow=allow), logger=ContractLogger(), allow_advisory=True
     )
-    assert result.outcome == Outcome.UNPROVEN
+    assert result.outcome == (Outcome.COMPLETE if allow else Outcome.UNPROVEN)
     assert result.complete is allow
     assert len(calls) == (2 if allow else 1)
     document = json.loads(result.record_path.read_bytes())
@@ -148,7 +148,7 @@ def test_actual_leaf_chain_preserves_caller_and_assurance(
     assert document["complete"] is allow
     assert len(document["nodes"]) == 2
     assert result.record_path.name == "record.json"
-    assert document["schema"] == "apmx-contract-chain/0.1"
+    assert document["schema"] == "apmx-contract-chain/0.2"
     if allow:
         assert result.runs[-1].artifact.path.read_bytes() == b"seed"
         assert (calls[1][1].root / "first.txt").read_bytes() == b"seed"
@@ -531,7 +531,7 @@ def test_explicit_model_and_full_cli_closure(caller: Path, monkeypatch: pytest.M
             "configured-test-model",
         ],
     )
-    assert result.exit_code == 21 and "apmx factory: UNPROVEN (complete)" in result.output
+    assert result.exit_code == 0 and "Factory COMPLETE" in result.output
     assert len(calls) == 2 and all(call[0].model == "configured-test-model" for call in calls)
 
 

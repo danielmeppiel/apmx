@@ -349,9 +349,12 @@ the unchanged baseline or an incorrect `> 5000` threshold; supplied acceptance
 rejects both even when generated tests make no useful assertion.
 
 The observed run above supplements the deterministic suite; neither is
-production certification or permission to merge/deploy. Passing checks remain
-**UNPROVEN**. Completed local execution exits `21`; that code
-can also accompany incomplete work, so inspect the record. A rejected check
+production certification or permission to merge/deploy. The published v0.3.2
+binaries, pinned source and historical observation remain **UNPROVEN / 21**.
+Current 0.4.0 source returns **COMPLETE / 0** only after all four contracts,
+six checks and five artifacts have complete validated, finalized evidence.
+Exit `21` still means noncomplete work or refused admission; inspect the
+[versioned record](../../../docs/results.md). A rejected check
 returns `20`, operational failure returns `22`, and preview returns `0`.
 
 Reruns create new attempts without automatic retries. Earlier evidence remains

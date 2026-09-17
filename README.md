@@ -88,8 +88,8 @@ produces:
 
 Copilot edits private source copies and invokes a bounded Git exporter; it
 does not hand-write patch hunks. The original checkout is unchanged.
-All declared artifacts and required checks must be complete before a consumer
-receives any of that delivery.
+All declared artifacts must be retained and every required check must pass
+before an authorized consumer receives any of that delivery.
 
 The example's patch-aware checks reconstruct the changed application and test
 it independently. **Gherkin is optional**; this example chooses it to express
@@ -116,15 +116,19 @@ block dependent work. Follow the printed paths:
 - `.apm/chains/<id>/artifacts/` collects the completed factory's artifacts.
 - `.apm/runs/<id>/record.json` records each contract's inputs and checks.
 
-For this example, completion means all four contracts, all six required checks
-and all five artifacts are present. If a check fails, dependent work stops.
+For this example, completion means all four contracts completed, all six required
+checks passed and all five artifacts are retained. If a check fails, dependent work stops.
 [Inspect diagnostics, revise with your own harness and rerun](examples/contracts/software-factory/README.md#recover-after-a-failed-or-incomplete-run);
 APMX does not automatically repair or resume the factory.
 
 **Local execution is not a sandbox.** Agents and checks can use host files,
 network and logins; model usage may cost money. Passing checks does not certify
-isolation. Local results remain **UNPROVEN (exit 21)**; inspect the record to
-distinguish a completed run from incomplete work.
+isolation. **Current source (0.4.0)** returns **COMPLETE (exit 0)** only after
+all declared outputs are retained, every required check passed and evidence is finalized.
+Missing output, incomplete checks and policy/consent refusals remain nonzero.
+The published **v0.3.2 downloads and pinned historical demo still return
+UNPROVEN (exit 21)** even when work completes; they have not been rebuilt.
+See [result and record migration](docs/results.md).
 
 ## Go further
 

@@ -5,8 +5,8 @@ from pathlib import Path
 import click
 
 from apmx.contracts.events import ImportsSelectedEvent
-from apmx.contracts.models import ChainResult, ContractSource
-from apmx.contracts.records import preparation_failure
+from apmx.contracts.models import ChainResult, ContractSource, RunResult
+from apmx.contracts.records import CompletionBoundary, preparation_failure
 from apmx.core.contract_logger import ContractLogger
 
 
@@ -18,12 +18,13 @@ def invoke_contract(
     model: str | None,
     verbose: bool,
     planning: bool,
+    completion: CompletionBoundary,
     allow_advisory: bool = False,
     source: ContractSource | None = None,
     logger: ContractLogger | None = None,
     factory_root: Path | None = None,
     allow_unproven_inputs: bool = False,
-) -> ChainResult | None:
+) -> ChainResult | RunResult | None:
     """Plan or execute a local factory or one explicit leaf through shared admission."""
     from ..contracts import frontend, workspace
     from ..contracts.models import ContractError, ContractLimits, Outcome
@@ -31,6 +32,8 @@ def invoke_contract(
 
     if logger is None:
         logger = ContractLogger(verbose=verbose)
+    if not planning:
+        logger.execution_context()
     chain_result = None
     try:
         logger.start_activity("Reading contract", announce=False)
@@ -121,6 +124,7 @@ def invoke_contract(
                     allow_advisory=allow_advisory,
                     consent_source=consent_source,
                 )
+                completion.capture(chain_result)
                 return chain_result
             plan = frontend.plan_contract(
                 Path(contract),
@@ -139,8 +143,11 @@ def invoke_contract(
             logger.on_preparation(ImportsSelectedEvent(plan.imported_skills))
             from ..contracts.engine import run_contract
 
-            result = run_contract(plan, logger=logger, allow_advisory=allow_advisory)
-            ctx.exit(int(result.outcome))
+            chain_result = run_contract(
+                plan, logger=logger, allow_advisory=allow_advisory, announce_result=False
+            )
+            completion.capture(chain_result)
+            return chain_result
     except ContractError as exc:
         error = preparation_failure(chain_result, exc)
         logger.render_error(error)

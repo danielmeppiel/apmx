@@ -151,9 +151,17 @@ class SmokeFixtureTests(unittest.TestCase):
             run = smoke.run_binary
 
             def source(binary, arguments, caller, environment, timeout=90):
+                checkout = Path(__file__).resolve().parents[2] / "src"
+                entrypoint = (
+                    "import sys, pathlib, runpy; "
+                    f"sys.path.insert(0, {str(checkout)!r}); "
+                    "import apmx; "
+                    f"assert pathlib.Path(apmx.__file__).is_relative_to({str(checkout)!r}); "
+                    "runpy.run_module('apmx', run_name='__main__')"
+                )
                 return run(
                     Path(sys.executable),
-                    ["-B", "-m", "apmx", *arguments],
+                    ["-B", "-c", entrypoint, *arguments],
                     caller,
                     environment,
                     timeout,
@@ -162,7 +170,7 @@ class SmokeFixtureTests(unittest.TestCase):
             with patch.object(smoke, "run_binary", side_effect=source):
                 result = smoke.run_factory_case(Path(sys.executable), root / "factory", actor)
             self.assertEqual(result["preview_exit"], 0)
-            self.assertEqual(result["exit_code"], 21)
+            self.assertEqual(result["exit_code"], 0)
             self.assertEqual(
                 (result["contracts"], result["checks"], result["delivered_files"]), (2, 2, 3)
             )

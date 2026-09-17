@@ -205,7 +205,9 @@ def test_passing_native_run_still_requires_a_retained_transcript(tmp_path: Path)
     result = RunResult(store.run_id, store.directory, Outcome.UNPROVEN, artifact, (check,))
     with pytest.raises(ContractError) as failure:
         store.finish(result)
-    assert failure.value.code == "transcript_missing"
+    assert failure.value.code == "finalization_failure"
+    assert isinstance(failure.value.__cause__, ContractError)
+    assert failure.value.__cause__.code == "transcript_missing"
     assert json.loads(store.record_path.read_text(encoding="utf-8"))["complete"] is False
 
 
@@ -456,7 +458,7 @@ def test_post_replace_directory_sync_failure_cannot_leave_verified_record(
         original_sync(fd)
 
     monkeypatch.setattr(os, "fsync", fail_directory_sync)
-    result = RunResult(store.run_id, store.directory, Outcome.VERIFIED, None, ())
+    result = RunResult(store.run_id, store.directory, Outcome.COMPLETE, None, ())
     with pytest.raises(ContractError) as failure:
         store.finish(result)
     assert failure.value.code == "finalization_failure"

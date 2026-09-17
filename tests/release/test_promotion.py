@@ -19,6 +19,26 @@ from tests.release.test_backend import add_backend_fixture
 
 
 class PromotionTests(unittest.TestCase):
+    def test_current_source_notes_separate_execution_and_assurance_versions(self):
+        notes = promotion.release_notes("0.4.0", "a" * 40)
+        self.assertIn("COMPLETE (0)", notes)
+        self.assertIn("apm-contract-run/0.3", notes)
+        self.assertIn("apmx-contract-chain/0.2", notes)
+        self.assertIn("Incomplete work remains UNPROVEN (21)", notes)
+        self.assertIn("not isolation or certification", notes)
+        self.assertIn("--allow-host-access --allow-unproven-inputs", notes)
+        self.assertNotIn("Passing native checks yield UNPROVEN (21)", notes)
+        self.assertNotIn("records retain `apm-contract-run/0.1`", notes)
+
+    def test_published_notes_preserve_legacy_outcome_and_record_semantics(self):
+        notes = promotion.release_notes("0.3.2", "b" * 40)
+        self.assertIn("Passing native checks yield UNPROVEN (21)", notes)
+        self.assertIn("apm-contract-run/0.1", notes)
+        self.assertIn("apm-contract-run/0.2", notes)
+        self.assertNotIn("COMPLETE (0)", notes)
+        self.assertNotIn("apm-contract-run/0.3", notes)
+        self.assertNotIn("apmx-contract-chain/0.2", notes)
+
     def test_inventory_patch_notes_distinguish_portable_preflight_from_factory_smoke(self):
         notes = promotion.release_notes("0.3.2", "a" * 40)
         for text in (

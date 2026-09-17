@@ -16,6 +16,7 @@ from .models import (
     Artifact,
     ArtifactSet,
     ArtifactView,
+    CapturedInput,
     ChainResult,
     CheckObservation,
     ContractError,
@@ -28,6 +29,14 @@ from .models import (
     RunResult,
     artifact_files,
 )
+
+RUN_SCHEMA = "apm-contract-run/0.3"
+CHAIN_SCHEMA = "apmx-contract-chain/0.2"
+NATIVE_ASSURANCE = {
+    "profile": "native-advisory",
+    "isolation": "unavailable",
+    "certification": "unproven",
+}
 
 
 def normalize_check(process: ProcessObservation, *, integrity_ok: bool = True) -> int:
@@ -42,7 +51,7 @@ def reduce_outcome(
     checks: tuple[CheckObservation, ...],
     stop_reason: str | None,
 ) -> Outcome:
-    """Reduce native leaf results without claiming an enforced host boundary."""
+    """Reduce provisional observations; only finalized evidence can earn COMPLETE."""
     if stop_reason:
         return Outcome.HALTED
     if any(check.normalized == 1 for check in checks):
@@ -51,9 +60,13 @@ def reduce_outcome(
 
 
 def native_assurance_limited(result: RunResult) -> bool:
-    """Identify completed passing checks whose only limit is the native host."""
+    """Identify passing provisional/COMPLETE observations with host-limited assurance.
+
+    This is not an exact-completeness check; finalized_inputs must validate the
+    declared inventory, check identities, producer and retained evidence first.
+    """
     return (
-        result.outcome == Outcome.UNPROVEN
+        result.outcome in (Outcome.UNPROVEN, Outcome.COMPLETE)
         and result.stop_reason is None
         and result.artifact is not None
         and bool(result.checks)
@@ -65,7 +78,7 @@ def handoff_policy(allow_unproven: bool) -> str:
     return "native-assurance-exception" if allow_unproven else "VERIFIED-only"
 
 
-def validate_consent_source(source: str) -> None:
+def validate_consent_source(source: str | None) -> None:
     if source not in ("flag", "interactive"):
         raise ContractError("Unknown execution consent source.", code="invalid_consent")
 
@@ -93,7 +106,7 @@ def _json_value(value: object) -> object:
 
 
 def _limit_identity(plan: LeafPlan) -> dict:
-    """Preserve the scalar v0.1 limit shape when new inventory limits are inapplicable."""
+    """Preserve the scalar limit shape when inventory limits are inapplicable."""
     defaults = ContractLimits()
     omitted = (
         {"output_files", "output_total_bytes"}
@@ -202,6 +215,15 @@ def _record_bytes(path: Path, limits: ContractLimits) -> tuple[dict, str]:
     return data, entry.sha256
 
 
+def _validate_version(data: dict) -> None:
+    if data.get("schema") != RUN_SCHEMA:
+        raise ContractError(
+            "Unsupported retained record version. Historical records remain unchanged; "
+            "rerun with current source to obtain a new handoff record.",
+            code="record_version",
+        )
+
+
 def _validate_retained_provenance(
     directory: Path,
     data: dict,
@@ -250,17 +272,17 @@ def _retained_artifacts(
     from .workspace import _path, _read, artifact_inventory_digest
 
     try:
+        _validate_version(data)
         raw = data["artifact"]
         if not _same_json(raw, data["result"]["artifact"]):
             raise ValueError("Recorded output observations disagree.")
-        if data["schema"] == "apm-contract-run/0.1":
+        inventory = isinstance(raw, dict) and "files" in raw
+        if not inventory:
             rows = [raw]
-        elif data["schema"] == "apm-contract-run/0.2":
+        else:
             if set(raw) != {"files", "sha256"}:
                 raise ValueError("Unknown artifact inventory shape.")
             rows = raw["files"]
-        else:
-            raise ContractError("Unsupported retained record version.", code="record_version")
         if not isinstance(rows, list) or not 1 <= len(rows) <= limits.output_files:
             raise ValueError("Invalid retained artifact inventory.")
         if any(
@@ -287,9 +309,7 @@ def _retained_artifacts(
             raise ValueError("Invalid retained artifact size.")
         if sum(item.size for item in files) > limits.output_total_bytes:
             raise ValueError("Retained output inventory exceeds its byte limit.")
-        if data["schema"] == "apm-contract-run/0.2" and raw["sha256"] != artifact_inventory_digest(
-            files
-        ):
+        if inventory and raw["sha256"] != artifact_inventory_digest(files):
             raise ValueError("Retained inventory digest changed.")
         for item in files:
             if item.path != _path(directory / "artifacts", item.relative_path):
@@ -370,6 +390,7 @@ def validate_binding(binding: RetainedInput, caller: Path, limits: ContractLimit
             "Retained input must belong to this caller's run.", code="invalid_binding"
         )
     data, identity = _record_bytes(record, limits)
+    _validate_version(data)
     if identity != binding.record_sha256:
         raise ContractError("Finalized predecessor record changed.", code="record_changed")
     _validate_retained_provenance(directory, data, limits)
@@ -392,14 +413,9 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
         if directory.parent != plan.project_root / ".apm/runs" or directory.name != result.run_id:
             raise ValueError("Run identity differs from the caller.")
         data, digest = _record_bytes(directory / "record.json", plan.limits)
+        _validate_version(data)
         if not (
-            data["schema"]
-            == (
-                "apm-contract-run/0.1"
-                if isinstance(plan.contract.produces, str)
-                else "apm-contract-run/0.2"
-            )
-            and data["profile"] == "native-advisory"
+            data["profile"] == "native-advisory"
             and data["complete"] is True
             and data["phase"] == "finished"
             and data["run_id"] == result.run_id
@@ -407,11 +423,16 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
             and data["source"]["sha256"] == plan.contract.source_digest
             and data["source"]["path"] == str(plan.contract.path)
             and _same_json(data["result"], result)
+            and _same_json(data["execution"], result.outcome)
+            and _same_json(data["assurance"], NATIVE_ASSURANCE)
             and _same_json(data["source"]["retained_identities"], result.retained_provenance)
             and all(data[key] is None for key in ("child_pid", "child_pgid", "active_check"))
         ):
             raise ValueError("Finalized leaf identity or observations differ.")
-        if result.outcome != reduce_outcome(result.artifact, result.checks, result.stop_reason):
+        provisional = reduce_outcome(result.artifact, result.checks, result.stop_reason)
+        if result.outcome != provisional and not (
+            result.outcome is Outcome.COMPLETE and provisional is Outcome.UNPROVEN
+        ):
             raise ValueError("Native outcome disagrees with canonical assessment.")
         expected_identity = {
             "manifest_sha256": plan.manifest_digest,
@@ -430,11 +451,13 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
             "apm_backend": plan.apm_backend,
             "advisory_consent": result.consent_source,
             "handoff_policy": result.handoff_policy,
+            "policy_status": plan.policy_status,
         }
         if any(
             not _same_json(data[key], value) for key, value in expected_identity.items()
         ) or not _same_json(data["source"]["package"], _package_identity(plan)):
             raise ValueError("Planned source/import/caller identities differ from the record.")
+        validate_consent_source(result.consent_source)
         if any(data["controls"][key] != "unavailable" for key in ("isolation", "spend_cap")):
             raise ValueError("Native assurance controls differ from the admitted profile.")
         if result.outcome in (Outcome.REJECTED, Outcome.HALTED):
@@ -473,6 +496,7 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
             or normalize_check(producer) != 0
             or producer.cleanup_confirmed is not True
             or result.stop_reason is not None
+            or data["native_completion_observed"] is not True
             or not _same_json(data.get("native_reported_exit_code"), None)
             and not _same_json(data.get("native_reported_exit_code"), 0)
         ):
@@ -533,12 +557,11 @@ def admit_handoffs(
 ) -> tuple[RetainedInput, ...]:
     """ASF strict gate, with a separately authorized native-assurance exception."""
     bindings = finalized_inputs(plan, result)
-    if result.outcome == Outcome.VERIFIED:
-        return bindings
     if allow_unproven and native_assurance_limited(result):
         return bindings
     raise ContractError(
-        "UNPROVEN input blocked by the strict VERIFIED-only handoff policy. For trusted local "
+        "Native input blocked by the strict VERIFIED-only handoff policy. COMPLETE does not "
+        "establish isolation. For trusted local "
         "development, explicitly select --allow-unproven-inputs; this does not certify isolation.",
         code="unproven_input",
         outcome=Outcome.UNPROVEN,
@@ -557,6 +580,161 @@ def admit_handoff(plan: LeafPlan, result: RunResult, *, allow_unproven: bool) ->
     if not isinstance(plan.contract.produces, str):
         raise ContractError("Multiple artifacts require admit_handoffs.", code="record_version")
     return admit_handoffs(plan, result, allow_unproven=allow_unproven)[0]
+
+
+def _chain_nodes(data: dict) -> list[dict]:
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list) or any(
+        not isinstance(node, dict)
+        or not isinstance(node.get("contract"), str)
+        or node.get("state") not in ("pending", "running", "completed", "stopped", "blocked")
+        or "result" not in node
+        for node in nodes
+    ):
+        raise ContractError("Factory node observations are malformed.", code="record_changed")
+    return nodes
+
+
+def _validate_chain_completion(data: dict, result: ChainResult, nodes: list[dict]) -> None:
+    """Match each ordered graph node to its distinct, exact finalized child."""
+    try:
+        order = data["graph"]["order"]
+        if (
+            not isinstance(order, list)
+            or result.outcome is not Outcome.COMPLETE
+            or not result.runs
+            or len(nodes) != len(result.runs)
+            or len(nodes) != len(order)
+            or len({run.run_id for run in result.runs}) != len(result.runs)
+            or len({run.run_directory for run in result.runs}) != len(result.runs)
+            or len({item["contract"] for item in order}) != len(order)
+        ):
+            raise ValueError("Factory completion inventory disagrees.")
+        caller = Path(data["caller_root"])
+        source_root = Path(data["graph"]["root"])
+        for expected, node, run in zip(order, nodes, result.runs, strict=True):
+            if (
+                node["contract"] != expected["contract"]
+                or node["state"] != "completed"
+                or not _same_json(_json_value(node["result"]), run)
+                or run.outcome is not Outcome.COMPLETE
+                or run.run_directory != caller / ".apm/runs" / run.run_id
+            ):
+                raise ValueError("Factory graph/node/result correspondence disagrees.")
+            child, digest = _record_bytes(run.run_directory / "record.json", ContractLimits())
+            _validate_version(child)
+            if (
+                child["source"]["path"] != str(source_root / expected["contract"])
+                or node["record_sha256"] != digest
+                or not _same_json(child["result"], run)
+                or not _same_json(child["execution"], Outcome.COMPLETE)
+                or child["complete"] is not True
+            ):
+                raise ValueError("Factory child identity changed.")
+    except (ValueError, KeyError, TypeError) as exc:
+        if isinstance(exc, ContractError):
+            raise
+        raise ContractError(
+            "Factory completion observations disagree.", code="record_changed"
+        ) from exc
+
+
+def _retained_completion(result: RunResult | ChainResult) -> tuple[tuple[Path, str], ...]:
+    """Revalidate retained evidence only; preparation sources may already be removed."""
+    from .workspace import _path, _read, inspect_artifact_view, inspect_retained_log
+
+    limits = ContractLimits()
+    identities = []
+    children = result.runs if isinstance(result, ChainResult) else ()
+    for current in (*children, result):
+        is_chain = isinstance(current, ChainResult)
+        path = current.record_path if is_chain else current.run_directory / "record.json"
+        caller = path.parents[3]
+        _path(caller, path.relative_to(caller).as_posix())
+        data, digest = _record_bytes(path, limits)
+        if data.get("schema") != (CHAIN_SCHEMA if is_chain else RUN_SCHEMA):
+            raise ContractError("Unsupported completion record version.", code="record_version")
+        if (
+            data.get("complete") is not True
+            or data.get("phase") != "finished"
+            or not _same_json(data.get("result"), current)
+            or not _same_json(data.get("execution"), Outcome.COMPLETE)
+            or not _same_json(data.get("assurance"), NATIVE_ASSURANCE)
+            or not _same_json(
+                data.get("transcript"), inspect_retained_log(path.parent, limits.transcript_bytes)
+            )
+        ):
+            raise ContractError(
+                "Completion evidence changed during preparation cleanup.", code="record_changed"
+            )
+        if is_chain:
+            _validate_chain_completion(data, current, _chain_nodes(data))
+            raw = data["artifacts"]
+            view = ArtifactView(
+                Path(raw["root"]),
+                tuple(FileEntry(**entry) for entry in raw["files"]),
+                raw["digest"],
+                tuple(
+                    CapturedInput(
+                        Path(row["source_root"]),
+                        row["source_relative_path"],
+                        FileEntry(**row["entry"]),
+                    )
+                    for row in raw["sources"]
+                ),
+            )
+            if view.root != path.parent / "artifacts":
+                raise ContractError("Factory artifact location changed.", code="artifact_changed")
+            inspect_artifact_view(view)
+        else:
+            files = _retained_artifacts(data, path.parent, limits)
+            _validate_retained_provenance(path.parent, data, limits)
+            _validate_native_exports(data, path.parent, files, limits)
+            for row in data["baseline"]["files"]:
+                entry = FileEntry(**row)
+                _, actual = _read(path.parent / "baseline", entry.relative_path, entry.size)
+                if actual != entry:
+                    raise ContractError("Retained baseline changed.", code="record_changed")
+        identities.append((path, digest))
+    return tuple(identities)
+
+
+class CompletionBoundary:
+    """Seal successful retained identities before, and check them after, teardown."""
+
+    def __init__(self) -> None:
+        self._identities: tuple[tuple[Path, str], ...] | None = None
+
+    def capture(self, result: RunResult | ChainResult) -> None:
+        if result.outcome is Outcome.COMPLETE:
+            try:
+                self._identities = _retained_completion(result)
+            except (ValueError, KeyError, TypeError) as exc:
+                if isinstance(exc, ContractError):
+                    raise
+                raise ContractError(
+                    "Completion evidence is malformed.", code="record_changed"
+                ) from exc
+
+    def validate(self, result: RunResult | ChainResult) -> None:
+        if result.outcome is not Outcome.COMPLETE:
+            return
+        try:
+            if (
+                self._identities is None
+                or any(
+                    _record_bytes(path, ContractLimits())[1] != digest
+                    for path, digest in self._identities
+                )
+                or _retained_completion(result) != self._identities
+            ):
+                raise ContractError(
+                    "Completion record changed during preparation cleanup.", code="record_changed"
+                )
+        except (ValueError, KeyError, TypeError) as exc:
+            if isinstance(exc, ContractError):
+                raise
+            raise ContractError("Completion evidence is malformed.", code="record_changed") from exc
 
 
 class AttemptStore:
@@ -600,15 +778,15 @@ class AttemptStore:
             run_id,
             directory,
             {
-                "schema": "apm-contract-run/0.1"
-                if isinstance(plan.contract.produces, str)
-                else "apm-contract-run/0.2",
+                "schema": RUN_SCHEMA,
+                "assurance": dict(NATIVE_ASSURANCE),
                 "run_id": run_id,
                 "attempt_id": run_id + "/1",
                 "created_at": datetime.now(UTC).isoformat(),
                 "profile": "native-advisory",
                 "advisory_consent": consent_source,
                 "handoff_policy": handoff_policy,
+                "policy_status": plan.policy_status,
                 "provenance": "same-user local observations; not protected or signed",
                 "phase": "admitted",
                 "complete": False,
@@ -667,25 +845,60 @@ class AttemptStore:
         """Persist the final result before any terminal success announcement."""
         from .workspace import inspect_retained_log
 
-        if (self.directory / "transcript.log").exists():
-            self._data["transcript"] = inspect_retained_log(
-                self.directory, ContractLimits().transcript_bytes
-            )
-        elif result.outcome == Outcome.VERIFIED or native_assurance_limited(result):
-            raise ContractError("Final transcript is missing.", code="transcript_missing")
-        self._data.update(
-            complete=True,
-            phase="finished",
-            child_pid=None,
-            child_pgid=None,
-            active_check=None,
-            finished_at=datetime.now(UTC).isoformat(),
-            result=result,
-        )
         try:
+            if (self.directory / "transcript.log").exists():
+                self._data["transcript"] = inspect_retained_log(
+                    self.directory, ContractLimits().transcript_bytes
+                )
+            elif result.outcome is Outcome.COMPLETE or native_assurance_limited(result):
+                raise ContractError("Final transcript is missing.", code="transcript_missing")
+            self._data.update(
+                complete=True,
+                phase="finished",
+                child_pid=None,
+                child_pgid=None,
+                active_check=None,
+                finished_at=datetime.now(UTC).isoformat(),
+                result=result,
+                execution=result.outcome,
+            )
             self._write()
+        except (ContractError, OSError, KeyboardInterrupt) as exc:
+            self.fail_finalization(result, exc)
+
+    def finalize(self, plan: LeafPlan, result: RunResult) -> RunResult:
+        """Issue COMPLETE only through the exact persisted-evidence validator."""
+        self.finish(result)
+        if not native_assurance_limited(result):
+            return result
+        try:
+            finalized_inputs(plan, result)
+        except ContractError as exc:
+            failed = replace(
+                result,
+                outcome=exc.outcome,
+                stop_reason=exc.code if exc.outcome is Outcome.HALTED else None,
+            )
+            try:
+                self.update(
+                    "finalization_failed",
+                    complete=False,
+                    result=failed,
+                    execution=failed.outcome,
+                    validation_error={"code": exc.code, "message": str(exc)},
+                )
+            except (OSError, KeyboardInterrupt) as persistence_error:
+                self.fail_finalization(failed, persistence_error)
+            raise
         except (OSError, KeyboardInterrupt) as exc:
             self.fail_finalization(result, exc)
+        completed = replace(result, outcome=Outcome.COMPLETE)
+        self.finish(completed)
+        try:
+            finalized_inputs(plan, completed)
+        except (ContractError, OSError, KeyboardInterrupt) as exc:
+            self.fail_finalization(completed, exc)
+        return completed
 
     def fail_finalization(self, result: RunResult | ChainResult, error: BaseException) -> None:
         """Retain the same incomplete state for transcript and record failures."""
@@ -698,6 +911,8 @@ class AttemptStore:
             complete=False,
             phase="finalization_failed",
             result=failed,
+            execution=failed.outcome,
+            finalization_error={"type": type(error).__name__, "message": str(error)},
         )
         try:
             self._write()
@@ -705,7 +920,7 @@ class AttemptStore:
             raise ContractError(
                 f"Run record finalization failed at {self.record_path}; failure-state "
                 "persistence also failed. Treat this invocation as HALTED and do not "
-                "rely on a visible success record.",
+                f"rely on a visible success record. Original failure: {type(error).__name__}: {error}",
                 code=code,
             ) from repair_error
         raise ContractError(
@@ -734,7 +949,8 @@ class ChainStore(AttemptStore):
             identity,
             directory,
             {
-                "schema": "apmx-contract-chain/0.1",
+                "schema": CHAIN_SCHEMA,
+                "assurance": dict(NATIVE_ASSURANCE),
                 "chain_id": identity,
                 "caller_root": str(caller),
                 "complete": False,
@@ -770,38 +986,69 @@ class ChainStore(AttemptStore):
                 )
             elif result.complete:
                 raise OSError("Final chain transcript is missing.")
-            self.update("finished", complete=result.complete, nodes=nodes, result=result)
-        except (ContractError, OSError, KeyboardInterrupt) as exc:
+            if result.complete:
+                _validate_chain_completion(self._data, result, nodes)
+            self.update(
+                "finished",
+                complete=result.complete,
+                nodes=nodes,
+                result=result,
+                execution=result.outcome,
+            )
+            data, _ = _record_bytes(self.record_path, ContractLimits())
+            if not _same_json(data, self._data):
+                raise ContractError("Final factory record changed.", code="record_changed")
+        except (ValueError, KeyError, TypeError, OSError, KeyboardInterrupt) as exc:
             self.fail_finalization(result, exc)
 
 
-def halt_chain(result: ChainResult, reason: str) -> None:
+def halt_chain(result: ChainResult | RunResult, reason: str) -> None:
     """Record a preparation-context exit failure before the CLI can announce completion."""
     from .workspace import _path
 
-    caller = result.record_path.parents[3]
-    _path(caller, result.record_path.relative_to(caller).as_posix())
-    data, _ = _record_bytes(result.record_path, ContractLimits())
-    if not _same_json(data["result"], result):
+    is_chain = isinstance(result, ChainResult)
+    record_path = result.record_path if is_chain else result.run_directory / "record.json"
+    caller = record_path.parents[3]
+    _path(caller, record_path.relative_to(caller).as_posix())
+    data, _ = _record_bytes(record_path, ContractLimits())
+    if is_chain:
+        if data.get("schema") != CHAIN_SCHEMA:
+            raise ContractError("Unsupported factory record version.", code="record_version")
+    else:
+        _validate_version(data)
+    if not isinstance(data.get("result"), dict) or not _same_json(data["result"], result):
         raise ContractError(
             "Chain record changed before context finalization.", code="record_changed"
         )
-    store = ChainStore(result.chain_id, result.record_path.parent, data)
-    store.record_path = result.record_path
-    stopped = replace(result, complete=False, outcome=Outcome.HALTED, stop_reason=reason)
-    store.finish_chain(stopped, data["nodes"])
+    stopped = replace(result, outcome=Outcome.HALTED, stop_reason=reason)
+    if is_chain:
+        nodes = _chain_nodes(data)
+        store = ChainStore(result.chain_id, record_path.parent, data)
+        store.finish_chain(replace(stopped, complete=False), nodes)
+    else:
+        store = AttemptStore(result.run_id, record_path.parent, data)
+        store.finish(stopped)
 
 
-def preparation_failure(result: ChainResult | None, error: ContractError) -> ContractError:
+def preparation_failure(
+    result: ChainResult | RunResult | None, error: ContractError
+) -> ContractError:
     """Keep context-exit failures structured even if recording their stop also fails."""
     if result is None:
         return error
     try:
         halt_chain(result, error.code)
-    except (ValueError, OSError, KeyboardInterrupt):
+    except (ValueError, KeyError, TypeError, OSError, KeyboardInterrupt):
+        path = (
+            result.record_path
+            if isinstance(result, ChainResult)
+            else result.run_directory / "record.json"
+        )
         return ContractError(
-            f"Preparation failed and chain stop persistence is unconfirmed at {result.record_path}. "
+            f"Preparation failed ({error.code}): {error}. Stop persistence is unconfirmed at {path}. "
             "Do not rely on a visible completed record; inspect storage before retrying.",
-            code="chain_finalization_failure",
+            code="chain_finalization_failure"
+            if isinstance(result, ChainResult)
+            else "finalization_failure",
         )
     return ContractError(str(error), code=error.code)

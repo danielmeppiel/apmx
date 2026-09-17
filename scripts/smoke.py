@@ -780,8 +780,8 @@ def _run_case(
         finally:
             Path(env["APMX_CHILD_STOP"]).write_text("fixture cleanup after observation\n", encoding="ascii")
     code, outcome = {
-        "pass": (21, "UNPROVEN"), "reject": (20, "REJECTED"), "halt": (22, "HALTED"),
-        "quiet": (21, "UNPROVEN"), "linger": (22, "HALTED"),
+        "pass": (0, "COMPLETE"), "reject": (20, "REJECTED"), "halt": (22, "HALTED"),
+        "quiet": (0, "COMPLETE"), "linger": (22, "HALTED"),
     }[mode]
     require(
         result.returncode == code,
@@ -792,7 +792,7 @@ def _run_case(
     require(len(records) == 1, f"Expected exactly one completed record: {records}")
     record = json.loads(records[0].read_bytes())
     run = records[0].parent.resolve()
-    require(record["schema"] in {"apm-contract-run/0.1", "apmx-contract-run/0.1"}, "Record schema")
+    require(record["schema"] == "apm-contract-run/0.3", "Record schema")
     require(record["complete"] is True and record["phase"] == "finished", "Incomplete record")
     require(record["profile"] == "native-advisory", "Unexpected assurance profile")
     require(
@@ -1029,7 +1029,7 @@ def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
          "--allow-host-access", "--allow-unproven-inputs"],
         caller, env,
     )
-    require(result.returncode == 21, f"Frozen factory failed: {result.stdout}\n{result.stderr}")
+    require(result.returncode == 0, f"Frozen factory failed: {result.stdout}\n{result.stderr}")
     chains = list((factory / ".apm/chains").glob("*/record.json"))
     require(len(chains) == 1, "Expected exactly one factory record")
     record = json.loads(chains[0].read_bytes())
@@ -1045,10 +1045,14 @@ def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
     require(digest(view / "checks/check.py") == digest(FIXTURES / "check.py"), "Factory checker changed")
     leaves = [json.loads(path.read_bytes()) for path in (factory / ".apm/runs").glob("*/record.json")]
     require(len(leaves) == 2, "Expected two factory leaf records")
-    require({leaf["schema"] for leaf in leaves} == {"apm-contract-run/0.1", "apm-contract-run/0.2"},
-            "Factory did not exercise scalar and multiple-output records")
+    require({leaf["schema"] for leaf in leaves} == {"apm-contract-run/0.3"},
+            "Factory leaf record version")
+    require({isinstance(leaf["artifact"].get("files"), list) for leaf in leaves} == {True, False},
+            "Factory did not exercise scalar and multiple-output inventories")
     for leaf in leaves:
-        require(leaf["result"]["outcome"] == {"name": "UNPROVEN", "exit_code": 21},
+        require(leaf["result"]["outcome"] == {"name": "COMPLETE", "exit_code": 0},
+                "Factory execution did not complete")
+        require(leaf["assurance"]["isolation"] == "unavailable",
                 "Factory changed native assurance semantics")
         require(leaf["producer"]["cleanup_confirmed"] is True, "Factory producer cleanup unconfirmed")
         require(leaf["child_pid"] is None and leaf["active_check"] is None, "Factory left active work")

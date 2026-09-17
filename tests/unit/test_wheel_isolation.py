@@ -103,4 +103,4 @@ runpy.run_module("apmx", run_name="__main__")
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "apmx, version 0.3.2"
+    assert result.stdout.strip() == "apmx, version 0.4.0"

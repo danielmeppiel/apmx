@@ -56,7 +56,7 @@ def test_whole_catalog_multiple_sinks_share_one_predecessor(caller, monkeypatch)
             "--allow-unproven-inputs",
         ],
     )
-    assert result.exit_code == 21 and len(calls) == 3, result.output
+    assert result.exit_code == 0 and len(calls) == 3, result.output
     assert document(caller)["graph"]["targets"] == ["a-target.contract.md", "other.contract.md"]
     assert [p.contract.produces for p, *_ in calls] == ["first.txt", "last.txt", "other.txt"]
     write_contract(caller, "a-target.contract.md", ("seed.txt",), "last.txt")
@@ -110,17 +110,17 @@ def test_selected_directory_is_actual_root_without_global_chdir(caller, monkeypa
             "--allow-unproven-inputs",
         ],
     )
-    assert result.exit_code == 21 and len(calls) == 2, result.output
+    assert result.exit_code == 0 and len(calls) == 2, result.output
     assert Path.cwd() == caller and not (caller / ".apm").exists()
     assert document(root)["caller_root"] == str(root)
     assert all(plan.project_root == root for plan, *_ in calls)
     assert (calls[0][1].root / "seed.txt").read_bytes() == b"FACTORY INPUT"
     aggregate = document(root)
     assert (
-        "Factory record: " + Path(aggregate["result"]["record_path"]).relative_to(caller).as_posix()
+        "Record: " + Path(aggregate["result"]["record_path"]).relative_to(caller).as_posix()
     ) in result.output
     assert (
-        "Artifacts: " + Path(aggregate["artifacts"]["root"]).relative_to(caller).as_posix()
+        "Directory: " + Path(aggregate["artifacts"]["root"]).relative_to(caller).as_posix()
         in result.output
     )
     chdir.assert_not_called()
@@ -166,14 +166,14 @@ def test_interactive_yes_records_both_permissions_before_preparation(caller, mon
     monkeypatch.setattr(ContractLogger, "confirm_factory", confirm)
     monkeypatch.setattr(contract_source, "prepare_imports", prepare)
     result = CliRunner().invoke(main, [str(caller), "--on", "copilot"], input=answer)
-    assert result.exit_code == 21 and len(calls) == 2, result.output
+    assert result.exit_code == 0 and len(calls) == 2, result.output
     assert result.output.count("Run this factory locally? [y/N]") == 1
     for notice in (
         "host files, network and available logins",
         "required checks all passed",
-        "not isolated",
-        "remain UNPROVEN",
-        "may incur charges",
+        "not sandboxed",
+        "Run only contracts you trust",
+        "Model usage may cost money",
     ):
         assert notice in result.output
     assert document(caller)["complete"] is True
@@ -289,7 +289,9 @@ def test_explicit_flags_never_prompt_or_imply_other_permission(
             *(["--allow-unproven-inputs"] if unproven else []),
         ],
     )
-    assert result.exit_code == 21 and len(calls) == count, result.output
+    assert result.exit_code == (0 if host and unproven else 21) and len(calls) == count, (
+        result.output
+    )
     confirm.assert_not_called()
     if host:
         assert_consent(caller, "flag", unproven)
@@ -344,7 +346,7 @@ def test_explicit_leaf_does_not_run_siblings_or_prompt(caller, monkeypatch):
             "--allow-host-access",
         ],
     )
-    assert result.exit_code == 21 and len(calls) == 1, result.output
+    assert result.exit_code == 0 and len(calls) == 1, result.output
     assert not (caller / ".apm/chains").exists()
     leaf = json.loads(next((caller / ".apm/runs").glob("*/record.json")).read_bytes())
     assert leaf["advisory_consent"] == "flag" and leaf["handoff_policy"] is None

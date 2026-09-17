@@ -130,10 +130,10 @@ def test_factory_native_preview_and_four_real_leaf_handoffs(
         ],
         input="y\n",
     )
-    assert result.exit_code == 21 and len(calls) == 4, result.output
+    assert result.exit_code == 0 and len(calls) == 4, result.output
     aggregate = next((caller / ".apm/chains").glob("*/record.json"))
     data = json.loads(aggregate.read_bytes())
-    assert data["complete"] is True and data["result"]["outcome"]["name"] == "UNPROVEN"
+    assert data["complete"] is True and data["result"]["outcome"]["name"] == "COMPLETE"
     assert data["consent_source"] == ("interactive" if interactive else "flag")
     assert Path.cwd() == caller.parent and not (caller.parent / ".apm").exists()
     previous = {}

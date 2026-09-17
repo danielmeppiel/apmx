@@ -12,6 +12,7 @@ from .resolution import ChainPlan, Node
 def describe(plan: ChainPlan) -> dict:
     root = plan.graph.root
     return {
+        "root": str(root),
         "targets": [target.relative_to(root).as_posix() for target in plan.graph.targets],
         "catalog": [
             {"contract": item.path.relative_to(root).as_posix(), "sha256": item.source_digest}
@@ -87,6 +88,7 @@ def run_chain(
     consent_source: str = "flag",
 ) -> ChainResult:
     """Run each inferred node once; only the record authority admits downstream bytes."""
+    logger.execution_context()
     if not allow_advisory:
         raise ContractError(
             "Native execution requires --allow-host-access; use --plan to preview.",
@@ -113,6 +115,7 @@ def run_chain(
     stop_reason = None
     complete = False
     current = 0
+    catalog = tuple(node.plan.contract.path for node in plan.nodes)
     try:
         logger.attach_run(store.run_id, store.directory)
         store.update("execution", nodes=states)
@@ -120,7 +123,9 @@ def run_chain(
             states[current]["state"] = "running"
             store.update("execution", nodes=states)
             executable = _bound(node, admitted)
-            logger.chain_node(current + 1, len(plan.nodes), node.plan.contract.path)
+            logger.chain_node(
+                current + 1, len(plan.nodes), node.plan.contract.path, catalog=catalog
+            )
             leaf_logger = logger.new_leaf(
                 index=current + 1,
                 count=len(plan.nodes),
@@ -156,7 +161,7 @@ def run_chain(
                         allow_unproven=plan.allow_unproven_inputs,
                     )
                 admitted.update((binding.artifact.relative_path, binding) for binding in bindings)
-                states[current]["input_exception"] = result.outcome == Outcome.UNPROVEN
+                states[current]["input_exception"] = records.native_assurance_limited(result)
             else:
                 bindings = (
                     (records.finalized_input(executable, result),)
@@ -175,6 +180,7 @@ def run_chain(
         view = workspace.capture_chain_view(store.directory, tuple(completed), tuple(finalized))
         store.update("artifacts", artifacts=view, nodes=states)
         complete = True
+        outcome = Outcome.COMPLETE
     except (ContractError, OSError, KeyboardInterrupt) as exc:
         outcome = exc.outcome if isinstance(exc, ContractError) else Outcome.HALTED
         stop_reason = (

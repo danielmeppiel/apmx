@@ -17,11 +17,17 @@ pytestmark = [
     pytest.mark.skipif(os.name != "posix", reason="The native leaf supervisor requires POSIX."),
 ]
 
+_SOURCE_ROOT = Path(__file__).resolve().parents[3] / "src"
+
 _ACTOR = r"""
 import os
 import sys
 from dataclasses import replace
 from pathlib import Path
+source_root = Path(sys.argv[1])
+sys.path.insert(0, str(source_root))
+import apmx
+assert Path(apmx.__file__).resolve() == source_root / "apmx" / "__init__.py"
 from apmx.contracts.events import EventEmitter
 from apmx.contracts.models import ContractLimits, ProcessRequest, RunResult
 from apmx.contracts.process import supervise_process
@@ -29,9 +35,9 @@ from apmx.contracts.records import AttemptStore, reduce_outcome
 from apmx.contracts.stream import ContractStreamDecoder
 from apmx.core.contract_logger import ContractLogger
 
-directory = Path(sys.argv[1])
-pause = float(sys.argv[2])
-logger = ContractLogger()
+directory = Path(sys.argv[2])
+pause = float(sys.argv[3])
+logger = ContractLogger(verbose=sys.argv[4] == "verbose")
 logger.attach_run("pty-run", directory)
 events = EventEmitter("pty-run", logger.on_event)
 decoder = ContractStreamDecoder(events)
@@ -46,12 +52,13 @@ events.emit(
 )
 events.emit("phase", name="execution")
 native = '''
-import json, time
+import json, sys, time
 def emit(kind, data):
     print(json.dumps({"type": kind, "data": data}), flush=True)
 emit("assistant.intent", {"intent": "Creating the handoff"})
 emit("assistant.message_start", {"messageId": "first", "phase": "final_answer"})
 emit("assistant.message_delta", {"messageId": "first", "deltaContent": "Useful stream before completion\\n"})
+print("Ready", file=sys.stderr, flush=True)
 time.sleep(PAUSE)
 emit("assistant.message", {"messageId": "first", "phase": "final_answer", "content": "Useful stream before completion\\n"})
 emit("assistant.message", {"messageId": "second", "phase": "final_answer", "content": "Native work ended"})
@@ -94,8 +101,9 @@ def _read(fd: int, timeout: float = 0.1) -> bytes:
 
 @pytest.mark.parametrize("cancel", [False, True])
 @pytest.mark.parametrize("width", [30, 40, 80])
+@pytest.mark.parametrize("verbose", [False, True])
 def test_real_pty_streams_before_completion_and_restores_terminal(
-    tmp_path: Path, monkeypatch, cancel: bool, width: int
+    tmp_path: Path, monkeypatch, cancel: bool, width: int, verbose: bool
 ) -> None:
     import fcntl
     import pty
@@ -103,6 +111,7 @@ def test_real_pty_streams_before_completion_and_restores_terminal(
     import termios
 
     monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.delenv("PYTHONPATH", raising=False)
     monkeypatch.setenv("COLUMNS", str(width))
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, width, 0, 0))
@@ -120,7 +129,15 @@ def test_real_pty_streams_before_completion_and_restores_terminal(
             # Fixed local interpreter and test-owned source, never shell input.
             os.execv(
                 sys.executable,
-                [sys.executable, "-c", _ACTOR, str(tmp_path), "5" if cancel else "1"],
+                [
+                    sys.executable,
+                    "-c",
+                    _ACTOR,
+                    str(_SOURCE_ROOT),
+                    str(tmp_path),
+                    "5" if cancel else "1",
+                    "verbose" if verbose else "default",
+                ],
             )
         finally:
             os._exit(127)
@@ -134,7 +151,7 @@ def test_real_pty_streams_before_completion_and_restores_terminal(
             output.extend(_read(master))
             # PTYs preserve logical lines; terminal emulators wrap visually.
             text = output.decode("ascii", errors="strict").replace("\r", "")
-            if not streamed and "Useful stream before completion" in text:
+            if not streamed and "Copilot stderr > Ready" in text:
                 assert "UNPROVEN" not in text
                 assert "HALTED" not in text
                 assert os.waitpid(pid, os.WNOHANG) == (0, 0)
@@ -157,9 +174,13 @@ def test_real_pty_streams_before_completion_and_restores_terminal(
         text = output.decode("ascii").replace("\r", "")
         assert "\x1b" not in text
         lines = text.splitlines()
-        assert any("long-source-name.contract.md" in line for line in lines)
+        assert "Contract 1/1: long-source-name" in lines
+        assert "  Produces: handoff.json" in lines
+        assert ("long-source-name.contract.md" in text) is verbose
         assert "  Record: record.json" in lines
-        assert "  Copilot > Useful stream before completion" in lines
+        words = " ".join(line.strip() for line in lines)
+        assert "Copilot stderr > Ready" in words
+        assert ("Copilot > Useful stream before completion" in words) is verbose
         if cancel:
             words = " ".join(line.strip() for line in text.splitlines())
             assert (
@@ -173,6 +194,9 @@ def test_real_pty_streams_before_completion_and_restores_terminal(
         record = json.loads((tmp_path / "record.json").read_bytes())
         assert record["complete"]
         assert (tmp_path / "transcript.log").is_file()
+        transcript = (tmp_path / "transcript.log").read_text()
+        assert transcript.count("Useful stream before completion") == 1
+        assert "Copilot stderr (untrusted) > Ready" in transcript
     finally:
         if not exited:
             os.kill(pid, signal.SIGKILL)
@@ -185,8 +209,9 @@ def test_real_closed_stdout_pipe_keeps_draining_and_finishes_record(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.delenv("PYTHONPATH", raising=False)
     child = subprocess.Popen(
-        [sys.executable, "-c", _ACTOR, str(tmp_path), "0.5"],
+        [sys.executable, "-c", _ACTOR, str(_SOURCE_ROOT), str(tmp_path), "0.5", "default"],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -194,7 +219,7 @@ def test_real_closed_stdout_pipe_keeps_draining_and_finishes_record(
     assert child.stdout is not None
     assert child.stderr is not None
     try:
-        assert b"long-source-name.contract.md" in child.stdout.readline()
+        assert b"[i] Execution: local (not sandboxed)" in child.stdout.readline()
         child.stdout.close()
         child.wait(timeout=12)
         errors = child.stderr.read()

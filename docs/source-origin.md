@@ -23,7 +23,7 @@ APMX is an independent project, not an official Microsoft or GitHub release.
 
 - Contract frontend, model, stream, workspace, events, record, process and engine
   modules retain the captured-baseline and native-advisory semantics.
-- The contract-specific human renderer retains public live narration, bounded
+- The contract-specific human renderer retains public narration in verbose output, bounded
   transcripts, source attribution, spacing and hanging indents. Its engine label
   changes from APM to `apmx`; Copilot and independent checks retain their labels.
 - Dependency reference/identity/selection, lock dependency rows, content hashing,
@@ -138,7 +138,7 @@ soft-wrapping paths or credentials before framing. Injected controls are still
 escaped, not silently stripped.
 
 APM lifecycle lines remain visible after the spinner stops and in captured text.
-One blank line separates APM/import preparation from the `Job:` block; jobs
+One blank line separates APM/import preparation from the `Contract` block; jobs
 without APM preparation do not gain a leading blank line.
 Backend diagnostics can contain sensitive data: redaction is best-effort, not
 protection against every unknown secret. Review logs before sharing them. No
@@ -256,7 +256,7 @@ not survive. Missing or changed evidence cannot authorize downstream work.
 Without an explicit local-development exception, the handoff policy requires
 VERIFIED. The current native profile cannot emit that result. For an interactive
 factory invocation without consent flags, APMX describes the local host access,
-checked-output handoffs and UNPROVEN result, then asks for confirmation. The
+checked-output handoffs and local execution limits, then asks for confirmation. The
 default is no. No installation or model work starts before a positive answer.
 This permission is invocation-local and recorded, not remembered globally.
 
@@ -265,8 +265,10 @@ Pipes, CI, previews and invocations with explicit consent flags never prompt.
 Host-access-only keeps the strict handoff policy; it does not grant an additional
 permission. Existing single-contract consent behavior is unchanged.
 
-The local exception never changes a leaf outcome or elevates the factory beyond
-UNPROVEN. Every required check must pass on the retained subject; missing output,
+The local exception never changes a leaf outcome or certifies native isolation.
+Current 0.4.0 source separates COMPLETE/0 execution from unproven native assurance;
+published v0.3.2 and the historical source pin keep their UNPROVEN/21 outcomes.
+See [record-version migration](results.md). Every required check must pass on the retained subject; missing output,
 undecided checks, rejection, changed bytes and failed cleanup still block
 dependent execution.
 
@@ -325,10 +327,14 @@ and resource discovery compatibility.
 
 Runs deliberately remain under the **caller's** `.apm/runs/<fresh-run-id>/`.
 This is local evidence compatibility, distinct from APM's normal user configuration.
-Legacy single-file results retain `apm-contract-run/0.1`. Multiple-artifact
-results use `apm-contract-run/0.2`, whose `artifact.files` inventory and aggregate
-digest describe the whole delivery. Consumers must recognize that schema,
-not silently select its first member. Both retain the `native-advisory` profile.
+Historical single-file results retain `apm-contract-run/0.1`; historical
+multiple-artifact results retain `apm-contract-run/0.2`. Current 0.4.0 source
+uses leaf schema `apm-contract-run/0.3` for both and factory schema
+`apmx-contract-chain/0.2`, with separate execution and assurance fields.
+An `artifact.files` inventory and aggregate digest describe a multi-file delivery.
+Consumers must recognize the schema and whole inventory, not select its first
+member. New handoffs reject historical/unknown record versions without rewriting
+them; see [migration](results.md). The `native-advisory` profile remains unchanged.
 Temporary package preparation uses
 exclusive `apmx-*` system-temporary directories and is removed after use. Run IDs prevent
 overwriting prior evidence. Producer and checker workspaces are separate.

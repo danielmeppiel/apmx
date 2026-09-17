@@ -170,8 +170,8 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
             *(["--verbose"] if verbose else []),
         ],
     )
-    assert result.exit_code == Outcome.UNPROVEN, result.output
-    assert "content: passed" in result.output
+    assert result.exit_code == Outcome.COMPLETE, result.output
+    assert "PASS content" in result.output
     producer.assert_called_once()
     transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
     assert "APM > [>] Resolving" in result.output
@@ -181,7 +181,6 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
             "Installing packages with APM 0.30.0",
             "Packages ready.",
             "Imported style",
-            "Preparing files for Copilot",
             "Running Copilot",
         ]
         assert [output.index(phase) for phase in phases] == sorted(
@@ -190,6 +189,7 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
         assert output.count(phases[0]) == 1
         assert output.count(phases[1]) == 1
     details = (
+        "Preparing files for Copilot",
         "Running: apm install (in a temporary workspace)",
         "APM options: --only apm --target agent-skills --no-trust-bin",
         "Skill: style (SKILL.md)",
@@ -239,8 +239,8 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
             *(["--verbose"] if verbose else []),
         ],
     )
-    assert result.exit_code == Outcome.UNPROVEN, result.output
-    assert "content: passed" in result.output
+    assert result.exit_code == Outcome.COMPLETE, result.output
+    assert "PASS content" in result.output
     producer.assert_called_once()
     assert install.call_count == 1 + int(packaged)
     assert install.call_args.kwargs["scope"] == "consumer"
@@ -313,8 +313,8 @@ def test_local_run_without_imports_does_not_claim_apm_ran(
             *(["--verbose"] if verbose else []),
         ],
     )
-    assert result.exit_code == Outcome.UNPROVEN, result.output
-    assert "content: passed" in result.output
+    assert result.exit_code == Outcome.COMPLETE, result.output
+    assert "PASS content" in result.output
     install.assert_not_called()
     producer.assert_called_once()
     transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
@@ -322,7 +322,7 @@ def test_local_run_without_imports_does_not_claim_apm_ran(
         assert "with APM" not in output
         assert "Running: apm install" not in output
         assert "APM >" not in output
-        assert "Preparing files for Copilot" in output
+        assert ("Preparing files for Copilot" in output) is (output == transcript or verbose)
 
 
 @pytest.mark.parametrize("packaged", [False, True])

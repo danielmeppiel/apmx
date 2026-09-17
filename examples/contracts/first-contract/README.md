@@ -67,20 +67,25 @@ apmx handoff.contract.md --on copilot --allow-host-access
 This preserves your configured Copilot model and may incur usage charges.
 Use `--model MODEL` only if you want to select a model explicitly.
 
-The important result lines from a completed run with passing checks look like
+With current 0.4.0 source, the important result lines from a completed run look like
 this. Output is abbreviated and `<run-id>` is a placeholder:
 
 ```text
-apmx: checking handoff.json
-  [+] handoff: passed
+Contract 1/1: handoff
+  Produces: handoff.json
+  Checks:
+    [+] PASS handoff
 
-[!] apmx: UNPROVEN
-  Contract checks passed; this run was not sandboxed.
-  Output: .apm/runs/<run-id>/artifacts/handoff.json
+[+] Contract COMPLETE
+  Contract: 1/1 completed
+  Check: 1/1 passed
+Evidence:
+  Artifacts: 1 file retained
+  Directory: .apm/runs/<run-id>/artifacts
   Record: .apm/runs/<run-id>/record.json
 ```
 
-**Open the printed Output and Record paths.** They are relative to the folder
+**Open the printed Evidence directory and Record paths.** They are relative to the folder
 where you ran the command. The output is saved under `.apm/runs/`, not copied
 over a `handoff.json` at the top of that folder.
 
@@ -88,9 +93,10 @@ The checker validates the JSON format and confirms there is one entry for
 each source ID. It does not establish that every summary is factually correct.
 Read the summaries and cautions yourself.
 
-**Exit 21 is expected even with passing checks:** native execution is not
-sandboxed, so the result remains UNPROVEN. Missing output or incomplete checks
-can also produce 21. Read the check results, not just the exit code.
+**Published v0.3.2 and the historical source pin still exit 21 even with passing
+checks.** Current 0.4.0 source exits 0 only after complete evidence finalization.
+Neither result means sandboxing. Missing output or incomplete checks still
+produce nonzero results. Read the check results and versioned record.
 See [result meanings](../README.md#read-outcomes-literally) for other outcomes.
 
 ## Read the contract

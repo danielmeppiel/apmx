@@ -10,7 +10,7 @@ from typing import Literal
 class Outcome(IntEnum):
     """Command outcomes; assessment precedence belongs to records.py."""
 
-    VERIFIED = 0
+    COMPLETE = 0
     REJECTED = 20
     UNPROVEN = 21
     HALTED = 22
@@ -308,7 +308,7 @@ class RunResult:
 
 @dataclass(frozen=True)
 class ChainResult:
-    """Persisted aggregate; a completed native chain remains UNPROVEN."""
+    """Persisted operational aggregate, independent of native assurance."""
 
     chain_id: str
     record_path: Path

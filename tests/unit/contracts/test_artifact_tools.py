@@ -286,7 +286,7 @@ def test_readonly_upstream_source_can_be_changed_without_mutating_its_receipt(
     runtime.build_contract_request.side_effect = build
     monkeypatch.setattr(RuntimeFactory, "get_runtime_by_name", lambda *args: runtime)
     result = chain.run_chain(make_plan(caller), logger=ContractLogger(), allow_advisory=True)
-    assert result.complete and result.outcome == Outcome.UNPROVEN
+    assert result.complete and result.outcome == Outcome.COMPLETE
     assert len(calls) == 2
     upstream = result.runs[0].artifact.path
     assert upstream.read_bytes() == b"answer = 1\n"
@@ -470,7 +470,7 @@ def test_real_engine_captures_export_evidence_and_refuses_tampering(caller, monk
         assert not result.complete and result.outcome == Outcome.HALTED
         assert not result.runs[0].checks
         return
-    assert result.complete and result.outcome == Outcome.UNPROVEN
+    assert result.complete and result.outcome == Outcome.COMPLETE
     leaf = result.runs[0]
     assert len(leaf.native_exports) == 1
     bindings = records.finalized_inputs(plan.nodes[0].plan, leaf)

@@ -12,7 +12,7 @@ from click.testing import CliRunner
 from test_chain import caller, producer, two_nodes
 
 from apmx.cli import main
-from apmx.contracts import chain, engine, resolution
+from apmx.contracts import chain, engine, records, resolution
 from apmx.contracts.models import ContractError, ContractLimits
 from apmx.core.contract_logger import ContractLogger
 from apmx.install import apm_backend, contract_source
@@ -117,13 +117,20 @@ def test_real_prepared_package_chain_keeps_original_caller(
     root = package(caller)
     before = {p.name: p.read_bytes() for p in root.iterdir()}
     calls = producer(monkeypatch)
+    completion = records.CompletionBoundary()
     with prepared(root, caller, allow=allow) as plan:
+        source_root = plan.graph.root
+        assert source_root != caller
         result = chain.run_chain(plan, logger=ContractLogger(), allow_advisory=True)
-    assert int(result.outcome) == 21 and len(calls) == (2 if allow else 1)
+        completion.capture(result)
+    assert not source_root.exists()
+    completion.validate(result)
+    assert int(result.outcome) == (0 if allow else 21) and len(calls) == (2 if allow else 1)
     assert (
         json.loads(next((caller / ".apm/chains").glob("*/record.json")).read_bytes())["complete"]
         is allow
     )
+    assert json.loads(result.record_path.read_bytes())["graph"]["root"] == str(source_root)
     for plan, snapshot, directory in calls:
         assert plan.project_root == caller and plan.source.original_root == root
         assert not plan.source.root.exists()
@@ -195,7 +202,7 @@ def test_import_preparation_cleanup_failure_marks_aggregate_incomplete(
         ],
     )
     assert result.exit_code == 22 and len(calls) == 2, result.output
-    assert "apmx factory: UNPROVEN (complete)" not in result.output
+    assert "Factory COMPLETE" not in result.output
     data = json.loads(next((caller / ".apm/chains").glob("*/record.json")).read_bytes())
     if persistence_failure:
         assert "persistence is unconfirmed" in result.output
@@ -269,7 +276,7 @@ def test_upstream_imports_are_prepared_once_before_any_model(
         input="y\n",
     )
     assert len(calls) == (1 if drift else 2), result.output
-    assert result.exit_code == (22 if drift else 21), result.output
+    assert result.exit_code == (22 if drift else 0), result.output
     assert calls[0][0].imported_skills[0].name == "style"
     assert (caller / "apm.yml").read_bytes() == manifest
     assert not (caller / "apm.lock.yaml").exists()
@@ -294,7 +301,7 @@ def test_package_contract_remains_a_single_leaf(caller, monkeypatch):
             "--allow-host-access",
         ],
     )
-    assert result.exit_code == 21 and len(calls) == 1, result.output
+    assert result.exit_code == 0 and len(calls) == 1, result.output
     assert calls[0][0].source.original_root == root
     assert (calls[0][1].root / "seed.txt").read_bytes() == b"seed"
     assert not (caller / ".apm/chains").exists()

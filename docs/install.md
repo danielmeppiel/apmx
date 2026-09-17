@@ -24,6 +24,15 @@ pin below deliberately stays at the earlier proven revision
 source identity. Its factory resources are compatible with the new native
 runner. A version string alone does not identify a build.
 
+**Result-version distinction:** published v0.3.2 and the `be9c5be` pinned
+fallback below still return UNPROVEN/21 for completed native runs. Unreleased
+0.4.0 source instead returns COMPLETE/0 after exact evidence finalization.
+The downloads and historical demo are unchanged. See [migration](results.md).
+To develop this new behavior, use a reviewed 0.4.0 checkout, keep its own
+frozen lock and example files together, and use the source environment/backend
+setup below without switching it to the historical pin. This is not a new
+prebuilt release or a claim of fresh model execution.
+
 ## Install a prebuilt archive
 
 The [public v0.3.2 prerelease](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2)
@@ -527,8 +536,9 @@ activate them; use package `imports` instead. This does not prohibit unrelated
 project skills from existing in your checkout.
 
 Scalar contracts and existing single-contract invocations remain supported.
-Scalar run records retain `apm-contract-run/0.1`; multiple-output inventories
-use `apm-contract-run/0.2`. Consumers of records should inspect the schema
+The published/pinned routes retain scalar `apm-contract-run/0.1` and
+multi-output `apm-contract-run/0.2` records. Current 0.4.0 source uses
+`apm-contract-run/0.3` for both. Consumers of records should inspect the schema
 instead of assuming every delivery is one file. Existing runs, snapshots and
 artifact paths are not migrated or rewritten.
 
@@ -537,7 +547,9 @@ copies rather than overwriting caller source files. A complete local handoff nee
 every declared output, passing
 required checks, intact inventory and consent. For automation, pass both
 `--allow-host-access` and `--allow-unproven-inputs`. Native execution remains
-unsandboxed and **UNPROVEN / exit 21**, even when checks pass. Behave remains an
+unsandboxed. Published/pinned runs remain **UNPROVEN / exit 21**, even when
+checks pass; current 0.4.0 source requires complete validated evidence for
+**COMPLETE / exit 0**. Behave remains an
 optional checker prerequisite for the software-factory example, not an APMX
 requirement.
 
@@ -592,5 +604,9 @@ apmx handoff.contract.md --on copilot --allow-host-access
 
 Only the disposable contract copy is adjusted to use the selected native Python.
 The source checkout stays unchanged. A completed run with passing checks returns
-**21**, not 0; that code also covers incomplete work. Inspect all required
+**21** on the published/pinned routes, or **0 / COMPLETE** on current 0.4.0
+source. On 0.4.0 source, exit 21 is not success; on v0.3.2, inspect the record's
+completeness and exact check/output evidence to distinguish successful work
+from incomplete execution.
+Inspect all required
 outputs/checks and the printed record, not just the exit code.

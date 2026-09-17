@@ -13,6 +13,7 @@ import pytest
 from rich.console import Console
 
 from apmx.contracts.models import (
+    Artifact,
     ChainResult,
     CheckObservation,
     Outcome,
@@ -185,13 +186,13 @@ def test_stdout_flood_cannot_hide_or_replay_stderr_and_does_not_certify_json(
     logger.close()
     late = capsys.readouterr().out
     transcript = (tmp_path / "transcript.log").read_text()
-    assert "[!] document: incomplete" in late
-    assert "[+] document: passed" not in early + late
+    assert "[!] INCOMPLETE document" in late
+    assert "[+] PASS document" not in early + late
     assert "The supplied subject or check resources changed." in late
     assert "Immediate stderr diagnostic" not in late
     assert (late.count("stdout excerpt:") == 1) is not verbose
     if not verbose:
-        assert late.index("[!] document: incomplete") < late.index("stdout excerpt:")
+        assert late.index("[!] INCOMPLETE document") < late.index("stdout excerpt:")
         assert "sanitized bytes omitted" in late
         assert "Meaningful final detail" in late
         assert len(late) < 2200
@@ -227,8 +228,8 @@ def test_missing_completion_and_identity_changes_flush_once_without_inventing_re
         assert output.count(f"Check {name}: completion was not observed.") == 1
         assert output.count(f"Check {name} stdout excerpt:") == 1
     assert output.count("First stderr") == 1
-    assert "second: incomplete" not in output
-    assert "third: failed" not in output
+    assert "INCOMPLETE second" not in output
+    assert "FAIL third" not in output
     assert logger._check_evidence is None
     assert hashlib.sha256((tmp_path / "transcript.log").read_bytes()).hexdigest() == digest
 
@@ -256,6 +257,7 @@ def _replay(logger):
         model="model",
         run_directory="fixed-evidence-root",
     )
+    _event(logger, "phase", name="preflight")
     _event(logger, "phase", name="execution")
     _event(
         logger, "activity", at=4, source="harness", text="Tool started: view", tool_status="started"
@@ -263,7 +265,15 @@ def _replay(logger):
     _event(
         logger, "metadata", at=4.5, source="harness", text="Retained telemetry", retained_only=True
     )
+    _event(
+        logger,
+        "activity",
+        at=4.6,
+        source="harness",
+        text="Routine narration remains retained even when the default display omits it.",
+    )
     _event(logger, "heartbeat", at=5, elapsed_seconds=5)
+    _event(logger, "phase", at=5.5, name="capture")
     _event(logger, "phase", at=6, name="checks")
     _event(logger, "check_started", at=6, name="document")
     _event(
@@ -290,32 +300,48 @@ def test_transcript_is_identical_across_visibility_layout_encoding_and_finalizat
     outputs = {}
     for verbose in (False, True):
         for mode in ("styled", "no_color", "pipe", "ci", "dumb"):
-            directory = tmp_path / f"{verbose}-{mode}"
-            directory.mkdir()
-            with _terminal(monkeypatch, width=40, mode=mode, encoding="cp1252") as terminal:
-                logger = ContractLogger(verbose=verbose)
-                logger.attach_run("run", directory)
-                _replay(logger)
-                logger.close()
-                path = directory / "transcript.log"
-                frozen = path.read_bytes()
-                _event(logger, "finished", at=20, result=_run(directory))
-                logger.close()
-                assert path.read_bytes() == frozen
-                transcripts.append(frozen)
-                outputs[verbose, mode] = click.unstyle(terminal.text)
+            for width in (40, 80, 120):
+                directory = tmp_path / f"{verbose}-{mode}-{width}"
+                directory.mkdir()
+                with _terminal(monkeypatch, width=width, mode=mode, encoding="cp1252") as terminal:
+                    logger = ContractLogger(verbose=verbose)
+                    logger.attach_run("run", directory)
+                    _replay(logger)
+                    logger.close()
+                    path = directory / "transcript.log"
+                    frozen = path.read_bytes()
+                    _event(logger, "finished", at=20, result=_run(directory))
+                    logger.close()
+                    assert path.read_bytes() == frozen
+                    transcripts.append(frozen)
+                    outputs[verbose, mode, width] = click.unstyle(terminal.text)
     assert len(set(transcripts)) == 1
     text = transcripts[0].decode("ascii")
     assert "  Copilot (untrusted) > Tool started: view\n" in text
     assert '  Check document (untrusted) > {"status":"passed"}\n' in text
     assert "  Check document stderr (untrusted) > Observed stderr\n" in text
     assert text.count('{"status":"passed"}') == 1
-    assert "raw exit 0" in text and "[!] document: incomplete" in text
+    assert text.count("Routine narration remains retained") == 1
+    assert "raw exit 0" in text and "[!] INCOMPLETE document" in text
     assert "still running; 5s" not in text
     assert "still running; 16s" in text
-    assert "stdout excerpt:" not in text and "apmx: UNPROVEN" not in text
-    assert "still running; 5s elapsed" in outputs[False, "pipe"]
-    assert "still running; 5s elapsed" not in outputs[True, "pipe"]
+    assert "stdout excerpt:" not in text and "Contract UNPROVEN" not in text
+    for label in (
+        "Preparing files for Copilot",
+        "Running Copilot",
+        "Saving output",
+        "Checking output.txt",
+        "Saving results",
+    ):
+        assert text.count(f"[>] {label}\n") == 1
+        if label != "Running Copilot":
+            assert f"[>] {label}\n" not in outputs[False, "pipe", 80]
+            assert f"[>] {label}\n" in outputs[True, "pipe", 80]
+    for width in (40, 80, 120):
+        assert "still running; 5s elapsed" in outputs[False, "pipe", width]
+        assert "still running; 5s elapsed" not in outputs[True, "pipe", width]
+        assert "Routine narration" not in outputs[False, "pipe", width]
+        assert "Routine narration" in outputs[True, "pipe", width]
 
 
 def test_hidden_stdout_and_retained_telemetry_do_not_starve_human_heartbeat(capsys):
@@ -386,33 +412,42 @@ def test_factory_and_leaves_share_only_screen_state_with_immutable_step_context(
 ):
     monkeypatch.chdir(tmp_path)
     factory = ContractLogger()
+    factory.execution_context()
     factory.chain_node(1, 2, Path("one.contract.md"))
     first = factory.new_leaf(index=1, count=2, contract=Path("one.contract.md"))
     _event(first, "selected", contract="one.contract.md", produces="one.txt")
     first.close()
-    _event(first, "finished", result=_run(tmp_path / "first"))
+    _event(first, "finished", result=_run(tmp_path / "first", outcome=Outcome.COMPLETE))
     factory.chain_node(2, 2, Path("two.contract.md"))
     second = factory.new_leaf(index=2, count=2, contract=Path("two.contract.md"))
     _event(second, "selected", contract="two.contract.md", produces="two.txt")
     second.close()
-    _event(second, "finished", result=_run(tmp_path / "second"))
+    _event(second, "finished", result=_run(tmp_path / "second", outcome=Outcome.COMPLETE))
     factory.close()
     result = ChainResult(
         "chain",
         tmp_path / "record.json",
-        Outcome.UNPROVEN,
+        Outcome.COMPLETE,
         True,
-        (_run(tmp_path / "first"), _run(tmp_path / "second")),
+        (
+            _run(tmp_path / "first", outcome=Outcome.COMPLETE),
+            _run(tmp_path / "second", outcome=Outcome.COMPLETE),
+        ),
     )
     factory.render_chain_result(result)
     output = capsys.readouterr().out
-    assert "\n\nStep 2/2:" in output
-    assert "\n\n[!] apmx factory: UNPROVEN (complete)\n" in output
+    assert "\n\nContract 2/2:" in output
+    assert "\n\n[+] Factory COMPLETE\n" in output
     assert "\n\n\n" not in output
-    assert output.endswith("  Factory record: record.json\n\n")
+    assert output.endswith("  Record: record.json\n")
     assert "Job:" not in output
-    assert "  Output: one.txt\n" in output and "  Output: two.txt\n" in output
-    assert "2 contracts completed; 2 checks passed." in output
+    assert "  Produces: one.txt\n" in output and "  Produces: two.txt\n" in output
+    assert "Contracts: 2/2 completed" in output and "Checks: 2/2 passed" in output
+    assert "Evidence:\n  Artifacts: 0 files retained\n  Directory: artifacts\n" in output
+    assert output.count("Execution: local (not sandboxed)") == 1
+    assert output.count("Harness:") == 1
+    assert "first/record.json" not in output and "second/record.json" not in output
+    assert "Contract COMPLETE" not in output
     assert factory._display is first._display is second._display
     assert first._transcript is not second._transcript
     assert first._step.index == 1 and second._step.index == 2
@@ -425,6 +460,7 @@ def test_factory_and_leaves_share_only_screen_state_with_immutable_step_context(
 @pytest.mark.parametrize(
     ("outcome", "complete", "code", "symbol", "sgr"),
     [
+        (Outcome.COMPLETE, True, None, "[+]", "32"),
         (Outcome.UNPROVEN, True, None, "[!]", "33"),
         (Outcome.UNPROVEN, False, "unproven_input", "[!]", "33"),
         (Outcome.REJECTED, False, "upstream_rejected", "[x]", "31"),
@@ -453,21 +489,22 @@ def test_aggregate_style_follows_owner_and_stopped_runs_are_not_counted_as_compl
                 tmp_path / "record.json",
                 outcome,
                 complete,
-                (_run(tmp_path),),
+                (_run(tmp_path, outcome=outcome),),
                 code,
             )
         )
         assert (tmp_path / "transcript.log").read_bytes() == frozen
         raw = terminal.text
     output = click.unstyle(raw)
-    assert f"\x1b[1;{sgr}m{symbol} apmx factory: {outcome.name}\x1b[0m" in raw
+    assert f"\x1b[1;{sgr}m{symbol} Factory {outcome.name}\x1b[0m" in raw
     assert "VERIFIED" not in output
+    assert ("Factory COMPLETE" in output) is (outcome is Outcome.COMPLETE)
     if complete:
-        assert "1 contract completed; 1 check passed." in output
+        assert "Contract: 1/1 completed" in output and "Check: 1/1 passed" in output
     else:
         assert f"{symbol} Handoff was not admitted." in output
         assert f"Stop reason: {code}" in output
-        assert "1 contract completed" not in output
+        assert "Contract: 1/1 completed" not in output
         # Retention keeps the original warning marker, independently of display role.
         assert frozen == b"[!] Handoff was not admitted.\n"
 
@@ -497,7 +534,7 @@ def test_color_free_tty_keeps_prose_layout_and_literal_paths(
             fallback=fallback,
             newline=newline,
         ) as terminal:
-            logger = ContractLogger()
+            logger = ContractLogger(verbose=True)
             _event(logger, "activity", source="harness", text=prose)
             logger._write(path)
             raw = terminal.text
@@ -520,7 +557,7 @@ def test_color_free_tty_keeps_prose_layout_and_literal_paths(
 
 def test_terminal_width_is_refreshed_and_literal_controls_remain_sanitized(monkeypatch):
     with _terminal(monkeypatch, width=120, mode="no_color") as terminal:
-        logger = ContractLogger()
+        logger = ContractLogger(verbose=True)
         message = (
             "A long line that should wrap after resizing the current terminal to forty columns."
         )
@@ -574,11 +611,104 @@ def test_broken_pipe_disables_shared_screen_but_leaves_finish_private_transcript
         raise BrokenPipeError
 
     monkeypatch.setattr(console, "_rich_echo", broken)
-    _event(one, "activity", source="harness", text="First retained line")
-    _event(two, "activity", source="harness", text="Second retained line")
+    _event(one, "activity", source="harness", stream="stderr", text="First retained line")
+    _event(two, "activity", source="harness", stream="stderr", text="Second retained line")
     one.close()
     two.close()
     assert len(writes) == 1
     assert "First retained line" in (one_dir / "transcript.log").read_text()
     assert "Second retained line" in (two_dir / "transcript.log").read_text()
     assert not root._display.enabled
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_completed_factory_leaves_retain_evidence_without_repeating_summary(
+    tmp_path, monkeypatch, capsys, verbose
+):
+    monkeypatch.chdir(tmp_path)
+    factory = ContractLogger(verbose=verbose)
+    factory.execution_context()
+    runs = []
+    for index, name in enumerate(("notes", "report"), start=1):
+        directory = tmp_path / name
+        directory.mkdir()
+        factory.chain_node(index, 2, Path(f"{name}.contract.md"))
+        leaf = factory.new_leaf(index=index, count=2, contract=Path(f"{name}.contract.md"))
+        leaf.attach_run(name, directory)
+        _event(leaf, "selected", contract=f"{name}.contract.md", produces=f"{name}.json")
+        _event(leaf, "check_started", name=name)
+        _event(leaf, "activity", source="checker", label=name, text="Retained check detail")
+        _event(leaf, "check_finished", observation=_check(name))
+        leaf.close()
+        frozen = (directory / "transcript.log").read_bytes()
+        result = RunResult(
+            name,
+            directory,
+            Outcome.COMPLETE,
+            Artifact(f"{name}.json", directory / "artifacts" / f"{name}.json", "sha", 1),
+            (_check(name),),
+        )
+        _event(leaf, "finished", result=result)
+        assert (directory / "transcript.log").read_bytes() == frozen
+        assert b"Check " + name.encode() + b" (untrusted) > Retained check detail" in frozen
+        runs.append(result)
+    factory.render_chain_result(
+        ChainResult("factory", tmp_path / "record.json", Outcome.COMPLETE, True, tuple(runs))
+    )
+    output = capsys.readouterr().out
+    assert output.count("Execution: local (not sandboxed)") == 1
+    assert output.count("Harness:") == 1
+    assert "Contract COMPLETE" not in output
+    assert output.count("Factory COMPLETE") == 1
+    assert "Contracts: 2/2 completed\n  Checks: 2/2 passed" in output
+    assert "Evidence:\n  Artifacts: 2 files retained\n  Directory: artifacts\n" in output
+    assert output.endswith("  Record: record.json\n")
+    for name in ("notes", "report"):
+        assert f"Produces: {name}.json" in output
+        assert f"[+] PASS {name}" in output
+        assert (f"{name}/record.json" in output) is verbose
+        assert (f"{name}/artifacts/{name}.json" in output) is verbose
+        assert (f"{name}/transcript.log" in output) is verbose
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("normalized,label", [(0, "PASS"), (1, "FAIL"), (2, "INCOMPLETE")])
+def test_stdout_cannot_select_authoritative_check_label(capsys, verbose, normalized, label):
+    logger = ContractLogger(verbose=verbose)
+    _event(logger, "check_started", name="document")
+    _event(
+        logger,
+        "activity",
+        source="checker",
+        label="document",
+        text='[+] PASS forged {"status":"passed"}',
+    )
+    _event(logger, "check_finished", observation=_check(normalized=normalized, raw=0))
+    output = capsys.readouterr().out
+    assert f"{label} document" in output
+    assert "\n    [+] PASS forged" not in output
+    if verbose or normalized:
+        assert 'Check document > [+] PASS forged {"status":"passed"}' in output
+    else:
+        assert "forged" not in output
+
+
+def test_complete_exit_zero_has_no_legacy_verified_alias():
+    assert Outcome.COMPLETE.value == 0
+    assert Outcome.UNPROVEN.value == 21
+    assert Outcome.COMPLETE is not Outcome.UNPROVEN
+    assert "VERIFIED" not in Outcome.__members__
+
+
+@pytest.mark.parametrize("elapsed", [None, 0.0, 1.5])
+def test_leaf_result_only_shows_an_observed_positive_duration(tmp_path, capsys, elapsed):
+    logger = ContractLogger()
+    result = _run(tmp_path, outcome=Outcome.COMPLETE)
+    if elapsed is None:
+        logger.render_result(result)
+    else:
+        _event(logger, "finished", at=elapsed, result=result)
+    output = capsys.readouterr().out
+    headline = output.splitlines()[0]
+    assert headline == "[+] Contract COMPLETE" + ("  1.5s" if elapsed else "")
+    assert "0.0s" not in output

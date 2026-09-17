@@ -67,7 +67,8 @@ def test_mixed_binary_subset_fanout_uses_shared_producer_once(caller, monkeypatc
     result = chain.run_chain(
         make_plan(caller, allow=allow), logger=ContractLogger(), allow_advisory=True
     )
-    assert result.outcome == Outcome.UNPROVEN and result.complete is allow
+    assert result.outcome == (Outcome.COMPLETE if allow else Outcome.UNPROVEN)
+    assert result.complete is allow
     assert len(calls) == (3 if allow else 1)
     delivery = result.runs[0].artifact
     assert isinstance(delivery, ArtifactSet)
@@ -75,7 +76,7 @@ def test_mixed_binary_subset_fanout_uses_shared_producer_once(caller, monkeypatc
     assert delivery.sha256 == workspace.artifact_inventory_digest(delivery.files)
     assert all(check.subject_digest == delivery.sha256 for check in result.runs[0].checks)
     document = json.loads((result.runs[0].run_directory / "record.json").read_bytes())
-    assert document["schema"] == "apm-contract-run/0.2"
+    assert document["schema"] == "apm-contract-run/0.3"
     assert set(document["artifact"]) == {"files", "sha256"}
     assert all((caller / name).read_bytes() == b"stale caller bytes" for name in names)
     if allow:
@@ -100,7 +101,7 @@ def test_scalar_and_single_member_list_have_explicit_record_shapes(caller, monke
     scalar = isinstance(output, str)
     assert isinstance(result.runs[0].artifact, Artifact if scalar else ArtifactSet)
     record = json.loads((result.runs[0].run_directory / "record.json").read_bytes())
-    assert record["schema"] == ("apm-contract-run/0.1" if scalar else "apm-contract-run/0.2")
+    assert record["schema"] == "apm-contract-run/0.3"
     assert "native_exports" not in record["result"]
     assert ("output_files" not in record["limits"]) is scalar
     assert artifact_files(result.runs[0].artifact)[0].path.read_bytes() == b"\xff\0\r\n"

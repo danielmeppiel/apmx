@@ -87,9 +87,9 @@ build; see [release versus current source](../../docs/install.md#choose-release-
 
 | Outcome | Meaning in this slice |
 | --- | --- |
-| VERIFIED / 0 | Reserved; the current native runner cannot establish this result. |
+| COMPLETE / 0 | Current 0.4.0 source: all declared work/checks and retained evidence completed and finalized; not isolation or trust. |
 | REJECTED / 20 | A check returned a failed condition, even if another check was incomplete. |
-| UNPROVEN / 21 | Includes passing checks: this native run was not sandboxed. Also covers missing output, incomplete checks, or unavailable consent. |
+| UNPROVEN / 21 | Missing output, incomplete checks, unavailable consent/policy, or strict native handoff refusal. |
 | HALTED / 22 | Execution, cancellation, watchdog, capture or recording stopped the invocation. |
 
 Raw check exits are retained: 0 passes, 1 fails, 2 is incomplete; unknown exits,
@@ -97,8 +97,10 @@ missing tools and signals are incomplete. No output does not mean `no_change`.
 Every check gets a fresh baseline and the captured artifacts. A patch-aware
 check must apply its patch and test the resulting code in the same invocation;
 changes made by one check are not shared with the next.
-Expect exit `21` for the completed examples with passing checks. The output
-and record are still saved; the host-isolation limit is not a check failure.
+Current source returns COMPLETE/0 only for complete validated evidence.
+Published v0.3.2 and the pinned historical source/demo still return `21`
+even with passing checks. Do not reinterpret their recorded outcomes.
+See [result versions and migration](../../docs/results.md).
 
 The profile requires positively established no-policy
 projects. Governed/unresolved-policy projects, command

@@ -126,6 +126,7 @@ def run_contract(
     allow_advisory: bool = False,
     consent_source: str = "flag",
     allow_unproven_inputs: bool | None = None,
+    announce_result: bool = True,
 ) -> RunResult:
     """Admit, execute, capture, assess and atomically record one fresh run."""
     if plan.deferred_inputs:
@@ -213,6 +214,7 @@ def run_contract(
             producer=producer,
             observed_models=observed_models,
             native_reported_exit_code=decoder.native_exit_code,
+            native_completion_observed=decoder.completion_seen,
         )
         stop_reason = _producer_failure(producer)
         if decoder.native_exit_code not in (None, 0):
@@ -291,6 +293,7 @@ def run_contract(
         store.update("record", transcript_retention=logger.transcript_metadata)
     except (OSError, KeyboardInterrupt) as exc:
         store.fail_finalization(result, exc)
-    store.finish(result)
-    events.emit("finished", result=result)
+    result = store.finalize(plan, result)
+    if announce_result:
+        events.emit("finished", result=result)
     return result

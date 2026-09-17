@@ -110,6 +110,22 @@ def inspect_draft(
 
 
 def release_notes(version: str, commit: str) -> str:
+    current_results = tuple(map(int, version.split("."))) >= (0, 4, 0)
+    record_notes = (
+        "Leaf records use `apm-contract-run/0.3` and factory records use "
+        "`apmx-contract-chain/0.2`, separating execution from native assurance. "
+        "Historical records are not rewritten and cannot authorize new handoffs.\n\n"
+        if current_results else
+        "Scalar contracts and single-contract invocations remain supported. Scalar run "
+        "records retain `apm-contract-run/0.1`; multiple-output inventories use "
+        "`apm-contract-run/0.2`. Existing saved runs are not rewritten.\n\n"
+    )
+    execution_notes = (
+        "Complete validated and finalized execution yields COMPLETE (0), not isolation "
+        "or certification. Incomplete work remains UNPROVEN (21); rejection 20; halt 22."
+        if current_results else
+        "Passing native checks yield UNPROVEN (21), rejection 20, operational halt 22."
+    )
     patch_notes = (
         "## Changes in v0.3.1\n\n"
         "Correct the factory smoke fixture's native path comparison on Windows, "
@@ -158,20 +174,18 @@ def release_notes(version: str, commit: str) -> str:
         "Do not patch generated `apm_modules` copies or edit lock digests by hand. "
         f"[Migration guide](https://github.com/{REPOSITORY}/blob/v{version}/"
         "docs/install.md#migrating-from-v020-to-v030).\n\n"
-        "Scalar contracts and single-contract invocations remain supported. Scalar run "
-        "records retain `apm-contract-run/0.1`; multiple-output inventories use "
-        "`apm-contract-run/0.2`. Existing saved runs are not rewritten.\n\n"
+        f"{record_notes}"
         "Factory execution asks for consent interactively. Automation must pass "
         "`--allow-host-access --allow-unproven-inputs`; these flags do not admit failed "
-        "or incomplete handoffs. Native execution is not a sandbox, and complete passing "
-        "checks still yield **UNPROVEN (21)**, not VERIFIED.\n\n"
+        "or incomplete handoffs. Native execution is not a sandbox. "
+        f"{execution_notes}\n\n"
         "## Installation and assurance limits\n\n"
         "Five native onedir archives include the runtime, LICENSE, NOTICE, release metadata, "
         "and the pinned official APM 0.30.0 backend with its complete runtime under libexec/apm. "
         "Extract the complete archive; do not move the executable out of its runtime directory.\n\n"
         "Git, Copilot CLI, and contract-declared checker tools are external prerequisites. "
         "The CI actor is an explicitly hermetic Copilot JSONL protocol fixture, NOT live inference. "
-        "Passing native checks yield UNPROVEN (21), rejection 20, operational halt 22.\n\n"
+        f"{execution_notes}\n\n"
         "No trusted publisher signature or Apple notarization is provided. macOS may carry "
         "PyInstaller's local ad-hoc signature; it is not publisher identity. "
         "Checksums prove byte integrity, not publisher authentication. "

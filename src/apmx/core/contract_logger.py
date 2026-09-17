@@ -11,7 +11,6 @@ from enum import Enum, IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
-from apmx.contracts import records
 from apmx.contracts.events import (
     HEARTBEAT_SECONDS,
     ApmInstallEvent,
@@ -229,8 +228,8 @@ class _ContractDisplay:
     _roles: ClassVar[dict[_Role, _RoleStyle]] = {
         _Role.START: _RoleStyle("running", "cyan"),
         _Role.INFO: _RoleStyle("", "default"),
-        _Role.NOTICE: _RoleStyle("info", "blue"),
-        _Role.HEADING: _RoleStyle("", "default"),
+        _Role.NOTICE: _RoleStyle("info", "cyan"),
+        _Role.HEADING: _RoleStyle("", "cyan"),
         _Role.WARNING: _RoleStyle("warning", "yellow"),
         _Role.ERROR: _RoleStyle("error", "red"),
         _Role.SUCCESS: _RoleStyle("check", "green"),
@@ -238,7 +237,7 @@ class _ContractDisplay:
         _Role.EXTERNAL: _RoleStyle("", "dim cyan"),
     }
     _outcomes: ClassVar[dict[Outcome, _Role]] = {
-        Outcome.VERIFIED: _Role.SUCCESS,
+        Outcome.COMPLETE: _Role.SUCCESS,
         Outcome.UNPROVEN: _Role.WARNING,
         Outcome.REJECTED: _Role.ERROR,
         Outcome.HALTED: _Role.ERROR,
@@ -249,6 +248,9 @@ class _ContractDisplay:
         self.status: Status | None = None
         self.revision = 0
         self._boundary = _Boundary.EMPTY
+        self.disclosure_shown = False
+        self.identity_shown = False
+        self.models_shown: set[str] = set()
 
     @classmethod
     def outcome_role(cls, outcome: Outcome) -> _Role:
@@ -796,6 +798,7 @@ class ContractLogger:
         return Path(source).name if Path(identity).is_absolute() else identity
 
     def _selected(self, event: RunEvent) -> None:
+        self.execution_context()
         caller = self._field(event, "caller_root", "")
         if caller:
             self._caller_root = Path(caller)
@@ -807,29 +810,27 @@ class ContractLogger:
         model = self._field(event, "model", "default model")
         if self._preparation_notice_shown:
             self._retained_gap()
-        self._write(
-            f"Job: {identity} -> {self._produces}",
-            severity="heading",
-            indent=0,
-            display=(
-                _DisplayLine(safe_text(f"Output: {self._produces}"))
-                if self._step is not None
-                else None
-            ),
-        )
-        self._write(f"Copilot / {model}", severity="detail")
-        self._write("Running on your machine (not sandboxed).")
+        if self._step is None:
+            self._write(
+                f"Contract 1/1: {identity.removesuffix('.contract.md')}",
+                severity="heading",
+                indent=0,
+            )
+        self._write(f"Produces: {self._produces}")
+        if not self._display.identity_shown:
+            self._display.identity_shown = True
+            self._write(f"Harness: {self._field(event, 'harness', 'copilot')} / {model}")
+            if model != "default model":
+                self._display.models_shown.add(model)
         self._write(f"Source: {self._path(source)}", severity="detail", detail=True)
         if package:
             self._write(f"Package: {package}", severity="detail", detail=True)
-        self._write(f"Requested model: {model}", severity="detail", detail=True)
         self._write(f"Run: {event.run_id}", severity="detail", detail=True)
         self._write(
             f"Record directory: {self._field(event, 'run_directory')}",
             severity="detail",
             detail=True,
         )
-        self._retained_gap()
 
     def _phase(self, event: RunEvent) -> None:
         phase = self._field(event, "name")
@@ -846,7 +847,12 @@ class ContractLogger:
             "record": "Saving results",
         }.get(phase)
         if message:
-            self.start_activity(message, announce=phase != "checks")
+            self.start_activity(message, announce=False)
+            self._write(
+                message,
+                severity="start",
+                detail=phase != "execution" or self._display.animates(),
+            )
 
     def _attribution(self, event: RunEvent) -> str:
         source = {"harness": "Copilot", "checker": "Check"}.get(event.source, event.source)
@@ -902,7 +908,7 @@ class ContractLogger:
             attribution=source,
             accent=text if tool_status == "failed" else "",
             display_message=displayed,
-            detail=not stderr and (checker_stdout or bool(tool_status and tool_status != "failed")),
+            detail=not stderr and tool_status != "failed",
             layout=_Layout.PROSE if not tool_status else _Layout.LITERAL,
             display=(
                 _DisplayLine(
@@ -917,12 +923,16 @@ class ContractLogger:
         )
 
     def _metadata(self, event: RunEvent) -> None:
+        model = event.data.get("model")
+        already_shown = isinstance(model, str) and model in self._display.models_shown
+        if isinstance(model, str):
+            self._display.models_shown.add(model)
         self._write(
             self._field(event, "text", ""),
             severity="detail",
-            detail=True,
+            detail=not isinstance(model, str),
             attribution=self._attribution(event),
-            retained_only=event.data.get("retained_only") is True,
+            retained_only=event.data.get("retained_only") is True or already_shown,
         )
 
     def _diagnostic(self, event: RunEvent) -> None:
@@ -981,8 +991,7 @@ class ContractLogger:
     def _checks_heading(self) -> None:
         if not self._checks_heading_shown:
             self._checks_heading_shown = True
-            self._retained_gap()
-            self._write(f"apmx: checking {self._produces}", severity="heading", indent=0)
+            self._write("Checks:", severity="heading")
 
     def _check_finished(self, event: RunEvent) -> None:
         observation = event.data.get("observation")
@@ -991,13 +1000,13 @@ class ContractLogger:
         if self._check_evidence is not None and self._check_evidence.name != observation.name:
             self._flush_check_evidence(completion_observed=False)
         status, severity = {
-            0: ("passed", "success"),
-            1: ("failed", "error"),
-        }.get(observation.normalized, ("incomplete", "warning"))
+            0: ("PASS", "success"),
+            1: ("FAIL", "error"),
+        }.get(observation.normalized, ("INCOMPLETE", "warning"))
         raw = observation.process.returncode
         raw_text = "no exit status" if raw is None else f"raw exit {raw}"
-        summary = f"{observation.name}: {status}"
-        self._write(summary, severity=severity, accent=summary)
+        summary = f"{status} {observation.name}"
+        self._write(summary, severity=severity, accent=summary, indent=4)
         self._write(f"Check {observation.name}: {raw_text}", severity="detail", detail=True)
         if observation.normalized != 0:
             if observation.normalized == 2:
@@ -1110,28 +1119,45 @@ class ContractLogger:
         self._finished = True
         self.stop_activity()
         self._flush_check_evidence(completion_observed=False)
-        self._retained_gap()
-        headline = f"apmx: {result.outcome.name}"
-        self._write(
-            f"{headline}  {event.elapsed_seconds:.1f}s",
-            severity=self._display.outcome_role(result.outcome),
-            accent=headline,
-            indent=0,
-            dim_remainder=True,
-        )
-        self._result_explanation(result)
-        if result.artifact is not None:
-            for item in artifact_files(result.artifact):
-                self._write(f"Output: {self._path(item.path)}")
+        leaf_detail = self._step is not None and result.outcome is Outcome.COMPLETE
+        if not leaf_detail:
+            self._retained_gap()
+        headline = f"Contract {result.outcome.name}"
+        timing = f"  {event.elapsed_seconds:.1f}s" if event.elapsed_seconds > 0 else ""
+        if not leaf_detail:
+            self._write(
+                headline + timing,
+                severity=self._display.outcome_role(result.outcome),
+                accent=headline,
+                indent=0,
+                dim_remainder=True,
+            )
+            self._result_explanation(result)
+        files = artifact_files(result.artifact)
+        if self._step is None or result.outcome is not Outcome.COMPLETE:
+            if result.outcome is Outcome.COMPLETE:
+                self._completion_counts(1, len(result.checks))
+            self._write("Evidence:", severity="heading", indent=0)
+            self._write(
+                f"Artifacts: {len(files)} {'file' if len(files) == 1 else 'files'} retained"
+            )
+            if files:
+                self._write(f"Directory: {self._path(result.run_directory / 'artifacts')}")
+            self._write(f"Record: {self._path(result.run_directory / 'record.json')}")
         else:
-            self._write("No output was saved.")
-        self._write(f"Record: {self._path(result.run_directory / 'record.json')}")
-        self._write(
-            "Observed execution model: "
-            + (", ".join(result.observed_models) if result.observed_models else "unknown"),
-            severity="detail",
-            detail=True,
-        )
+            self._write(
+                f"Record: {self._path(result.run_directory / 'record.json')}",
+                severity="detail",
+                detail=True,
+            )
+        for item in files:
+            self._write(f"Artifact: {self._path(item.path)}", severity="detail", detail=True)
+        for model in result.observed_models:
+            if model not in self._display.models_shown:
+                self._write(f"Observed execution model: {model}", severity="detail", detail=True)
+                self._display.models_shown.add(model)
+        if not result.observed_models:
+            self._write("Observed execution model: unknown", severity="detail", detail=True)
         if result.stop_reason:
             self._write(f"Stop reason: {result.stop_reason}", severity="detail", detail=True)
         self._write(
@@ -1147,15 +1173,11 @@ class ContractLogger:
 
     def _result_explanation(self, result: RunResult) -> None:
         """Explain the recorded outcome; never promote or downgrade it here."""
-        if result.outcome == Outcome.VERIFIED:
-            self._write("Contract checks passed.")
-        elif result.outcome == Outcome.REJECTED:
+        if result.outcome == Outcome.REJECTED:
             self._write("Contract checks found a problem.")
             self._write("Review the failed checks and saved output before retrying.")
         elif result.outcome == Outcome.UNPROVEN:
-            if records.native_assurance_limited(result):
-                self._write("Contract checks passed; this run was not sandboxed.")
-            elif result.artifact is None:
+            if result.artifact is None:
                 self._write("The declared output could not be checked.")
                 self._write(
                     "Review the contract output path and Copilot diagnostics before retrying."
@@ -1163,7 +1185,7 @@ class ContractLogger:
             else:
                 self._write("Checks could not establish a result.")
                 self._write("Review incomplete checks and their prerequisites before retrying.")
-        else:
+        elif result.outcome != Outcome.COMPLETE:
             reason, action = {
                 "cancelled": ("Run interrupted.", "Review any saved output before rerunning."),
                 "producer_failed": (
@@ -1231,7 +1253,7 @@ class ContractLogger:
             f"Time limits: run {plan.limits.attempt_seconds:g}s; "
             f"each check {plan.limits.check_seconds:g}s"
         )
-        self._write("Even with passing checks, a run returns UNPROVEN because it is not sandboxed.")
+        self._write("Complete execution returns COMPLETE (0); this does not certify isolation.")
         self._write("To run, use apmx with --allow-host-access and without --plan.")
         self._write(f"Source: {self._path(source)}", severity="detail", detail=True)
         if plan.source and plan.source.package_ref:
@@ -1319,11 +1341,9 @@ class ContractLogger:
 
     def confirm_factory(self) -> bool:
         """Ask once, default NO, without conflating EOF with interruption."""
-        self._write("Copilot and checks can use host files, network and available logins.")
+        self.execution_context()
         self._write("Package dependencies may be installed before execution.")
         self._write("Only outputs whose required checks all passed can move to another step.")
-        self._write("Local execution is not isolated; results remain UNPROVEN.")
-        self._write("Model calls may incur charges under your configured account.")
         self._write("Run this factory locally? [y/N]", indent=0)
         if not self._display.enabled:
             return False
@@ -1333,18 +1353,41 @@ class ContractLogger:
             return False
         return answer.endswith("\n") and answer.strip().casefold() in {"y", "yes"}
 
-    def chain_node(self, index: int, count: int, contract: Path) -> None:
+    def chain_node(
+        self, index: int, count: int, contract: Path, *, catalog: tuple[Path, ...] = ()
+    ) -> None:
         self._display.gap()
-        self._write(f"Step {index}/{count}: {self._path(contract)}", severity="heading", indent=0)
+        if (
+            catalog
+            and sum(path.name.casefold() == contract.name.casefold() for path in catalog) == 1
+        ):
+            identity = contract.name
+        else:
+            try:
+                identity = contract.relative_to(self._caller_root).as_posix()
+            except ValueError:
+                identity = self._path(contract)
+        identity = identity.removesuffix(".contract.md")
+        self._write(f"Contract {index}/{count}: {identity}", severity="heading", indent=0)
+
+    def execution_context(self) -> None:
+        """Disclose the invocation's local execution profile before consent or action."""
+        if self._display.disclosure_shown:
+            return
+        self._display.disclosure_shown = True
+        self._write("Execution: local (not sandboxed)", severity="notice", indent=0)
+        self._write("Agents and checks can use host files, network and available logins.")
+        self._write("Model usage may cost money. Run only contracts you trust.")
+        self._display.gap()
 
     def render_chain_plan(self, plan: ChainPlan) -> None:
         self._write(f"Factory preview: {len(plan.nodes)} contracts", severity="heading", indent=0)
         self._write(f"{plan.nodes[0].plan.harness} / {plan.nodes[0].plan.model or 'default model'}")
         self._write("Nothing will execute or download. Dependency resolution uses no model calls.")
         policy = (
-            "fully checked local outputs (--allow-unproven-inputs); still UNPROVEN"
+            "fully checked local outputs (--allow-unproven-inputs); assurance remains unproven"
             if plan.allow_unproven_inputs
-            else "strict VERIFIED-only; UNPROVEN inputs block"
+            else "strict VERIFIED-only; native outputs block"
         )
         self._write(f"Handoff policy: {policy}")
         terminals = [
@@ -1378,7 +1421,7 @@ class ContractLogger:
             self._write(
                 "For trusted local automation, explicitly add --allow-host-access and "
                 "--allow-unproven-inputs to permit fully checked native handoffs. "
-                "Native results remain UNPROVEN."
+                "COMPLETE does not certify isolation."
             )
 
     def chain_stopped(self, reason: str, *, outcome: Outcome, code: str) -> None:
@@ -1400,9 +1443,9 @@ class ContractLogger:
     def render_chain_result(self, result: ChainResult) -> None:
         self.stop_activity()
         self._display.gap()
-        headline = f"apmx factory: {result.outcome.name}"
+        headline = f"Factory {result.outcome.name}"
         self._write(
-            f"{headline} ({'complete' if result.complete else 'stopped'})",
+            headline,
             severity=self._display.outcome_role(result.outcome),
             accent=headline,
             dim_remainder=True,
@@ -1411,18 +1454,11 @@ class ContractLogger:
         if result.complete:
             completed = len(result.runs)
             passed = sum(check.normalized == 0 for run in result.runs for check in run.checks)
-            self._display.emit(
-                _DisplayLine(
-                    f"{completed} contract{'s' if completed != 1 else ''} completed; "
-                    f"{passed} check{'s' if passed != 1 else ''} passed."
-                )
-            )
-            self._write(
-                "All selected checks completed; no isolation or production certification.",
-                display_message="Local execution was not isolated. No production certification.",
-                layout=_Layout.PROSE,
-            )
-            self._write(f"Artifacts: {self._path(result.record_path.parent / 'artifacts')}")
+            self._completion_counts(completed, passed)
+            self._write("Evidence:", severity="heading", indent=0)
+            count = sum(len(artifact_files(run.artifact)) for run in result.runs)
+            self._write(f"Artifacts: {count} {'file' if count == 1 else 'files'} retained")
+            self._write(f"Directory: {self._path(result.record_path.parent / 'artifacts')}")
         else:
             context = self._chain_stop
             reason = (
@@ -1450,5 +1486,17 @@ class ContractLogger:
                 visibility=_Visibility.VERBOSE,
                 verbose=self.verbose,
             )
-        self._write(f"Factory record: {self._path(result.record_path)}")
-        self._display.gap()
+        self._write(f"Record: {self._path(result.record_path)}")
+
+    def _completion_counts(self, contracts: int, checks: int) -> None:
+        contract_label = "Contract" if contracts == 1 else "Contracts"
+        check_label = "Check" if checks == 1 else "Checks"
+        self._write(f"{contract_label}: {contracts}/{contracts} completed")
+        self._write(f"{check_label}: {checks}/{checks} passed")
+
+    def render_result(self, result: ChainResult | RunResult) -> None:
+        """Render only after command preparation contexts have finalized."""
+        if isinstance(result, ChainResult):
+            self.render_chain_result(result)
+        else:
+            self._result(RunEvent(result.run_id, 0, 0, "finished", "engine", {"result": result}))

@@ -121,7 +121,7 @@ def test_ordered_phases_final_once_and_frozen_transcript(tmp_path: Path, capsys)
     logger.close()
     path = tmp_path / "transcript.log"
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    result = _result(tmp_path, Outcome.VERIFIED, checks=(_check(0, 0),))
+    result = _result(tmp_path, Outcome.COMPLETE, checks=(_check(0, 0),))
     events.emit("finished", result=result)
     events.emit("finished", result=result)
     logger.close()
@@ -129,19 +129,22 @@ def test_ordered_phases_final_once_and_frozen_transcript(tmp_path: Path, capsys)
     positions = [
         output.index(name)
         for name in (
-            "Preparing files for Copilot",
+            "Execution: local (not sandboxed)",
+            "Contract 1/1: hello",
             "Running Copilot",
-            "Saving output",
-            "apmx: checking",
-            "Saving results",
-            "VERIFIED",
+            "Checks:",
+            "Contract COMPLETE",
+            "Evidence:",
         )
     ]
     assert positions == sorted(positions)
-    assert output.count("VERIFIED") == 1
-    assert output.index("Job: hello.contract.md") < output.index("Preparing files for Copilot")
+    assert output.count("Contract COMPLETE") == 1
+    assert "VERIFIED" not in output
+    assert "The run stopped" not in output
+    assert "Contract: 1/1 completed" in output
+    assert "Check: 1/1 passed" in output
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
-    assert b"VERIFIED" not in path.read_bytes()
+    assert b"Contract COMPLETE" not in path.read_bytes()
     assert "Observed execution model" not in output
     assert "Run: run-id" not in output
     assert "Run: run-id" in path.read_text()
@@ -170,18 +173,20 @@ def test_final_outcome_is_authoritative_not_inferred(
     output = capsys.readouterr().out
     assert outcome.name in output
     assert "VERIFIED" not in output
+    assert "Contract COMPLETE" not in output
     assert "[+]" not in output
 
 
 @pytest.mark.parametrize(
     ("raw", "normalized", "text"),
     [
-        (0, 0, "passed"),
-        (1, 1, "failed"),
-        (2, 2, "incomplete"),
-        (127, 2, "incomplete"),
-        (-9, 2, "incomplete"),
-        (None, 2, "incomplete"),
+        (0, 0, "PASS"),
+        (1, 1, "FAIL"),
+        (2, 2, "INCOMPLETE"),
+        (127, 2, "INCOMPLETE"),
+        (-9, 2, "INCOMPLETE"),
+        (None, 2, "INCOMPLETE"),
+        (0, 2, "INCOMPLETE"),
     ],
 )
 def test_empty_stdout_check_status_comes_from_observation(
@@ -190,7 +195,7 @@ def test_empty_stdout_check_status_comes_from_observation(
     emitter = EventEmitter("run", ContractLogger().on_event)
     emitter.emit("check_finished", observation=_check(raw, normalized))
     output = capsys.readouterr().out
-    assert f"criterion: {text}" in output
+    assert f"{text} criterion" in output
     assert ("[+]" in output) is (normalized == 0)
 
 
@@ -198,7 +203,7 @@ def test_empty_stdout_check_status_comes_from_observation(
 def test_stop_request_precedes_observation_and_preserves_provisional_path(
     tmp_path: Path, capsys, confirmed: bool
 ) -> None:
-    logger = ContractLogger()
+    logger = ContractLogger(verbose=True)
     emitter = EventEmitter("run", logger.on_event)
     emitter.emit("stop_requested", reason="cancelled")
     emitter.emit("stop_observed", confirmed=confirmed, reason="cancelled")
@@ -210,7 +215,8 @@ def test_stop_request_precedes_observation_and_preserves_provisional_path(
     output = capsys.readouterr().out
     expected = "Managed process group stopped" if confirmed else "Stop unconfirmed"
     assert output.index("Stop requested") < output.index(expected) < output.index("HALTED")
-    assert "Output:" in output
+    assert "Artifacts: 1 file retained" in output
+    assert "Artifact:" in output
     assert "answer.txt" in output
     assert "cancelled successfully" not in output
 
@@ -293,7 +299,8 @@ def test_transcript_saturation_does_not_hide_lifecycle_or_stderr(tmp_path: Path,
     )
     output = capsys.readouterr().out
     assert "Useful last error" in output
-    assert "Saving results" in output
+    assert "Saving results" not in output
+    assert "Saving results" in (tmp_path / "transcript.log").read_text()
     assert "HALTED" in output
     assert (tmp_path / "transcript.log").stat().st_size <= 1024
 
@@ -364,8 +371,9 @@ def test_rich_honors_machine_output_routing(capsys) -> None:
 
 @pytest.mark.parametrize("verbose", [False, True])
 def test_plan_is_nonexecuting_no_prompt_or_model_claim(
-    capsys, tmp_path: Path, verbose: bool
+    capsys, tmp_path: Path, monkeypatch, verbose: bool
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     plan = LeafPlan(
         contract=LeafContract(
             tmp_path / "hello.contract.md",
@@ -388,7 +396,7 @@ def test_plan_is_nonexecuting_no_prompt_or_model_claim(
     assert "Input: input.txt" in output
     assert "Checks: content" in output
     assert "Time limits: run" in output
-    assert "UNPROVEN because it is not sandboxed." in output
+    assert "Complete execution returns COMPLETE (0); this does not certify isolation." in output
     assert ("Baseline: 1 files, 7 bytes" in output) is verbose
     assert ("Native executable:" in output) is verbose
     assert ("Policy: no-policy" in output) is verbose
@@ -529,11 +537,12 @@ def test_noninteractive_progress_never_starts_a_spinner(
     assert "\x1b" not in transcript
 
 
+@pytest.mark.parametrize("verbose", [False, True])
 @pytest.mark.parametrize("phase", ["commentary", "final_answer"])
 def test_public_subprocess_output_flows_while_spinner_remains_active(
-    tmp_path: Path, animated_console: Mock, phase: str
+    tmp_path: Path, animated_console: Mock, phase: str, verbose: bool
 ) -> None:
-    logger = ContractLogger()
+    logger = ContractLogger(verbose=verbose)
     logger.attach_run("run", tmp_path)
     logger.start_activity("Running Copilot")
     decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
@@ -550,9 +559,9 @@ def test_public_subprocess_output_flows_while_spinner_remains_active(
         decoder.feed("stdout", (json.dumps({"type": kind, "data": data}) + "\n").encode())
     decoder.feed("stderr", b"Native diagnostic\n")
     output = "\n".join(call.args[0] for call in console._rich_echo.call_args_list)
-    assert "Public line" in output
-    assert "Reading input" in output
-    assert "Tool started: view" not in output
+    assert ("Public line" in output) is verbose
+    assert ("Reading input" in output) is verbose
+    assert ("Tool started: view" in output) is verbose
     assert "Copilot stderr > Native diagnostic" in output
     assert "PRIVATE_" not in output
     animated_console.status.return_value.stop.assert_not_called()
@@ -585,7 +594,9 @@ def test_broken_pipe_stops_animation_without_losing_transcript(
     logger.start_activity("Running Copilot")
     monkeypatch.setattr(console, "_rich_echo", Mock(side_effect=BrokenPipeError))
     events = EventEmitter("run", logger.on_event)
-    events.emit("activity", source="harness", text="Captured despite closed output")
+    events.emit(
+        "activity", source="harness", stream="stderr", text="Captured despite closed output"
+    )
     logger.close()
     animated_console.status.return_value.stop.assert_called_once()
     assert "Captured despite closed output" in (tmp_path / "transcript.log").read_text()
@@ -647,7 +658,7 @@ def test_job_heading_separates_preparation_without_leading_blank(
     verbose: bool,
     scope: PreparationScope | None,
 ) -> None:
-    """Keep one section break in output and records, only after APM preparation."""
+    """Keep disclosure before identity and no leading or duplicate screen gaps."""
     logger = ContractLogger(verbose=verbose)
     if scope is not None:
         event = ApmInstallEvent("started", scope, "0.30.0", scope == "consumer", False)
@@ -665,14 +676,13 @@ def test_job_heading_separates_preparation_without_leading_blank(
         produces="result.txt",
     )
     logger.close()
-    for text in (capsys.readouterr().out, (tmp_path / "transcript.log").read_text()):
-        lines = text.splitlines()
-        heading = next(index for index, line in enumerate(lines) if line.startswith("Job: "))
-        if scope is None:
-            assert heading == 0
-        else:
-            assert lines[heading - 1] == ""
-            assert lines[heading - 2].strip()
+    output = capsys.readouterr().out
+    assert not output.startswith("\n") and "\n\n\n" not in output
+    assert "\n\nContract 1/1: job\n" in output
+    for text in (output, (tmp_path / "transcript.log").read_text()):
+        assert text.index("Execution: local (not sandboxed)") < text.index("Contract 1/1: job")
+        assert text.count("Execution: local (not sandboxed)") == 1
+        assert "Produces: result.txt" in text
 
 
 def test_selected_context_counts_documents_not_entire_dependency_graph(
@@ -705,7 +715,7 @@ def test_selected_context_counts_documents_not_entire_dependency_graph(
     logger.on_preparation(ImportsSelectedEvent(imports))
     calls = console._rich_echo.call_args_list
     assert calls[0].args[0] == "  [i] Imported style, rules"
-    assert calls[0].kwargs["color"] == "blue"
+    assert calls[0].kwargs["color"] == "cyan"
     assert all(call.kwargs["color"] == "dim" for call in calls[1:])
     logger.attach_run("run", tmp_path)
     logger.close()
@@ -805,7 +815,7 @@ def test_native_prose_punctuation_is_readable_on_strict_terminal_encodings(
         decoder.feed("stdout", bytes([byte]))
     decoder.finish()
     logger.close()
-    assert b"""I'm reading "notes" -- that's ready...""" in raw.getvalue()
+    assert (b"""I'm reading "notes" -- that's ready...""" in raw.getvalue()) is verbose
     assert all(byte < 128 for byte in raw.getvalue())
     retained = (tmp_path / "transcript.log").read_text(encoding="ascii")
     assert r"I\u2019m reading \u201cnotes\u201d \u2014" in retained
@@ -815,7 +825,7 @@ def test_prose_formatting_preserves_code_paths_controls_and_literal_escapes(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    logger = ContractLogger()
+    logger = ContractLogger(verbose=True)
     logger.attach_run("run", tmp_path)
     decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
     text = (
@@ -853,7 +863,7 @@ def test_interleaved_native_messages_do_not_share_code_fence_state(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    logger = ContractLogger()
+    logger = ContractLogger(verbose=True)
     decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
 
     def emit(kind: str, **data: object) -> None:
@@ -883,7 +893,7 @@ def test_prose_preserves_code_delimiters_and_indented_code(
     newline: str,
     delimiter: str,
 ) -> None:
-    logger = ContractLogger()
+    logger = ContractLogger(verbose=True)
     decoder = ContractStreamDecoder(EventEmitter("run", logger.on_event))
     content = newline.join(
         (
@@ -1165,7 +1175,8 @@ def test_close_failure_propagates_and_cannot_announce_success(
     with pytest.raises(OSError, match="disk failure"):
         logger.close()
     logger.close()
-    assert "VERIFIED" not in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "VERIFIED" not in output and "Contract COMPLETE" not in output
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -1200,6 +1211,7 @@ def test_native_result_zero_without_artifact_remains_unproven_and_private(
     transcript = (tmp_path / "transcript.log").read_text()
     assert "UNPROVEN" in output
     assert "VERIFIED" not in output
+    assert "Contract COMPLETE" not in output
     assert "[+]" not in output
     assert "Native completion reported exit code 0" in transcript
     assert "PRIVATE_" not in output + transcript
@@ -1246,7 +1258,8 @@ def test_analysis_phase_never_reaches_terminal_or_transcript(
     transcript = (tmp_path / "transcript.log").read_text()
     for text in (output, transcript):
         assert "PRIVATE_" not in text
-        assert text.count("Public answer") == 1
+    assert transcript.count("Public answer") == 1
+    assert output.count("Public answer") == int(verbose)
     assert "Tool started: apply_patch" in transcript
     assert ("Tool started: apply_patch" in output) is verbose
 
@@ -1439,8 +1452,16 @@ def test_live_telemetry_names_stay_quiet_without_hiding_stderr_or_native_errors(
 @pytest.mark.parametrize("tty", [False, True])
 @pytest.mark.parametrize("no_color", [False, True])
 @pytest.mark.parametrize("stderr", [False, True])
+@pytest.mark.parametrize("verbose", [False, True])
 def test_full_source_artifact_and_log_paths_stay_copyable(
-    tmp_path: Path, monkeypatch, capsys, width: int, tty: bool, no_color: bool, stderr: bool
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+    width: int,
+    tty: bool,
+    no_color: bool,
+    stderr: bool,
+    verbose: bool,
 ) -> None:
     from rich.console import Console
 
@@ -1454,11 +1475,12 @@ def test_full_source_artifact_and_log_paths_stay_copyable(
     directory = tmp_path / "deep-source-component" / "session-state" / "contract-run-directory"
     source = directory / "source-with-a-long-name.contract.md"
     artifact_path = directory / "artifacts" / "handoff-with-a-long-name.json"
-    logger = ContractLogger()
+    logger = ContractLogger(verbose=verbose)
     emitter = EventEmitter("run", logger.on_event)
     emitter.emit(
         "selected",
         contract=str(source),
+        caller_root=str(tmp_path),
         harness="copilot",
         model="gpt-6-astra",
         run_directory=str(directory),
@@ -1479,11 +1501,16 @@ def test_full_source_artifact_and_log_paths_stay_copyable(
     if no_color:
         assert "\x1b" not in output
     lines = click.unstyle(output).splitlines()
-    assert f"Job: {source.name} -> saved output" in lines
-    assert source.as_posix() not in output
-    assert f"  Output: {artifact_path.as_posix()}" in lines
-    assert lines.count(f"  Record: {(directory / 'record.json').as_posix()}") == 1
-    assert not any(line.startswith("[i]") for line in lines)
+    relative_source = source.relative_to(tmp_path).as_posix()
+    assert f"Contract 1/1: {relative_source.removesuffix('.contract.md')}" in lines
+    assert (f"    Source: {relative_source}" in lines) is verbose
+    assert (f"    Artifact: {artifact_path.relative_to(tmp_path).as_posix()}" in lines) is verbose
+    assert (
+        f"    Logs: {directory.relative_to(tmp_path).as_posix()}/transcript.log" in lines
+    ) is verbose
+    assert f"  Directory: {directory.relative_to(tmp_path).as_posix()}/artifacts" in lines
+    assert lines.count(f"  Record: {directory.relative_to(tmp_path).as_posix()}/record.json") == 1
+    assert lines.count("[i] Execution: local (not sandboxed)") == 1
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -1528,7 +1555,7 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
             {
                 "result": _result(
                     directory,
-                    Outcome.UNPROVEN,
+                    Outcome.COMPLETE,
                     checks=(_check(0, 0, "handoff"),),
                     observed_models=("observed-model",),
                     artifact=Artifact(
@@ -1539,32 +1566,37 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
         )
     )
     output = capsys.readouterr().out
-    assert output.index("Job: jobs/handoff.contract.md -> handoff.json") < output.index("Copilot >")
-    assert output.index("Copilot >") < output.index("apmx: checking handoff.json")
+    assert output.index("Contract 1/1: jobs/handoff") < output.index("Produces: handoff.json")
+    assert output.index("Produces: handoff.json") < output.index("Checks:")
+    assert ("Copilot > The requested output is ready." in output) is verbose
     if verbose:
+        assert output.index("Copilot >") < output.index("Checks:")
         assert output.index("Check handoff > Required fields present") < output.index(
-            "[+] handoff: passed"
+            "[+] PASS handoff"
         )
     else:
         assert "Required fields present" not in output
-    assert output.index("[+] handoff: passed") < output.index("[!] apmx: UNPROVEN  12.3s")
-    assert "Contract checks passed; this run was not sandboxed." in output
-    assert "  Output: .apm/runs/run/artifacts/handoff.json\n" in output
+    assert output.index("[+] PASS handoff") < output.index("[+] Contract COMPLETE  12.3s")
+    assert output.count("[i] Execution: local (not sandboxed)") == 1
+    assert "Agents and checks can use host files, network and available logins." in output
+    assert "Model usage may cost money. Run only contracts you trust." in output
+    assert "Contract: 1/1 completed" in output and "Check: 1/1 passed" in output
+    assert "Evidence:\n  Artifacts: 1 file retained\n" in output
+    assert "  Directory: .apm/runs/run/artifacts\n" in output
+    assert "The run stopped" not in output
     assert "  Record: .apm/runs/run/record.json\n" in output
     for jargon in (
         "Preflight",
-        "Execution",
         "Capture",
         "native-advisory",
         "(untrusted)",
         "Provisional",
-        "[i]",
         "not protected provenance",
     ):
         assert jargon not in output
-    assert output.count("requested-model") == 1 + int(verbose)
+    assert output.count("requested-model") == 1
     assert "(requested)" not in output
-    assert "[>] Checking handoff.json" not in output
+    assert ("[>] Checking handoff.json" in output) is verbose
     for detail in (
         "raw exit 0",
         "Run: run",
@@ -1578,7 +1610,7 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
     assert "Check handoff (untrusted) > Required fields present" in transcript
     assert "raw exit 0" in transcript
     assert "Run: run" in transcript
-    assert "[!] apmx: UNPROVEN" not in transcript
+    assert "Contract COMPLETE" not in transcript
 
 
 def test_saved_paths_are_relative_to_original_caller_after_cwd_changes(
@@ -1601,7 +1633,7 @@ def test_saved_paths_are_relative_to_original_caller_after_cwd_changes(
         ),
     )
     output = capsys.readouterr().out
-    assert "Output: .apm/runs/stable/artifacts/output.txt" in output
+    assert "Directory: .apm/runs/stable/artifacts" in output
     assert "Record: .apm/runs/stable/record.json" in output
     assert str(caller) not in output
     assert str(transient) not in output
@@ -1625,16 +1657,17 @@ def test_packaged_job_identity_uses_stable_contract_path(
         model="native-model",
     )
     output = capsys.readouterr().out
-    assert "Job: contracts/handoff.contract.md -> handoff.json" in output
+    assert "Contract 1/1: contracts/handoff" in output
+    assert "Produces: handoff.json" in output
     assert ("private-source-copy" in output) is verbose
     assert (f"Package: {package_ref}" in output) is verbose
-    assert output.count("native-model") == 1 + int(verbose)
+    assert output.count("native-model") == 1
 
 
 @pytest.mark.parametrize(
     ("outcome", "reason", "message", "color"),
     [
-        (Outcome.VERIFIED, None, "Contract checks passed.", "green"),
+        (Outcome.COMPLETE, None, "Contract: 1/1 completed", "green"),
         (Outcome.REJECTED, None, "Contract checks found a problem.", "red"),
         (Outcome.UNPROVEN, None, "Checks could not establish a result.", "yellow"),
         (Outcome.HALTED, "cancelled", "Run interrupted.", "red"),
@@ -1663,11 +1696,12 @@ def test_result_headline_color_and_reason_follow_owner(
         ),
     )
     calls = console._rich_echo.call_args_list
-    headline = next(call for call in calls if f"apmx: {outcome.name}" in call.args[0])
+    headline = next(call for call in calls if f"Contract {outcome.name}" in call.args[0])
     assert headline.kwargs["color"] == color
     assert headline.args[0][: headline.kwargs["accent_length"]].endswith(outcome.name)
     assert any(message in call.args[0] for call in calls)
-    assert any(call.args[0].startswith("  Output:") for call in calls)
+    assert any(call.args[0] == "  Artifacts: 1 file retained" for call in calls)
+    assert any(call.args[0].startswith("  Directory:") for call in calls)
     assert not any("provisional" in call.args[0].lower() for call in calls)
 
 
@@ -1679,7 +1713,7 @@ def test_animated_phases_are_transient_but_retained(tmp_path: Path, animated_con
         events.emit("phase", name=phase)
     logger.close()
     written = "\n".join(call.args[0] for call in console._rich_echo.call_args_list)
-    assert written.strip() == "apmx: checking saved output"
+    assert written.strip() == "Checks:"
     for label in (
         "Preparing files for Copilot",
         "Running Copilot",
@@ -1763,14 +1797,20 @@ def test_header_gap_metadata_and_elapsed_time_form_a_secondary_level(
         model="native-model",
     )
     context = rich_console.export_text(clear=False)
-    assert context.endswith("  Running on your machine (not sandboxed).\n\n")
+    assert context.startswith("[i] Execution: local (not sandboxed)\n")
+    assert "Run only contracts you trust.\n\nContract 1/1: contracts/handoff\n" in context
     model = next(
         call.args[0] for call in printed.call_args_list if "native-model" in call.args[0].plain
     )
-    assert model.get_style_at_offset(rich_console, 2).dim is True
+    assert not model.get_style_at_offset(rich_console, 2).dim
+    heading = next(
+        call.args[0] for call in printed.call_args_list if "Contract 1/1:" in call.args[0].plain
+    )
+    assert heading.get_style_at_offset(rich_console, 0).color.name == "cyan"
+    assert heading.get_style_at_offset(rich_console, 0).bold
     events.emit("finished", result=_result(tmp_path, Outcome.UNPROVEN))
     headline = next(
-        call.args[0] for call in printed.call_args_list if "apmx: UNPROVEN" in call.args[0].plain
+        call.args[0] for call in printed.call_args_list if "Contract UNPROVEN" in call.args[0].plain
     )
     result_style = headline.get_style_at_offset(rich_console, 0)
     assert result_style.color.name == "yellow"
@@ -1818,7 +1858,7 @@ def test_narration_has_hanging_indentation_without_wrapping_saved_paths(
 ) -> None:
     rich_console, printed = styled_console
     rich_console.width = width
-    logger = ContractLogger()
+    logger = ContractLogger(verbose=True)
     logger.attach_run("run", tmp_path)
     message = (
         "I will read the source notes and then write one entry per source ID "
@@ -1885,7 +1925,7 @@ def test_checker_diagnostics_are_not_invented_from_passing_exit(capsys) -> None:
     events = EventEmitter("run", ContractLogger().on_event)
     events.emit("check_finished", observation=_check(0, 0, "nonempty"))
     text = capsys.readouterr().out
-    assert text.strip() == "[+] nonempty: passed"
+    assert text.strip() == "[+] PASS nonempty"
     assert "valid" not in text.lower()
     assert "schema" not in text.lower()
 
@@ -1905,14 +1945,14 @@ def test_changed_check_subject_explanation_is_not_hidden_with_raw_zero(capsys) -
         ),
     )
     output = capsys.readouterr().out
-    assert "[!] integrity: incomplete" in output
+    assert "[!] INCOMPLETE integrity" in output
     assert "    The supplied subject or check resources changed." in output
     assert "Check integrity >" not in output
     assert "raw exit" not in output
 
 
 @pytest.mark.parametrize("assurance_limited", [False, True])
-def test_assurance_explanation_routes_through_record_owner(
+def test_assurance_metadata_cannot_override_recorded_unproven_outcome(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, assurance_limited: bool
 ) -> None:
     result = _result(
@@ -1924,18 +1964,20 @@ def test_assurance_explanation_routes_through_record_owner(
     owner = Mock(return_value=assurance_limited)
     monkeypatch.setattr("apmx.contracts.records.native_assurance_limited", owner)
     EventEmitter("run", ContractLogger().on_event).emit("finished", result=result)
-    owner.assert_called_once_with(result)
+    owner.assert_not_called()
     output = capsys.readouterr().out
-    assert ("Contract checks passed; this run was not sandboxed." in output) is assurance_limited
-    assert ("Checks could not establish a result." in output) is not assurance_limited
-    assert "[!] apmx: UNPROVEN" in output
+    assert "Contract checks passed; this run was not sandboxed." not in output
+    assert "Checks could not establish a result." in output
+    assert "[!] Contract UNPROVEN" in output
+    assert "Contract COMPLETE" not in output
     assert "Stop reason:" not in output
 
 
 @pytest.mark.parametrize("verbose", [False, True])
 def test_packaged_preview_uses_stable_identity_and_gates_source_metadata(
-    tmp_path: Path, capsys, verbose: bool
+    tmp_path: Path, capsys, monkeypatch, verbose: bool
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     package = tmp_path / "local-package"
     disposable = tmp_path / "private-source-copy"
     relative = "contracts/handoff.contract.md"
@@ -1963,7 +2005,7 @@ def test_packaged_preview_uses_stable_identity_and_gates_source_metadata(
     assert "Preview: contracts/handoff.contract.md -> handoff.json" in output
     assert "Nothing will execute or download." in output
     assert "without --plan" in output
-    assert ("Source: " + (package / relative).as_posix() in output) is verbose
+    assert ("Source: local-package/" + relative in output) is verbose
     assert (f"Package: {package}" in output) is verbose
     assert "private-source-copy" not in output
     assert "PRIVATE_PROMPT" not in output
@@ -1980,14 +2022,14 @@ def test_plain_checks_have_one_heading_without_duplicate_phase_narration(capsys)
         events.emit("activity", source="checker", label=name, text="Observed checker diagnostic.")
         events.emit("check_finished", observation=_check(0, 0, name))
     output = capsys.readouterr().out
-    assert output.count("apmx: checking handoff.json") == 1
-    assert "Copilot / default model" in output
+    assert output.count("Checks:") == 1
+    assert "Harness: copilot / default model" in output
     assert "native default" not in output
     assert "[>] Checking" not in output
     assert "(saved output)" not in output
     assert "Observed checker diagnostic." not in output
-    assert "[+] format: passed" in output
-    assert "[+] coverage: passed" in output
+    assert "[+] PASS format" in output
+    assert "[+] PASS coverage" in output
 
 
 @pytest.mark.parametrize(
@@ -2023,7 +2065,7 @@ def test_incomplete_check_cause_is_visible_and_engine_owned(
     )
     logger.close()
     output = capsys.readouterr().out
-    assert "[!] criterion: incomplete" in output
+    assert "[!] INCOMPLETE criterion" in output
     assert f"    {cause}" in output
     assert "Check criterion >" not in output
     assert "untrusted" not in (tmp_path / "transcript.log").read_text()

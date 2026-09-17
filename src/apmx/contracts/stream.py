@@ -608,4 +608,4 @@ class ContractStreamDecoder:
                 self._protocol_failure("Native execution model count exceeded the metadata limit.")
                 return
             self._models.append(model)
-            self._emit("metadata", text=f"Observed execution model: {model}")
+            self._emit("metadata", text=f"Observed execution model: {model}", model=model)

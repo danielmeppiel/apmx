@@ -9,7 +9,7 @@ import click
 from apmx.commands.contracts import invoke_contract
 from apmx.contracts.frontend import admit_caller_policy
 from apmx.contracts.models import ContractError, ContractLimits, Outcome
-from apmx.contracts.records import preparation_failure
+from apmx.contracts.records import CompletionBoundary, preparation_failure
 from apmx.core.contract_logger import ContractLogger
 from apmx.core.output_mode import configure_output_mode, detect_output_mode
 from apmx.core.tls_trust import configure_process_tls_trust
@@ -55,7 +55,7 @@ class NativeCommand(click.Command):
 @click.option(
     "--allow-unproven-inputs",
     is_flag=True,
-    help="For factories, permit fully checked native UNPROVEN handoffs; not certification.",
+    help="For factories, permit fully checked native handoffs; not certification.",
 )
 @click.option(
     "--allow-host-access",
@@ -84,9 +84,12 @@ def main(
     configure_process_tls_trust()
     ctx.ensure_object(dict)
     logger = ContractLogger(verbose=verbose)
+    if not planning:
+        logger.execution_context()
     caller_root = Path.cwd().resolve()
     limits = ContractLimits()
     result = None
+    completion = CompletionBoundary()
     try:
         selected = Path(contract).expanduser().absolute()
         factory_root = selected if package_ref is None and selected.is_dir() else None
@@ -105,13 +108,15 @@ def main(
                 model=model,
                 verbose=verbose,
                 planning=planning,
+                completion=completion,
                 allow_advisory=allow_advisory,
                 logger=logger,
                 factory_root=factory_root,
                 allow_unproven_inputs=allow_unproven_inputs,
             )
             if result is not None:
-                logger.render_chain_result(result)
+                completion.validate(result)
+                logger.render_result(result)
                 ctx.exit(int(result.outcome))
             return
         admit_caller_policy(caller_root, limits=limits)
@@ -142,12 +147,14 @@ def main(
                 model=model,
                 verbose=verbose,
                 planning=planning,
+                completion=completion,
                 allow_advisory=allow_advisory,
                 source=source,
                 logger=logger,
             )
         if result is not None:
-            logger.render_chain_result(result)
+            completion.validate(result)
+            logger.render_result(result)
             ctx.exit(int(result.outcome))
     except ContractError as exc:
         error = preparation_failure(result, exc)

@@ -33,8 +33,14 @@ pytestmark = [
         (True, False, True),
     ],
 )
+@pytest.mark.parametrize("verbose", [False, True])
 def test_pty_streams_live_output_and_restores_terminal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, animate: bool, interrupt: bool, fail: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    animate: bool,
+    interrupt: bool,
+    fail: bool,
+    verbose: bool,
 ) -> None:
     import pty
     import termios
@@ -42,6 +48,8 @@ def test_pty_streams_live_output_and_restores_terminal(
     source_root = Path(__file__).resolve().parents[3]
     project = tmp_path / "fixture"
     shutil.copytree(source_root / "examples/contracts/first-contract", project)
+    # Isolate fixture governance even when pytest's base directory is inside a checkout.
+    subprocess.run(["git", "init", "--quiet", str(project)], check=True)
     (project / "handoff.contract.md").write_text(
         "---\nproduces: handoff.json\nverify:\n  handoff: 'test -s handoff.json'\n---\n"
         "Write handoff.json.\n",
@@ -100,13 +108,20 @@ def test_pty_streams_live_output_and_restores_terminal(
         [
             sys.executable,
             "-c",
-            "from apmx.cli import main; main()",
+            (
+                "import sys; from pathlib import Path; "
+                f"sys.path.insert(0, {str(source_root / 'src')!r}); import apmx; "
+                f"assert Path(apmx.__file__).resolve() == "
+                f"Path({str(source_root / 'src/apmx/__init__.py')!r}); "
+                "from apmx.cli import main; main()"
+            ),
             "handoff.contract.md",
             "--on",
             "copilot",
             "--model",
             "gpt-6-astra",
             "--allow-host-access",
+            *(["--verbose"] if verbose else []),
         ],
         cwd=project,
         env=env,
@@ -132,11 +147,7 @@ def test_pty_streams_live_output_and_restores_terminal(
                 if not chunk:
                     break
                 output.extend(chunk)
-            if (
-                streamed_at is None
-                and b"PTY actor ready" in output
-                and b"Native stderr ready" in output
-            ):
+            if streamed_at is None and b"Native stderr ready" in output:
                 assert child.poll() is None
                 streamed_at = time.monotonic()
             if b"Running Copilot" in output and child.poll() is None:
@@ -156,7 +167,7 @@ def test_pty_streams_live_output_and_restores_terminal(
                 break
         assert streamed_at is not None, output.decode("ascii", errors="replace")
         assert interrupted is interrupt, output.decode("ascii", errors="replace")
-        assert child.wait(timeout=2) == (22 if interrupt or fail else 21), output.decode(
+        assert child.wait(timeout=2) == (22 if interrupt or fail else 0), output.decode(
             "ascii", errors="replace"
         )
         while select.select([master], [], [], 0.1)[0]:
@@ -175,34 +186,36 @@ def test_pty_streams_live_output_and_restores_terminal(
     assert len(records) == 1
     record = json.loads(records[0].read_text(encoding="utf-8"))
     assert record["complete"] is True
-    assert record["result"]["outcome"]["name"] == ("HALTED" if interrupt or fail else "UNPROVEN")
+    assert record["result"]["outcome"]["name"] == ("HALTED" if interrupt or fail else "COMPLETE")
     expected_reason = "cancelled" if interrupt else "producer_failed" if fail else None
     assert record["result"]["stop_reason"] == expected_reason
     assert record["producer"]["cleanup_confirmed"] is True
     assert record["producer"]["returncode"] is not None
-    assert text.count(b"PTY actor ready") == 1
+    assert text.count(b"PTY actor ready") == int(verbose)
     assert b"PRIVATE_" not in output
     assert b"VERIFIED" not in text
-    assert (b"UNPROVEN" in text) is not (interrupt or fail)
-    assert b"Copilot > PTY actor ready" in text
+    assert b"UNPROVEN" not in text
+    assert (b"Contract COMPLETE" in text) is not (interrupt or fail)
+    assert (b"Copilot > PTY actor ready" in text) is verbose
     assert b"Copilot stderr > Native stderr ready" in text
     assert b"(untrusted)" not in text
     assert b"native-advisory" not in text
-    assert b"raw exit" not in text
-    assert b"[i]" not in text
+    assert (b"raw exit" in text) is (verbose and not (interrupt or fail))
+    assert text.count(b"[i] Execution: local (not sandboxed)") == 1
     plain_lines = text.replace(b"\r", b"")
-    assert b"Tool started: view" not in text
-    assert b"\n            without losing its source or hiding\n" in plain_lines
-    assert b"\n            live progress.\n" in plain_lines
+    assert (b"Tool started: view" in text) is verbose
+    assert (b"\n            without losing its source or hiding\n" in plain_lines) is verbose
+    assert (b"\n            live progress.\n" in plain_lines) is verbose
     if animate:
         assert b"\x1b[2;36m" in output
     else:
         assert b"\x1b" not in output
     assert "Tool started: view" in (records[0].parent / "transcript.log").read_text()
     if not interrupt and not fail:
-        assert b"Contract checks passed; this run was not sandboxed." in text
-        assert b"Output: .apm/runs/" in text
+        assert b"Contract: 1/1 completed" in text and b"Check: 1/1 passed" in text
+        assert b"Directory: .apm/runs/" in text
         assert b"Record: .apm/runs/" in text
+        assert b"The run stopped" not in text
     if fail:
         assert b"Copilot did not complete successfully." in text
         assert b"Review Copilot diagnostics and logs before retrying." in text
