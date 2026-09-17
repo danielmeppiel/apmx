@@ -2,9 +2,10 @@
 
 import hashlib
 import io
+import json
 import sys
 from contextlib import contextmanager
-from dataclasses import FrozenInstanceError, dataclass
+from dataclasses import FrozenInstanceError, dataclass, replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -12,15 +13,21 @@ import click
 import pytest
 from rich.console import Console
 
+from apmx.contracts.events import EventEmitter
 from apmx.contracts.models import (
     Artifact,
     ChainResult,
     CheckObservation,
+    CheckSpec,
+    LeafContract,
+    LeafPlan,
     Outcome,
     ProcessObservation,
     RunEvent,
     RunResult,
 )
+from apmx.contracts.resolution import ChainPlan, Graph, Node
+from apmx.contracts.stream import ContractStreamDecoder
 from apmx.core.contract_logger import (
     ContractLogger,
     _CheckEvidence,
@@ -712,3 +719,146 @@ def test_leaf_result_only_shows_an_observed_positive_duration(tmp_path, capsys, 
     headline = output.splitlines()[0]
     assert headline == "[+] Contract COMPLETE" + ("  1.5s" if elapsed else "")
     assert "0.0s" not in output
+    assert "The run stopped before it could finish." not in output
+    assert "Resolve the reported error before retrying." not in output
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("requested", [None, "model-a"])
+def test_reported_model_identity_is_once_per_invocation_but_retained_per_leaf(
+    tmp_path, monkeypatch, capsys, verbose, requested
+):
+    monkeypatch.chdir(tmp_path)
+    factory = ContractLogger(verbose=verbose)
+    for index in (1, 2):
+        directory = tmp_path / str(index)
+        directory.mkdir()
+        contract = Path(f"job-{index}.contract.md")
+        leaf = factory.new_leaf(index=index, count=2, contract=contract)
+        leaf.attach_run(str(index), directory)
+        _event(leaf, "selected", contract=str(contract), produces=f"{index}.txt", model=requested)
+        decoder = ContractStreamDecoder(EventEmitter(str(index), leaf.on_event))
+        for model in ("model-a", "model-b", "model-b"):
+            decoder.feed(
+                "stdout",
+                (
+                    json.dumps(
+                        {
+                            "type": "assistant.message",
+                            "data": {
+                                "messageId": model,
+                                "phase": "commentary",
+                                "content": "Routine narration",
+                                "model": model,
+                            },
+                        }
+                    )
+                    + "\n"
+                ).encode(),
+            )
+        decoder.finish()
+        leaf.close()
+        frozen = (directory / "transcript.log").read_bytes()
+        _event(
+            leaf,
+            "finished",
+            result=replace(
+                _run(directory, outcome=Outcome.COMPLETE), observed_models=("model-a", "model-b")
+            ),
+        )
+        assert (directory / "transcript.log").read_bytes() == frozen
+        for model in ("model-a", "model-b"):
+            assert (
+                frozen.count(f"Copilot (untrusted) > Observed execution model: {model}".encode())
+                == 1
+            )
+    output = capsys.readouterr().out
+    assert output.count("model-a") == output.count("model-b") == 1
+    assert output.count("Harness:") == 1
+    assert "Requested model:" not in output
+    assert ("Routine narration" in output) is verbose
+    assert "Copilot > Observed execution model: model-b" in output
+
+
+def test_hidden_metadata_and_duplicate_models_do_not_starve_default_heartbeat(capsys):
+    logger = ContractLogger()
+    _event(
+        logger,
+        "metadata",
+        at=1,
+        source="harness",
+        text="Observed execution model: model-a",
+        model="model-a",
+    )
+    for at in (5, 11):
+        _event(
+            logger,
+            "metadata",
+            at=at,
+            source="harness",
+            text="Observed execution model: model-a",
+            model="model-a",
+        )
+        _event(logger, "metadata", at=at + 0.5, text="Ordinary hidden telemetry")
+        _event(logger, "heartbeat", at=at + 1, elapsed_seconds=at + 1)
+    output = capsys.readouterr().out
+    assert output.count("model-a") == 1
+    assert "Ordinary hidden telemetry" not in output
+    assert "still running; 6s elapsed" in output
+    assert "still running; 12s elapsed" in output
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("observed", [(), ("model-a", "model-b")])
+def test_result_model_fallback_does_not_repeat_initial_identity(
+    tmp_path, capsys, verbose, observed
+):
+    logger = ContractLogger(verbose=verbose)
+    _event(logger, "selected", contract="job.contract.md", model="model-a")
+    logger.render_result(
+        replace(_run(tmp_path, outcome=Outcome.COMPLETE), observed_models=observed)
+    )
+    output = capsys.readouterr().out
+    assert output.count("model-a") == 1
+    assert "Observed execution model: model-a" not in output
+    assert ("Observed execution model: unknown" in output) is (verbose and not observed)
+    assert ("Observed execution model: model-b" in output) is (verbose and bool(observed))
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("allow_unproven", [False, True])
+def test_factory_preview_distinguishes_strict_policy_from_explicit_native_opt_in(
+    tmp_path, capsys, verbose, allow_unproven
+):
+    contract = LeafContract(
+        tmp_path / "job.contract.md",
+        "sha",
+        "PRIVATE_PROMPT",
+        ("seed.txt",),
+        "output.txt",
+        (CheckSpec("structure", "PRIVATE_CHECK"),),
+    )
+    leaf = LeafPlan(contract, tmp_path, Path("/not/invoked/copilot"), model="fixture-model")
+    graph = Graph(tmp_path, (contract.path,), (contract,), (contract,), ())
+    plan = ChainPlan(graph, (Node(leaf, ()),), allow_unproven_inputs=allow_unproven)
+    ContractLogger(verbose=verbose).render_chain_plan(plan)
+    output = capsys.readouterr().out
+    assert "Nothing will execute or download. Dependency resolution uses no model calls." in output
+    assert (
+        "Handoff policy: strict VERIFIED-only; native outputs block" in output
+    ) is not allow_unproven
+    assert (
+        "fully checked local outputs (--allow-unproven-inputs); assurance remains unproven"
+        in output
+    ) is allow_unproven
+    assert "UNPROVEN inputs block" not in output
+    assert "--allow-unproven-inputs" in output and "--plan" in output
+    if not allow_unproven:
+        assert "--allow-host-access" in output
+        assert "COMPLETE does not certify isolation." in output
+    assert "Final outputs: output.txt" in output
+    assert "Input: seed.txt (starting file)" in output
+    assert "Checks: structure" in output
+    assert "PRIVATE_" not in output and "[+]" not in output
+    assert "Contract COMPLETE" not in output and "Factory COMPLETE" not in output
+    assert list(tmp_path.iterdir()) == []

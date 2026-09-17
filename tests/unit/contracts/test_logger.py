@@ -1595,13 +1595,13 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
     ):
         assert jargon not in output
     assert output.count("requested-model") == 1
+    assert output.count("observed-model") == int(verbose)
     assert "(requested)" not in output
     assert ("[>] Checking handoff.json" in output) is verbose
     for detail in (
         "raw exit 0",
         "Run: run",
         "Source:",
-        "observed-model",
         "Logs:",
         "Logs may contain sensitive data. Review before sharing.",
     ):
