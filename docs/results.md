@@ -1,6 +1,6 @@
 # Execution results and record migration
 
-The 0.4.1 source separates **execution** from **assurance**. The contract
+The 0.4.2 source separates **execution** from **assurance**. The contract
 format (`needs`, `produces`, `verify`) and consent flags are unchanged.
 
 | Execution outcome | Exit | Meaning |
@@ -89,14 +89,14 @@ for new-schema receipts. Do not rename old UNPROVEN/21 or VERIFIED/0 records.
 
 ## Current release versus historical downloads
 
-The v0.4.1 source and fresh native release report COMPLETE/0 for successful
-native execution after exact evidence finalization. The immutable v0.4.0 tag
-records the failed release-preparation candidate; no v0.4.0 release or native
-assets were published. Historical v0.3.2 native
+The v0.4.2 source and fresh native release report COMPLETE/0 for successful
+native execution after exact evidence finalization. The immutable v0.4.0 and
+v0.4.1 tags record failed release-preparation candidates; no release or native
+assets were published for either tag. Historical v0.3.2 native
 binaries and the immutable `be9c5be` source/demo still report UNPROVEN/21. The
 installation guide's pinned fallback reproduces that historical behavior, not
 the redesign. No v0.3.2 asset, manifest or historical media is rebuilt or
-reused by v0.4.1. Match every adapter to its record version; current smoke
-fixtures target v0.4.1, not old binaries. For scripts running v0.4.1, replace
+reused by v0.4.2. Match every adapter to its record version; current smoke
+fixtures target v0.4.2, not old binaries. For scripts running v0.4.2, replace
 old exit-21 completion special cases with exit 0 success handling; do not apply
 that migration to v0.3.2 binaries.

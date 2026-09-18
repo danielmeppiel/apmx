@@ -309,7 +309,7 @@ def test_transcript_is_identical_across_visibility_layout_encoding_and_finalizat
         for mode in ("styled", "no_color", "pipe", "ci", "dumb"):
             for width in (40, 80, 120):
                 for newline in (None, "\n", "\r\n"):
-                    newline_name = "native" if newline is None else repr(newline)
+                    newline_name = {None: "native", "\n": "lf", "\r\n": "crlf"}[newline]
                     directory = tmp_path / f"{verbose}-{mode}-{width}-{newline_name}"
                     directory.mkdir()
                     with _terminal(

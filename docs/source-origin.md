@@ -268,7 +268,7 @@ Host-access-only keeps the strict handoff policy; it does not grant an additiona
 permission. Existing single-contract consent behavior is unchanged.
 
 The local exception never changes a leaf outcome or certifies native isolation.
-Current v0.4.1 source and downloads separate COMPLETE/0 execution from unproven
+Current v0.4.2 source and downloads separate COMPLETE/0 execution from unproven
 native assurance; historical v0.3.2 and the source pin keep their UNPROVEN/21
 outcomes. See [record-version migration](results.md). Every required check must
 pass on the retained subject; missing output, undecided checks, rejection,
@@ -330,7 +330,7 @@ and resource discovery compatibility.
 Runs deliberately remain under the **caller's** `.apm/runs/<fresh-run-id>/`.
 This is local evidence compatibility, distinct from APM's normal user configuration.
 Historical single-file results retain `apm-contract-run/0.1`; historical
-multiple-artifact results retain `apm-contract-run/0.2`. Current v0.4.1 source
+multiple-artifact results retain `apm-contract-run/0.2`. Current v0.4.2 source
 and downloads use leaf schema `apm-contract-run/0.3` for both and factory schema
 `apmx-contract-chain/0.2`, with separate execution and assurance fields.
 An `artifact.files` inventory and aggregate digest describe a multi-file delivery.

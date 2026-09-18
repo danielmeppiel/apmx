@@ -158,8 +158,21 @@ def release_notes(version: str, commit: str) -> str:
             "or finalization checks.\n\n"
             "No GitHub release or native assets were published for v0.4.0. Its immutable "
             "public source tag remains unchanged and records the failed release-preparation "
-            "candidate. These v0.4.1 archives are fresh builds, not repacked or relabeled "
-            "v0.4.0 artifacts.\n\n"
+            "candidate. The v0.4.1 preparation also stopped before publication, so its "
+            "immutable public tag records source only and no v0.4.1 archives exist.\n\n"
+        )
+    if version == "0.4.2":
+        patch_notes = (
+            "## Changes in v0.4.2\n\n"
+            "Make the Windows logger presentation tests assert dim styling on actual "
+            "elapsed-time metadata instead of a platform-dependent trailing line position. "
+            "Use path-safe labels for native, LF and CRLF output variants while preserving "
+            "exact newline translation, byte-identical transcript and finalization coverage.\n\n"
+            "No GitHub release or native assets were published for v0.4.1. Its immutable "
+            "public source tag remains unchanged and records the failed release-preparation "
+            "candidate. These v0.4.2 archives are fresh builds and do not reuse, repack or "
+            "relabel v0.4.1 assets. The earlier v0.4.0 tag and failed-candidate record also "
+            "remain unchanged.\n\n"
         )
     return (
         f"Standalone apmx {version}; candidate commit `{commit}`.\n\n{patch_notes}"

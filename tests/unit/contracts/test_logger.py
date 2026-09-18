@@ -1808,6 +1808,7 @@ def test_header_gap_metadata_and_elapsed_time_form_a_secondary_level(
     )
     assert heading.get_style_at_offset(rich_console, 0).color.name == "cyan"
     assert heading.get_style_at_offset(rich_console, 0).bold
+    events.started -= 20
     events.emit("finished", result=_result(tmp_path, Outcome.UNPROVEN))
     headline = next(
         call.args[0] for call in printed.call_args_list if "Contract UNPROVEN" in call.args[0].plain
@@ -1816,7 +1817,10 @@ def test_header_gap_metadata_and_elapsed_time_form_a_secondary_level(
     assert result_style.color.name == "yellow"
     assert result_style.bold is True
     assert not result_style.dim
-    assert headline.get_style_at_offset(rich_console, len(headline) - 1).dim is True
+    timing_offset = headline.plain.rindex("  ") + 2
+    timing_style = headline.get_style_at_offset(rich_console, timing_offset)
+    assert timing_style.dim is True
+    assert not timing_style.bold
 
 
 def test_native_tool_metadata_controls_emphasis_not_assistant_wording(

@@ -20,7 +20,7 @@ from tests.release.test_backend import add_backend_fixture
 
 class PromotionTests(unittest.TestCase):
     def test_current_source_notes_separate_execution_and_assurance_versions(self):
-        notes = promotion.release_notes("0.4.1", "a" * 40)
+        notes = promotion.release_notes("0.4.2", "a" * 40)
         self.assertIn("COMPLETE (0)", notes)
         self.assertIn("apm-contract-run/0.3", notes)
         self.assertIn("apmx-contract-chain/0.2", notes)
@@ -30,11 +30,20 @@ class PromotionTests(unittest.TestCase):
         self.assertNotIn("Passing native checks yield UNPROVEN (21)", notes)
         self.assertNotIn("records retain `apm-contract-run/0.1`", notes)
 
-    def test_v041_notes_preserve_failed_v040_candidate_truth(self):
-        notes = promotion.release_notes("0.4.1", "a" * 40)
-        self.assertIn("No GitHub release or native assets were published for v0.4.0", notes)
+    def test_v042_notes_preserve_failed_v041_candidate_truth(self):
+        notes = promotion.release_notes("0.4.2", "a" * 40)
+        self.assertIn("No GitHub release or native assets were published for v0.4.1", notes)
         self.assertIn("immutable public source tag remains unchanged", notes)
-        self.assertIn("fresh builds, not repacked or relabeled v0.4.0 artifacts", notes)
+        self.assertIn("do not reuse, repack or relabel v0.4.1 assets", notes)
+        self.assertIn("v0.4.0 tag and failed-candidate record also remain unchanged", notes)
+
+    def test_v041_notes_record_both_failed_preparations_without_archives(self):
+        notes = promotion.release_notes("0.4.1", "a" * 40)
+        self.assertIn("v0.4.1 preparation also stopped before publication", notes)
+        self.assertIn("immutable public tag records source only", notes)
+        self.assertIn("no v0.4.1 archives exist", notes)
+        self.assertIn("v0.4.0", notes)
+        self.assertIn("failed release-preparation candidate", notes)
 
     def test_published_notes_preserve_legacy_outcome_and_record_semantics(self):
         notes = promotion.release_notes("0.3.2", "b" * 40)

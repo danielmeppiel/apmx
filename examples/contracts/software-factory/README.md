@@ -11,7 +11,7 @@ Both pricing and checkout totals must agree.
 
 ## Set up
 
-After the v0.4.1 assets are listed, install the
+After the v0.4.2 assets are listed, install the
 [prebuilt release](../../../docs/install.md#install-a-prebuilt-archive) and
 complete its
 [example checker setup](../../../docs/install.md#example-tools-for-a-native-installation);
@@ -353,7 +353,7 @@ rejects both even when generated tests make no useful assertion.
 The observed run above supplements the deterministic suite; neither is
 production certification or permission to merge/deploy. Historical v0.3.2
 binaries, the pinned source and historical observation remain **UNPROVEN / 21**.
-Current v0.4.1 source and downloads return **COMPLETE / 0** only after all four
+Current v0.4.2 source and downloads return **COMPLETE / 0** only after all four
 contracts, six checks and five artifacts have complete validated, finalized
 evidence.
 Exit `21` still means noncomplete work or refused admission; inspect the

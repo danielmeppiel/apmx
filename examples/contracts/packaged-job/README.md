@@ -45,7 +45,7 @@ handoff-style` means native loading was observed.
 `handoff.json` and its record remain below the caller's `.apm/runs/` directory.
 There is no automatic copy back to the caller root. Inspect the retained record
 and artifact before using the result. A completed run with passing checks
-returns `COMPLETE` (exit 0) in current v0.4.1 source and downloads only after
+returns `COMPLETE` (exit 0) in current v0.4.2 source and downloads only after
 full evidence validation/finalization; it is not sandboxed. Historical v0.3.2
 and the pinned source still return `UNPROVEN` (exit 21) even when completed.
 See [result migration](../../../docs/results.md).

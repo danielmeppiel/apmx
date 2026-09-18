@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.2 - 2026-09-18
+
+- Make the Windows logger presentation tests assert dim styling on actual
+  elapsed-time metadata instead of the platform-dependent trailing line
+  position.
+- Use path-safe labels for native, LF and CRLF output variants while preserving
+  exact newline translation, transcript identity and finalization coverage.
+- Publish v0.4.2 as the patch release candidate. No GitHub release or native
+  assets were published for v0.4.1; its immutable public tag remains the source
+  record of the failed release-preparation candidate, and no v0.4.1 asset is
+  reused.
+
 ## 0.4.1 - 2026-09-18
 
 - Make the native release smoke fixture follow the current Copilot event and
@@ -9,9 +21,11 @@
 - Make transcript presentation assertions portable across LF and CRLF output
   streams while preserving byte-identical retained transcript and finalization
   checks.
-- Publish v0.4.1 as the patch release candidate. No GitHub release or native
-  assets were published for v0.4.0; its immutable public tag remains the source
-  record of the failed release-preparation candidate.
+- Prepare v0.4.1 as the patch release candidate. Release preparation failed on
+  Windows-only presentation test assumptions before publication, so no v0.4.1
+  GitHub release or native assets exist. Its immutable public tag remains the
+  source record of that failed candidate. No GitHub release or native assets
+  were published for v0.4.0 either; its immutable public tag remains unchanged.
 
 ## 0.4.0 (2026-09-18)
 
