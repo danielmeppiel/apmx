@@ -45,11 +45,11 @@ disclose local execution before action.
 | Red `[x]` | Failure, rejection or halted execution |
 
 Words and ASCII indicators carry the meaning even without color. A completed
-native factory returns **COMPLETE / exit 0** in 0.4.0 source, only after
+native factory returns **COMPLETE / exit 0** in v0.4.0 source and downloads, only after
 validated durable finalization. The local-access/cost disclosure appears once
 before consent/action, not as repeated per-leaf warnings. Green results do not
-imply isolation, correct software or production certification. Published v0.3.2
-and historical recordings retain UNPROVEN/21; see [migration](results.md).
+imply isolation, correct software or production certification. Historical
+v0.3.2 and its recordings retain UNPROVEN/21; see [migration](results.md).
 
 Routine model narration, tool activity and passing checker stdout belong in verbose output.
 Default output still shows stderr and explicit diagnostics. A failed or

@@ -87,14 +87,14 @@ current source. Unknown outcomes or inconsistent result fields fail closed.
 Keep historical evidence; rerun the original contract in a fresh attempt
 for new-schema receipts. Do not rename old UNPROVEN/21 or VERIFIED/0 records.
 
-## Source versus published downloads
+## Current release versus historical downloads
 
-This is a minor-version source behavior change, not a release. Published
-v0.3.2 native binaries and the immutable `be9c5be` source/demo still report
-UNPROVEN/21 for successful native execution. The installation guide's pinned
-fallback reproduces that historical behavior, not this redesign. No native
-assets, tags or historical media are rebuilt by this change. Use a reviewed
-0.4.0 source checkout for these semantics and match any adapter to its record
-version; current smoke fixtures target current source, not old binaries.
-For scripts running 0.4.0 source, replace old exit-21 completion special cases
-with exit 0 success handling; do not apply that migration to v0.3.2 binaries.
+The v0.4.0 source and fresh native release report COMPLETE/0 for successful
+native execution after exact evidence finalization. Historical v0.3.2 native
+binaries and the immutable `be9c5be` source/demo still report UNPROVEN/21. The
+installation guide's pinned fallback reproduces that historical behavior, not
+the redesign. No v0.3.2 asset, manifest or historical media is rebuilt or
+reused by v0.4.0. Match every adapter to its record version; current smoke
+fixtures target v0.4.0, not old binaries. For scripts running v0.4.0, replace
+old exit-21 completion special cases with exit 0 success handling; do not apply
+that migration to v0.3.2 binaries.

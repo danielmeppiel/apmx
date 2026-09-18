@@ -97,9 +97,9 @@ missing tools and signals are incomplete. No output does not mean `no_change`.
 Every check gets a fresh baseline and the captured artifacts. A patch-aware
 check must apply its patch and test the resulting code in the same invocation;
 changes made by one check are not shared with the next.
-Current source returns COMPLETE/0 only for complete validated evidence.
-Published v0.3.2 and the pinned historical source/demo still return `21`
-even with passing checks. Do not reinterpret their recorded outcomes.
+Current v0.4.0 source and downloads return COMPLETE/0 only for complete
+validated evidence. Historical v0.3.2 and the pinned source/demo still return
+`21` even with passing checks. Do not reinterpret their recorded outcomes.
 See [result versions and migration](../../docs/results.md).
 
 The profile requires positively established no-policy

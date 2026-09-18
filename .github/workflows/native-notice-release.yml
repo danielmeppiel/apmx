@@ -12,7 +12,7 @@ on:
       tag:
         description: Existing version tag at this trusted main/workflow commit
         type: string
-        default: v0.3.2
+        default: v0.4.0
         required: true
       verified_run_id:
         description: Publish only - successful preparation workflow run ID

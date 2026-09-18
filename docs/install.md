@@ -1,12 +1,13 @@
 # Install APMX
 
-**Start with the [v0.3.2 prebuilt release](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2).**
-Download the archive for your platform, verify its checksum and extract it using
-the [native installation steps](#install-a-prebuilt-archive) below.
-The [pinned source route](#run-the-current-source-checkout) remains a fallback;
-do not substitute the withheld v0.1/v0.2 archives.
+**Use the [v0.4.0 release page](https://github.com/danielmeppiel/apmx/releases/tag/v0.4.0)
+after its native archives, checksums and manifest are listed.** Verify and
+extract the archive using the [native installation steps](#install-a-prebuilt-archive)
+below. Until those assets appear, use the
+[pinned source route](#run-the-current-source-checkout). Do not substitute the
+withheld v0.1/v0.2 archives.
 
-The new native bundles include the APMX Python runtime and private **official
+The v0.4.0 native bundles include the APMX Python runtime and private **official
 APM 0.30.0** backend. They need no APMX build, global APM installation or
 experimental activation command. **Contract checks still need their own
 tools**: this factory uses Python 3.12 and Behave 1.3.3.
@@ -15,7 +16,7 @@ tools**: this factory uses Python 3.12 and Behave 1.3.3.
 
 | Route | What you get |
 | --- | --- |
-| [Prebuilt v0.3.2](#install-a-prebuilt-archive) **(recommended)** | Download, verify and extract a complete native bundle. No Python runtime installation for APMX itself. |
+| [Prebuilt v0.4.0](#install-a-prebuilt-archive) **(recommended when listed)** | Download, verify and extract a complete native bundle. No Python runtime installation for APMX itself. |
 | [Pinned source](#run-the-current-source-checkout) | A working fallback or development route, including the [approved-client alternative](#managed-environment-installation-optional) for managed environments. |
 
 Keep the current guide open while following either route. The example/source
@@ -24,20 +25,22 @@ pin below deliberately stays at the earlier proven revision
 source identity. Its factory resources are compatible with the new native
 runner. A version string alone does not identify a build.
 
-**Result-version distinction:** published v0.3.2 and the `be9c5be` pinned
-fallback below still return UNPROVEN/21 for completed native runs. Unreleased
-0.4.0 source instead returns COMPLETE/0 after exact evidence finalization.
-The downloads and historical demo are unchanged. See [migration](results.md).
-To develop this new behavior, use a reviewed 0.4.0 checkout, keep its own
-frozen lock and example files together, and use the source environment/backend
-setup below without switching it to the historical pin. This is not a new
-prebuilt release or a claim of fresh model execution.
+**Result-version distinction:** v0.4.0 source and downloads return COMPLETE/0
+after exact evidence finalization. Historical v0.3.2 downloads and the
+`be9c5be` pinned fallback below still return UNPROVEN/21 for completed native
+runs; those downloads and the historical demo are unchanged. See
+[migration](results.md). To develop this behavior, use a reviewed 0.4.0
+checkout, keep its own frozen lock and example files together, and use the
+source environment/backend setup below without switching it to the historical
+pin. Release availability is not a claim of fresh model execution.
 
 ## Install a prebuilt archive
 
-The [public v0.3.2 prerelease](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2)
-provides the five platform archives below, their checksum sidecars and the
-release manifest. Downloads do not require GitHub authentication.
+The [v0.4.0 release page](https://github.com/danielmeppiel/apmx/releases/tag/v0.4.0)
+is the publication location for the five platform archives below, their
+checksum sidecars and the release manifest. Do not run the download blocks
+until all three are listed. Published downloads do not require GitHub
+authentication.
 
 You need **Git** and the [native GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart).
 Authenticate through Copilot itself. APMX currently supports native Copilot
@@ -49,11 +52,11 @@ Choose the archive matching your operating system and CPU:
 
 | Machine | Archive |
 | --- | --- |
-| macOS, Apple Silicon | `apmx-0.3.2-macos-arm64.tar.gz` |
-| macOS, Intel | `apmx-0.3.2-macos-x86_64.tar.gz` |
-| Linux, x86-64 | `apmx-0.3.2-linux-x86_64.tar.gz` |
-| Linux, ARM64 | `apmx-0.3.2-linux-arm64.tar.gz` |
-| Windows, x86-64 | `apmx-0.3.2-windows-x86_64.zip` |
+| macOS, Apple Silicon | `apmx-0.4.0-macos-arm64.tar.gz` |
+| macOS, Intel | `apmx-0.4.0-macos-x86_64.tar.gz` |
+| Linux, x86-64 | `apmx-0.4.0-linux-x86_64.tar.gz` |
+| Linux, ARM64 | `apmx-0.4.0-linux-arm64.tar.gz` |
+| Windows, x86-64 | `apmx-0.4.0-windows-x86_64.zip` |
 
 Each archive has a same-name `.sha256` sidecar. `release-manifest.json` binds
 the five archives to the release version and full source commit.
@@ -66,7 +69,7 @@ The download commands use `curl` and do not need GitHub CLI authentication.
 Change `target` to one of the four macOS/Linux targets in the table:
 
 ```sh
-version=0.3.2
+version=0.4.0
 target=macos-arm64
 archive="apmx-$version-$target.tar.gz"
 install_dir="$HOME/.local/share/apmx/$version"
@@ -101,7 +104,7 @@ command -v apmx
 apmx --version
 ```
 
-Expect the command under `APMX_NATIVE_ROOT` and version `0.3.2`. This PATH applies
+Expect the command under `APMX_NATIVE_ROOT` and version `0.4.0`. This PATH applies
 to the current terminal. Keep the full extracted directory in place, then
 continue with [example checker setup](#macos-and-linux-checker-setup).
 
@@ -113,7 +116,7 @@ launched from PowerShell. Do not mix native Windows and WSL tools; inside WSL,
 use the Linux archive and instructions instead.
 
 ```powershell
-$version = "0.3.2"
+$version = "0.4.0"
 $archive = "apmx-$version-windows-x86_64.zip"
 $installDir = Join-Path $env:LOCALAPPDATA "apmx\$version"
 $releaseUrl = "https://github.com/danielmeppiel/apmx/releases/download/v$version"
@@ -135,7 +138,7 @@ apmx --version
 if ($LASTEXITCODE -ne 0) { throw "APMX version check failed." }
 ```
 
-Expect `apmx.exe` in the extracted directory, version `0.3.2`, native
+Expect `apmx.exe` in the extracted directory, version `0.4.0`, native
 `copilot.exe`, and `sh.exe` from Git for Windows. If `sh` is missing, add your
 actual Git for Windows `bin` directory to this terminal's PATH. Continue with
 [Windows checker setup](#windows-checker-setup).
@@ -487,8 +490,9 @@ installation process, not an unqualified `uv sync`.
 
 The historical v0.1/v0.2 archives remain withheld and are not an installation
 fallback. Their Linux bundles omitted the required libffi MIT notice. The new
-v0.3.2 distribution passed the corrected third-party notice gates;
-its availability does not make those older archives acceptable.
+v0.3.2 distribution passed the corrected third-party notice gates. The fresh
+v0.4.0 distribution must independently pass the same gates; neither release's
+availability makes those older archives acceptable.
 
 For source history, v0.2.0 corresponds to
 `2f0356d3e7ebb07f62911768198f9b0cd120cca9` and supports the older
@@ -503,8 +507,8 @@ separate from the withheld APMX archives.
 ## Migrating from v0.2.0 to v0.3.0
 
 This section describes migration from older source or installations to v0.3.0.
-These compatibility changes also apply to v0.3.2. Use the
-[prebuilt v0.3.2 release](#install-a-prebuilt-archive) or the pinned source
+These compatibility changes also apply to v0.3.2 and remain in v0.4.0. Use the
+[prebuilt v0.4.0 release](#install-a-prebuilt-archive) or the pinned source
 fallback; old native archives remain withheld.
 
 **Breaking compatibility change: imported skill metadata.** A skill accepted by
@@ -536,20 +540,21 @@ activate them; use package `imports` instead. This does not prohibit unrelated
 project skills from existing in your checkout.
 
 Scalar contracts and existing single-contract invocations remain supported.
-The published/pinned routes retain scalar `apm-contract-run/0.1` and
-multi-output `apm-contract-run/0.2` records. Current 0.4.0 source uses
-`apm-contract-run/0.3` for both. Consumers of records should inspect the schema
-instead of assuming every delivery is one file. Existing runs, snapshots and
-artifact paths are not migrated or rewritten.
+Historical v0.3.2 downloads and the pinned source route retain scalar
+`apm-contract-run/0.1` and multi-output `apm-contract-run/0.2` records. Current
+v0.4.0 source and downloads use leaf schema `apm-contract-run/0.3` for both and
+factory schema `apmx-contract-chain/0.2`. Consumers of records should inspect
+the schema instead of assuming every delivery is one file. Existing runs,
+snapshots and artifact paths are not migrated or rewritten.
 
 Factories infer ordering from declared files; artifact tools edit private source
 copies rather than overwriting caller source files. A complete local handoff needs
 every declared output, passing
 required checks, intact inventory and consent. For automation, pass both
 `--allow-host-access` and `--allow-unproven-inputs`. Native execution remains
-unsandboxed. Published/pinned runs remain **UNPROVEN / exit 21**, even when
-checks pass; current 0.4.0 source requires complete validated evidence for
-**COMPLETE / exit 0**. Behave remains an
+unsandboxed. Historical v0.3.2 and pinned runs remain **UNPROVEN / exit 21**,
+even when checks pass; v0.4.0 source and downloads require complete validated
+evidence for **COMPLETE / exit 0**. Behave remains an
 optional checker prerequisite for the software-factory example, not an APMX
 requirement.
 
@@ -604,9 +609,9 @@ apmx handoff.contract.md --on copilot --allow-host-access
 
 Only the disposable contract copy is adjusted to use the selected native Python.
 The source checkout stays unchanged. A completed run with passing checks returns
-**21** on the published/pinned routes, or **0 / COMPLETE** on current 0.4.0
-source. On 0.4.0 source, exit 21 is not success; on v0.3.2, inspect the record's
-completeness and exact check/output evidence to distinguish successful work
-from incomplete execution.
+**0 / COMPLETE** on v0.4.0 source and downloads, or **21** on the historical
+v0.3.2/pinned routes. On v0.4.0, exit 21 is not success; on v0.3.2, inspect the
+record's completeness and exact check/output evidence to distinguish successful
+work from incomplete execution.
 Inspect all required
 outputs/checks and the printed record, not just the exit code.

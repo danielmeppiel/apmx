@@ -268,11 +268,11 @@ Host-access-only keeps the strict handoff policy; it does not grant an additiona
 permission. Existing single-contract consent behavior is unchanged.
 
 The local exception never changes a leaf outcome or certifies native isolation.
-Current 0.4.0 source separates COMPLETE/0 execution from unproven native assurance;
-published v0.3.2 and the historical source pin keep their UNPROVEN/21 outcomes.
-See [record-version migration](results.md). Every required check must pass on the retained subject; missing output,
-undecided checks, rejection, changed bytes and failed cleanup still block
-dependent execution.
+Current v0.4.0 source and downloads separate COMPLETE/0 execution from unproven
+native assurance; historical v0.3.2 and the source pin keep their UNPROVEN/21
+outcomes. See [record-version migration](results.md). Every required check must
+pass on the retained subject; missing output, undecided checks, rejection,
+changed bytes and failed cleanup still block dependent execution.
 
 The native adapter cannot observe a complete read set, so chained producers run
 afresh. Existing output files and modification times never authorize reuse.

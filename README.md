@@ -8,12 +8,13 @@ that must pass before another factory task can use them.**
 Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
-**Experimental v0.3.2 prebuilt downloads are available.**
-[Download the release](https://github.com/danielmeppiel/apmx/releases/tag/v0.3.2)
-and follow the [native installation guide](docs/install.md#install-a-prebuilt-archive),
-then [set up and run the factory](examples/contracts/software-factory/README.md#set-up).
-The [pinned source route](docs/install.md#run-the-current-source-checkout)
-remains available as a fallback.
+**The experimental v0.4.0 release page is the native download location.**
+[Use its prebuilt assets](https://github.com/danielmeppiel/apmx/releases/tag/v0.4.0)
+after the archives, checksums and manifest are listed, then follow the
+[native installation guide](docs/install.md#install-a-prebuilt-archive) and
+[set up and run the factory](examples/contracts/software-factory/README.md#set-up).
+Until those assets appear, use the
+[pinned source route](docs/install.md#run-the-current-source-checkout).
 Current harness support is **native GitHub Copilot CLI only**; authenticate
 with Copilot before execution.
 
@@ -123,11 +124,12 @@ APMX does not automatically repair or resume the factory.
 
 **Local execution is not a sandbox.** Agents and checks can use host files,
 network and logins; model usage may cost money. Passing checks does not certify
-isolation. **Current source (0.4.0)** returns **COMPLETE (exit 0)** only after
-all declared outputs are retained, every required check passed and evidence is finalized.
+isolation. **Current v0.4.0 source and downloads** return **COMPLETE (exit 0)**
+only after all declared outputs are retained, every required check passed and
+evidence is finalized.
 Missing output, incomplete checks and policy/consent refusals remain nonzero.
-The published **v0.3.2 downloads and pinned historical demo still return
-UNPROVEN (exit 21)** even when work completes; they have not been rebuilt.
+The historical **v0.3.2 downloads and pinned demo still return UNPROVEN
+(exit 21)** even when work completes; they are not rebuilt or reused by v0.4.0.
 See [result and record migration](docs/results.md).
 
 ## Go further

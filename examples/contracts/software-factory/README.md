@@ -11,11 +11,11 @@ Both pricing and checkout totals must agree.
 
 ## Set up
 
-Install the [prebuilt v0.3.2 release](../../../docs/install.md#install-a-prebuilt-archive)
-and complete its
+After the v0.4.0 assets are listed, install the
+[prebuilt release](../../../docs/install.md#install-a-prebuilt-archive) and
+complete its
 [example checker setup](../../../docs/install.md#example-tools-for-a-native-installation);
-the bundle supplies APMX and APM, not this example's checker tools. Alternatively,
-use the
+the bundle supplies APMX and APM, not this example's checker tools. Until then, use the
 [pinned source fallback](../../../docs/install.md#run-the-current-source-checkout)
 with backend provisioning and the `factory` extra. Old v0.1/v0.2 archives remain
 withheld.
@@ -351,10 +351,11 @@ the unchanged baseline or an incorrect `> 5000` threshold; supplied acceptance
 rejects both even when generated tests make no useful assertion.
 
 The observed run above supplements the deterministic suite; neither is
-production certification or permission to merge/deploy. The published v0.3.2
-binaries, pinned source and historical observation remain **UNPROVEN / 21**.
-Current 0.4.0 source returns **COMPLETE / 0** only after all four contracts,
-six checks and five artifacts have complete validated, finalized evidence.
+production certification or permission to merge/deploy. Historical v0.3.2
+binaries, the pinned source and historical observation remain **UNPROVEN / 21**.
+Current v0.4.0 source and downloads return **COMPLETE / 0** only after all four
+contracts, six checks and five artifacts have complete validated, finalized
+evidence.
 Exit `21` still means noncomplete work or refused admission; inspect the
 [versioned record](../../../docs/results.md). A rejected check
 returns `20`, operational failure returns `22`, and preview returns `0`.

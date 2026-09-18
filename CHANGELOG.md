@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-09-18)
 
 - Separate operational COMPLETE (exit 0) from native assurance. Completion
   requires all declared outputs retained, every exact required check passed,
@@ -16,8 +16,9 @@
   modes, with PASS/FAIL labels, artifact/check counts, copyable paths and
   one pre-execution local-access/cost disclosure. Retain routine narration
   and checker details without hiding live progress or failure diagnostics.
-- Preserve published v0.3.2 downloads and historical demo behavior. This
-  source change does not rebuild or release native assets.
+- Publish fresh v0.4.0 native bundles from this release source. Historical
+  v0.3.2 downloads and the pinned demo remain unchanged with UNPROVEN/21
+  outcomes; no v0.3.2 binary, asset or manifest is reused.
 - Put factory work before consent: list every declared artifact and planned
   check with literal counts and execution-matching contract names. Disclose
   local access, package installation and cost once, immediately before the
