@@ -229,8 +229,12 @@ class SmokeFixtureTests(unittest.TestCase):
                     for event in events
                     if event["type"] == "assistant.message_start"
                 }
+                expected_phases = {"commentary", "analysis"}
+                if mode in {"pass", "reject"}:
+                    expected_phases.add("final_answer")
                 self.assertEqual(
-                    phases, set() if mode == "quiet" else {"commentary", "analysis", "final_answer"}
+                    phases,
+                    set() if mode == "quiet" else expected_phases,
                 )
                 if mode == "quiet":
                     self.assertEqual(len(events), 1)
@@ -317,7 +321,7 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertIn("completed after acknowledgement", result.stdout)
             self.assertTrue((root / "gate").is_file())
 
-    def test_live_actor_waits_for_narration_acknowledgement(self):
+    def test_live_actor_completion_does_not_depend_on_public_narration_delivery(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             env = smoke.isolated_env(root, root / "tools")
@@ -334,21 +338,50 @@ class SmokeFixtureTests(unittest.TestCase):
                 text=True,
             )
             try:
-                for _ in range(3):
-                    event = json.loads(process.stdout.readline())
-                    self.assertEqual(event["data"]["messageId"], "commentary")
-                self.assertIsNone(process.poll())
-                self.assertFalse((root / "handoff.json").exists())
-                (root / "gate").write_text("observed\n")
                 stdout, stderr = process.communicate(timeout=5)
                 self.assertEqual(process.returncode, 0, stderr)
+                events = [json.loads(line) for line in stdout.splitlines()]
+                public = [
+                    event["data"]["content"]
+                    for event in events
+                    if event["type"] == "assistant.message"
+                    and event["data"].get("phase") in {"commentary", "final_answer"}
+                ]
+                self.assertEqual(
+                    public,
+                    ["Hermetic fixture progress.\n", "Hermetic fixture finished.\n"],
+                )
                 self.assertEqual(json.loads(stdout.splitlines()[-1])["type"], "result")
+                self.assertEqual(json.loads((root / "handoff.json").read_text()), {
+                    "source": "caller",
+                    "value": 7,
+                })
+                self.assertFalse((root / "gate").exists())
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.wait(timeout=5)
                 process.stdout.close()
                 process.stderr.close()
+
+    def test_actor_transcript_allows_package_skill_progress_without_weakening_tool_identity(self):
+        skill = (
+            "  Copilot (untrusted) > Tool started: skill\n"
+            "  Copilot (untrusted) > Tool completed\n"
+        )
+        progress = "  Copilot (untrusted) > Hermetic fixture progress.\n"
+        finished = "  Copilot (untrusted) > Hermetic fixture finished.\n"
+        view = (
+            "  Copilot (untrusted) > Tool started: view\n"
+            "  Copilot (untrusted) > Tool completed\n"
+        )
+        smoke.require_actor_transcript(skill + progress + view + finished, "pass")
+        smoke.require_actor_transcript(skill + progress, "halt")
+        smoke.require_actor_transcript(skill, "quiet")
+        with self.assertRaisesRegex(AssertionError, "Input tool progress"):
+            smoke.require_actor_transcript(skill + progress + finished, "pass")
+        with self.assertRaisesRegex(AssertionError, "starts and completions"):
+            smoke.require_actor_transcript(skill + progress + "Tool started: view\n" + finished, "pass")
 
     def test_lingering_fixture_is_detected_and_fixture_stop_cleans_it(self):
         with tempfile.TemporaryDirectory() as temporary:

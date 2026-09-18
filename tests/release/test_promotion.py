@@ -20,7 +20,7 @@ from tests.release.test_backend import add_backend_fixture
 
 class PromotionTests(unittest.TestCase):
     def test_current_source_notes_separate_execution_and_assurance_versions(self):
-        notes = promotion.release_notes("0.4.0", "a" * 40)
+        notes = promotion.release_notes("0.4.1", "a" * 40)
         self.assertIn("COMPLETE (0)", notes)
         self.assertIn("apm-contract-run/0.3", notes)
         self.assertIn("apmx-contract-chain/0.2", notes)
@@ -29,6 +29,12 @@ class PromotionTests(unittest.TestCase):
         self.assertIn("--allow-host-access --allow-unproven-inputs", notes)
         self.assertNotIn("Passing native checks yield UNPROVEN (21)", notes)
         self.assertNotIn("records retain `apm-contract-run/0.1`", notes)
+
+    def test_v041_notes_preserve_failed_v040_candidate_truth(self):
+        notes = promotion.release_notes("0.4.1", "a" * 40)
+        self.assertIn("No GitHub release or native assets were published for v0.4.0", notes)
+        self.assertIn("immutable public source tag remains unchanged", notes)
+        self.assertIn("fresh builds, not repacked or relabeled v0.4.0 artifacts", notes)
 
     def test_published_notes_preserve_legacy_outcome_and_record_semantics(self):
         notes = promotion.release_notes("0.3.2", "b" * 40)

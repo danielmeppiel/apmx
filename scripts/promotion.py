@@ -147,6 +147,20 @@ def release_notes(version: str, commit: str) -> str:
             "in v0.3.1. The v0.3.0 and v0.3.1 tags and archive evidence remain unchanged. "
             "These v0.3.2 archives are fresh builds, not repacked or relabeled earlier artifacts.\n\n"
         )
+    if version == "0.4.1":
+        patch_notes = (
+            "## Changes in v0.4.1\n\n"
+            "Align the hermetic native smoke actor with the current Copilot event and "
+            "presentation protocol, proving truthful public progress, completion and tool "
+            "observations from the retained transcript without requiring successful leaf "
+            "narration before native completion. Make the presentation regression portable "
+            "across LF and CRLF output streams without weakening byte-identical transcript "
+            "or finalization checks.\n\n"
+            "No GitHub release or native assets were published for v0.4.0. Its immutable "
+            "public source tag remains unchanged and records the failed release-preparation "
+            "candidate. These v0.4.1 archives are fresh builds, not repacked or relabeled "
+            "v0.4.0 artifacts.\n\n"
+        )
     return (
         f"Standalone apmx {version}; candidate commit `{commit}`.\n\n{patch_notes}"
         "## What's new since v0.2.0\n\n"

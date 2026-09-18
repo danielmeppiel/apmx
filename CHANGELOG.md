@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 - 2026-09-18
+
+- Make the native release smoke fixture follow the current Copilot event and
+  presentation protocol: public progress, completion and tool observations are
+  proven from the retained transcript without requiring successful leaf
+  narration to appear before native completion.
+- Make transcript presentation assertions portable across LF and CRLF output
+  streams while preserving byte-identical retained transcript and finalization
+  checks.
+- Publish v0.4.1 as the patch release candidate. No GitHub release or native
+  assets were published for v0.4.0; its immutable public tag remains the source
+  record of the failed release-preparation candidate.
+
 ## 0.4.0 (2026-09-18)
 
 - Separate operational COMPLETE (exit 0) from native assurance. Completion
@@ -16,9 +29,10 @@
   modes, with PASS/FAIL labels, artifact/check counts, copyable paths and
   one pre-execution local-access/cost disclosure. Retain routine narration
   and checker details without hiding live progress or failure diagnostics.
-- Publish fresh v0.4.0 native bundles from this release source. Historical
-  v0.3.2 downloads and the pinned demo remain unchanged with UNPROVEN/21
-  outcomes; no v0.3.2 binary, asset or manifest is reused.
+- Prepare fresh v0.4.0 native bundles from this release source. Release
+  preparation failed before publication, so no v0.4.0 GitHub release or native
+  assets exist. Historical v0.3.2 downloads and the pinned demo remain unchanged
+  with UNPROVEN/21 outcomes; no v0.3.2 binary, asset or manifest is reused.
 - Put factory work before consent: list every declared artifact and planned
   check with literal counts and execution-matching contract names. Disclose
   local access, package installation and cost once, immediately before the

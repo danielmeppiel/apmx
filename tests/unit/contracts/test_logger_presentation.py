@@ -308,20 +308,30 @@ def test_transcript_is_identical_across_visibility_layout_encoding_and_finalizat
     for verbose in (False, True):
         for mode in ("styled", "no_color", "pipe", "ci", "dumb"):
             for width in (40, 80, 120):
-                directory = tmp_path / f"{verbose}-{mode}-{width}"
-                directory.mkdir()
-                with _terminal(monkeypatch, width=width, mode=mode, encoding="cp1252") as terminal:
-                    logger = ContractLogger(verbose=verbose)
-                    logger.attach_run("run", directory)
-                    _replay(logger)
-                    logger.close()
-                    path = directory / "transcript.log"
-                    frozen = path.read_bytes()
-                    _event(logger, "finished", at=20, result=_run(directory))
-                    logger.close()
-                    assert path.read_bytes() == frozen
-                    transcripts.append(frozen)
-                    outputs[verbose, mode, width] = click.unstyle(terminal.text)
+                for newline in (None, "\n", "\r\n"):
+                    newline_name = "native" if newline is None else repr(newline)
+                    directory = tmp_path / f"{verbose}-{mode}-{width}-{newline_name}"
+                    directory.mkdir()
+                    with _terminal(
+                        monkeypatch,
+                        width=width,
+                        mode=mode,
+                        encoding="cp1252",
+                        newline=newline,
+                    ) as terminal:
+                        logger = ContractLogger(verbose=verbose)
+                        logger.attach_run("run", directory)
+                        _replay(logger)
+                        logger.close()
+                        path = directory / "transcript.log"
+                        frozen = path.read_bytes()
+                        _event(logger, "finished", at=20, result=_run(directory))
+                        logger.close()
+                        assert path.read_bytes() == frozen
+                        transcripts.append(frozen)
+                        outputs[verbose, mode, width, newline] = click.unstyle(
+                            terminal.text
+                        ).replace("\r\n", "\n")
     assert len(set(transcripts)) == 1
     text = transcripts[0].decode("ascii")
     assert "  Copilot (untrusted) > Tool started: view\n" in text
@@ -342,13 +352,15 @@ def test_transcript_is_identical_across_visibility_layout_encoding_and_finalizat
     ):
         assert text.count(f"[>] {label}\n") == 1
         if label != "Running Copilot":
-            assert f"[>] {label}\n" not in outputs[False, "pipe", 80]
-            assert f"[>] {label}\n" in outputs[True, "pipe", 80]
+            for newline in (None, "\n", "\r\n"):
+                assert f"[>] {label}\n" not in outputs[False, "pipe", 80, newline]
+                assert f"[>] {label}\n" in outputs[True, "pipe", 80, newline]
     for width in (40, 80, 120):
-        assert "still running; 5s elapsed" in outputs[False, "pipe", width]
-        assert "still running; 5s elapsed" not in outputs[True, "pipe", width]
-        assert "Routine narration" not in outputs[False, "pipe", width]
-        assert "Routine narration" in outputs[True, "pipe", width]
+        for newline in (None, "\n", "\r\n"):
+            assert "still running; 5s elapsed" in outputs[False, "pipe", width, newline]
+            assert "still running; 5s elapsed" not in outputs[True, "pipe", width, newline]
+            assert "Routine narration" not in outputs[False, "pipe", width, newline]
+            assert "Routine narration" in outputs[True, "pipe", width, newline]
 
 
 def test_hidden_stdout_and_retained_telemetry_do_not_starve_human_heartbeat(capsys):

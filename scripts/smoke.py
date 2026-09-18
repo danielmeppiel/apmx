@@ -494,6 +494,7 @@ def prepare_consumer_lock(
     advertised = subprocess.run(
         [git, "ls-remote", url, "refs/tags/v9"], cwd=root, env=env,
         capture_output=True, text=True, timeout=30,
+        check=False,
     )
     require(
         advertised.returncode == 0 and advertised.stdout.strip() == f"{revision}\trefs/tags/v9",
@@ -618,6 +619,32 @@ def run_binary(binary: Path, args: list[str], caller: Path, env: dict[str, str],
     return result
 
 
+def require_actor_transcript(transcript: str, mode: str) -> None:
+    require(not any(marker in transcript for marker in PRIVATE_MARKERS), "Private payload retained")
+    if mode == "quiet":
+        require("Hermetic fixture progress." not in transcript, "Quiet actor invented narration")
+        require("Hermetic fixture finished." not in transcript, "Quiet actor invented completion")
+    else:
+        require(
+            transcript.count("Hermetic fixture progress.") == 1,
+            "Public progress event was not consumed exactly once",
+        )
+        finished = transcript.count("Hermetic fixture finished.")
+        require(
+            finished == (0 if mode in {"halt", "linger"} else 1),
+            "Public completion event did not match fixture output behavior",
+        )
+    view_starts = transcript.count("Tool started: view")
+    require(
+        view_starts == (0 if mode in {"halt", "linger", "quiet"} else 1),
+        "Input tool progress did not match fixture output behavior",
+    )
+    require(
+        transcript.count("Tool completed") == transcript.count("Tool started:"),
+        "Tool starts and completions were not consumed consistently",
+    )
+
+
 def child_running(pid: int) -> bool:
     require(pid > 0, "Invalid fixture child PID")
     if os.name == "nt":
@@ -695,8 +722,6 @@ def _run_case(
         "APMX_CHILD_HEARTBEAT": str(root / "child.heartbeat"),
         "APMX_CHILD_STOP": str(root / "child.stop"),
     })
-    if mode == "pass":
-        env["APMX_STREAM_GATE"] = str(root / "actor-stream-observed")
     caller = root / "caller"
     if mixed_imports:
         caller = root / ("caller-long-" + "x" * max(1, 160 - len(str(root)) - 13))
@@ -808,15 +833,6 @@ def _run_case(
     require(0 <= record["producer"]["elapsed_seconds"] < 90, "Producer execution was not bounded")
     require(record["producer"]["returncode"] == (7 if mode == "halt" else 0), "Native process exit")
     require(record["native_reported_exit_code"] == (7 if mode == "halt" else 0), "Native envelope exit")
-    if mode == "quiet":
-        require("Hermetic fixture progress." not in result.stdout, "Quiet actor invented narration")
-    else:
-        require(
-            "Hermetic fixture progress." in result.stdout and "Hermetic fixture finished." in result.stdout,
-            "Public phase/delta narration was not surfaced",
-        )
-    if mode == "pass":
-        require(Path(env["APMX_STREAM_GATE"]).exists(), "Public narration was buffered until completion")
     if mode in {"halt", "linger"}:
         require(bool(record["result"]["stop_reason"]), "Operational halt needs a stop reason")
         require(record["result"]["checks"] == [], "Failed producer must not run checks")
@@ -967,7 +983,7 @@ def _run_case(
     require(record["transcript"]["sha256"] == digest(transcript_path), "Transcript digest")
     require(record["transcript"]["size"] == transcript_path.stat().st_size, "Transcript size")
     transcript = transcript_path.read_text(encoding="utf-8")
-    require(not any(marker in transcript for marker in PRIVATE_MARKERS), "Private payload retained")
+    require_actor_transcript(transcript, mode)
     calls = [json.loads(line) for line in Path(env["APMX_ACTOR_LOG"]).read_text().splitlines()]
     require(sum("-p" in call["argv"] for call in calls) == 1, "Expected exactly one fixture producer")
     return {

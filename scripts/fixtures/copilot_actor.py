@@ -84,14 +84,17 @@ def main():
     phases = (
         ("commentary", "Hermetic fixture progress.\n"),
         ("analysis", "PRIVATE_REASONING_SENTINEL\n"),
-        ("final_answer", "Hermetic fixture finished.\n"),
     )
     if os.environ.get("APMX_ACTOR_TYPOGRAPHY") == "1":
         phases = (
-            ("commentary", "Hermetic fixture progress. "
-             "I\u2019m reading the source IDs and their exact supporting notes now.\n"),
+            (
+                "commentary",
+                (
+                    "Hermetic fixture progress. "
+                    "I\u2019m reading the source IDs and their exact supporting notes now.\n"
+                ),
+            ),
             phases[1],
-            ("final_answer", "Hermetic fixture finished. It\u2019s ready \u2014 done\u2026\n"),
         )
     if mode == "quiet":
         phases = ()
@@ -100,20 +103,14 @@ def main():
         emit("assistant.message_start", messageId=phase, phase=phase, model="fixture-model")
         emit("assistant.message_delta", messageId=phase, deltaContent=text)
         emit("assistant.message", messageId=phase, content=text, phase=phase)
-        if phase == "commentary" and os.environ.get("APMX_STREAM_GATE"):
-            deadline = time.monotonic() + 10
-            while not Path(os.environ["APMX_STREAM_GATE"]).exists():
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("Public narration was not delivered before native completion")
-                time.sleep(0.02)
-    if mode != "quiet":
-        emit(
-            "tool.execution_complete",
-            toolCallId="fixture-tool",
-            success=True,
-            result={"content": "PRIVATE_TOOL_SENTINEL"},
-        )
     if mode not in {"halt", "linger"}:
+        if mode != "quiet":
+            emit(
+                "tool.execution_start",
+                toolName="view",
+                toolCallId="fixture-tool",
+                arguments={"path": "notes.md"},
+            )
         candidate = json.loads(Path("notes.md").read_text(encoding="utf-8"))
         if mode == "reject":
             candidate["value"] = -1
@@ -131,6 +128,31 @@ def main():
         for name in outputs:
             Path(name).write_text(json.dumps(candidate) + "\n", encoding="utf-8")
         Path("checks/check.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+        if mode != "quiet":
+            emit(
+                "tool.execution_complete",
+                toolCallId="fixture-tool",
+                success=True,
+                result={"content": "PRIVATE_TOOL_SENTINEL"},
+            )
+            final = (
+                "Hermetic fixture finished. It\u2019s ready \u2014 done\u2026\n"
+                if os.environ.get("APMX_ACTOR_TYPOGRAPHY") == "1"
+                else "Hermetic fixture finished.\n"
+            )
+            emit(
+                "assistant.message_start",
+                messageId="final_answer",
+                phase="final_answer",
+                model="fixture-model",
+            )
+            emit("assistant.message_delta", messageId="final_answer", deltaContent=final)
+            emit(
+                "assistant.message",
+                messageId="final_answer",
+                content=final,
+                phase="final_answer",
+            )
     if mode == "linger":
         start_child()
     code = 7 if mode == "halt" else 0

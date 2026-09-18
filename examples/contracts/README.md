@@ -87,7 +87,7 @@ build; see [release versus current source](../../docs/install.md#choose-release-
 
 | Outcome | Meaning in this slice |
 | --- | --- |
-| COMPLETE / 0 | Current v0.4.0 source and downloads: all declared work/checks and retained evidence completed and finalized; not isolation or trust. |
+| COMPLETE / 0 | Current v0.4.1 source and downloads: all declared work/checks and retained evidence completed and finalized; not isolation or trust. |
 | REJECTED / 20 | A check returned a failed condition, even if another check was incomplete. |
 | UNPROVEN / 21 | Missing output, incomplete checks, unavailable consent/policy, or strict native handoff refusal. |
 | HALTED / 22 | Execution, cancellation, watchdog, capture or recording stopped the invocation. |
@@ -97,7 +97,7 @@ missing tools and signals are incomplete. No output does not mean `no_change`.
 Every check gets a fresh baseline and the captured artifacts. A patch-aware
 check must apply its patch and test the resulting code in the same invocation;
 changes made by one check are not shared with the next.
-Current v0.4.0 source and downloads return COMPLETE/0 only for complete
+Current v0.4.1 source and downloads return COMPLETE/0 only for complete
 validated evidence. Historical v0.3.2 and the pinned source/demo still return
 `21` even with passing checks. Do not reinterpret their recorded outcomes.
 See [result versions and migration](../../docs/results.md).
