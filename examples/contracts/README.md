@@ -87,7 +87,7 @@ build; see [release versus current source](../../docs/install.md#choose-release-
 
 | Outcome | Meaning in this slice |
 | --- | --- |
-| COMPLETE / 0 | Current 0.4.0 source: all declared work/checks and retained evidence completed and finalized; not isolation or trust. |
+| COMPLETE / 0 | Current v0.4.0 source and downloads: all declared work/checks and retained evidence completed and finalized; not isolation or trust. |
 | REJECTED / 20 | A check returned a failed condition, even if another check was incomplete. |
 | UNPROVEN / 21 | Missing output, incomplete checks, unavailable consent/policy, or strict native handoff refusal. |
 | HALTED / 22 | Execution, cancellation, watchdog, capture or recording stopped the invocation. |

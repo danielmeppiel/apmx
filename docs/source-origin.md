@@ -330,8 +330,8 @@ and resource discovery compatibility.
 Runs deliberately remain under the **caller's** `.apm/runs/<fresh-run-id>/`.
 This is local evidence compatibility, distinct from APM's normal user configuration.
 Historical single-file results retain `apm-contract-run/0.1`; historical
-multiple-artifact results retain `apm-contract-run/0.2`. Current 0.4.0 source
-uses leaf schema `apm-contract-run/0.3` for both and factory schema
+multiple-artifact results retain `apm-contract-run/0.2`. Current v0.4.0 source
+and downloads use leaf schema `apm-contract-run/0.3` for both and factory schema
 `apmx-contract-chain/0.2`, with separate execution and assurance fields.
 An `artifact.files` inventory and aggregate digest describe a multi-file delivery.
 Consumers must recognize the schema and whole inventory, not select its first
