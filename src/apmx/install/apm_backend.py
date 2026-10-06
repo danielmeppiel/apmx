@@ -7,8 +7,10 @@ import json
 import os
 import platform
 import sys
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from apmx.contracts.events import ApmInstallEvent, PreparationScope, PreparationSink
 from apmx.contracts.imports import _read_bytes, read_project_manifest
@@ -140,6 +142,44 @@ def backend_child_env(environ: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def _check_backend_version(
+    executable: Path, stage: Path, env: Mapping[str, str], limits: ContractLimits
+) -> None:
+    """Share the pinned native version check across install and inventory export."""
+    version_output = bytearray()
+    oversized = False
+
+    def receive_version(stream: str, chunk: bytes) -> None:
+        nonlocal oversized
+        if stream != "stdout" or oversized:
+            return
+        if len(version_output) + len(chunk) > 1024:
+            oversized = True
+            version_output.clear()
+        else:
+            version_output.extend(chunk)
+
+    version = supervise_process(
+        ProcessRequest((str(executable), "--version"), stage, 15, env=env),
+        on_bytes=receive_version,
+        limits=limits,
+    )
+    expected = expected_version_output()
+    if (
+        version.returncode != 0
+        or version.stop_reason
+        or version.error
+        or not version.cleanup_confirmed
+        or oversized
+        or version_output.decode("utf-8", errors="replace").removesuffix("\n").removesuffix("\r")
+        != expected
+    ):
+        raise ContractError(
+            "The provisioned APM version/source does not match the bundled pin.",
+            code="apm_backend_identity",
+        )
+
+
 def install(
     stage: Path,
     *,
@@ -182,38 +222,7 @@ def install(
     for name in ("FORCE_COLOR", "CLICOLOR_FORCE", "PY_COLORS"):
         env.pop(name, None)
     env.update(NO_COLOR="1", TERM="dumb", COLUMNS="4096")
-    version_output = bytearray()
-    oversized = False
-
-    def receive_version(stream: str, chunk: bytes) -> None:
-        nonlocal oversized
-        if stream != "stdout" or oversized:
-            return
-        if len(version_output) + len(chunk) > 1024:
-            oversized = True
-            version_output.clear()
-        else:
-            version_output.extend(chunk)
-
-    version = supervise_process(
-        ProcessRequest((str(executable), "--version"), stage, 15, env=env),
-        on_bytes=receive_version,
-        limits=limits,
-    )
-    expected = expected_version_output()
-    if (
-        version.returncode != 0
-        or version.stop_reason
-        or version.error
-        or not version.cleanup_confirmed
-        or oversized
-        or version_output.decode("utf-8", errors="replace").removesuffix("\n").removesuffix("\r")
-        != expected
-    ):
-        raise ContractError(
-            "The provisioned APM version/source does not match the bundled pin.",
-            code="apm_backend_identity",
-        )
+    _check_backend_version(executable, stage, env, limits)
     if on_preparation is not None:
         on_preparation(
             ApmInstallEvent(
@@ -263,6 +272,91 @@ def install(
             )
         )
     return identity
+
+
+def export_cyclonedx(
+    manifest: bytes,
+    lock: bytes,
+    *,
+    expected_backend: Mapping[str, str],
+    limits: ContractLimits | None = None,
+) -> bytes:
+    """Export exact CycloneDX bytes from retained inventory without installation.
+
+    Only owned copies are given to official APM. The caller's captured manifest,
+    lock and execution outcome are never rewritten by this delivery operation.
+    """
+    limits = limits or ContractLimits()
+    if not manifest or not lock or max(len(manifest), len(lock)) > limits.file_bytes:
+        raise ContractError("Retained inventory is missing or oversized.", code="inventory_missing")
+    executable = locate_backend()
+    identity = backend_identity(executable)
+    if identity != dict(expected_backend):
+        raise ContractError(
+            "Inventory export requires the recorded official APM backend.",
+            code="apm_backend_identity",
+        )
+    env = backend_child_env(dict(os.environ))
+    try:
+        with TemporaryDirectory(prefix="apmx-inventory-") as temporary:
+            stage = Path(temporary).resolve()
+            inputs = {"apm.yml": manifest, "apm.lock.yaml": lock}
+            for name, raw in inputs.items():
+                (stage / name).write_bytes(raw)
+            _check_backend_version(executable, stage, env, limits)
+            output = stage / "abom.cdx.json"
+            observed = supervise_process(
+                ProcessRequest(
+                    (
+                        str(executable),
+                        "lock",
+                        "export",
+                        "--format",
+                        "cyclonedx",
+                        "--output",
+                        str(output),
+                    ),
+                    stage,
+                    min(60, limits.attempt_seconds),
+                    env=env,
+                ),
+                on_bytes=lambda _stream, _chunk: None,
+                limits=limits,
+            )
+            if (
+                observed.returncode != 0
+                or observed.stop_reason
+                or observed.error
+                or not observed.cleanup_confirmed
+            ):
+                raise ContractError(
+                    "Official APM inventory export did not complete.",
+                    code="inventory_export_failed",
+                )
+            if backend_identity(executable) != identity or any(
+                _read_bytes(stage / name, maximum=limits.file_bytes, root=stage) != raw
+                for name, raw in inputs.items()
+            ):
+                raise ContractError(
+                    "The backend or frozen inventory changed during export.",
+                    code="inventory_changed",
+                )
+            raw = _read_bytes(output, maximum=limits.file_bytes, root=stage)
+            document = json.loads(raw)
+            if (
+                not isinstance(document, dict)
+                or document.get("bomFormat") != "CycloneDX"
+                or document.get("specVersion") != "1.5"
+            ):
+                raise ValueError("Unexpected official inventory format.")
+        return raw
+    except (OSError, ValueError, RecursionError) as exc:
+        if isinstance(exc, ContractError):
+            raise
+        raise ContractError(
+            "Official APM inventory could not be exported or retained.",
+            code="inventory_export_failed",
+        ) from exc
 
 
 def snapshot_manifest(original: Path, stage: Path, limits: ContractLimits) -> bool:

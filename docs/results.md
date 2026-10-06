@@ -47,6 +47,34 @@ leaf headlines are not printed ahead of shared preparation cleanup, even in
 verbose mode. This is an in-process lifecycle check, not protection against
 arbitrary concurrent modification by the same user.
 
+## Read-only retained-evidence support
+
+Development tooling can use
+`apmx.contracts.records.load_completed_result(record_path)` to read a completed
+leaf, factory or repair-controller record after temporary package sources have
+been removed. It reuses the completion boundary and checker assessment rules,
+checks retained declarations and bytes, and preserves controller history.
+Missing checks, changed artifacts, inconsistent outcomes and references outside
+the caller's evidence storage are refused. It does not execute a model, resolve
+dependencies, rerun checks, admit a new handoff or rewrite the original result.
+An incomplete historical execution remains incomplete.
+
+`apmx.install.apm_backend.export_cyclonedx(manifest, lock, expected_backend=...)`
+exports a retained manifest/lock pair through the exact recorded official APM
+backend. It passes private copies to `apm lock export --format cyclonedx`,
+without an install or dependency-resolution step, and returns the exact
+CycloneDX 1.5 bytes. Changed inputs/backend identity, process errors and
+unconfirmed cleanup are explicit export failures, not revised execution
+outcomes. The BOM describes supplied inventory; it is not an input allegedly
+read by the model, nor proof that every installed capability was used.
+
+These are export building blocks, not yet an automatic portable Evidence
+Package or a new CLI command. Canonical records and transcripts remain local
+evidence and may contain private paths or diagnostic excerpts. Reading them
+does not sanitize them for sharing, authenticate their author, or establish
+isolation. An unsigned copied record with recomputed hashes is not a trusted
+attestation.
+
 ## Record versions
 
 Current development additionally records the versioned

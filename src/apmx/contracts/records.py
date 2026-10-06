@@ -22,6 +22,7 @@ from .models import (
     ContractError,
     ContractLimits,
     FileEntry,
+    LeafContract,
     LeafPlan,
     Outcome,
     ProcessObservation,
@@ -446,6 +447,62 @@ def rejected_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, .
     return _assessed_inputs(plan, result, rejected=True)
 
 
+def _validate_assessed_outputs(
+    contract: LeafContract,
+    result: RunResult,
+    data: dict,
+    resources_digest: str,
+    *,
+    rejected: bool = False,
+) -> None:
+    """Validate declarations, producer completion and exact observed checker subjects."""
+    expected = tuple((check.name, check.command) for check in contract.checks)
+    actual = tuple((check.name, check.command) for check in result.checks)
+    if (
+        result.artifact is None
+        or not result.checks
+        or (len(actual) < len(expected) and actual == expected[: len(actual)])
+    ):
+        raise ContractError(
+            "Required output/checks are incomplete; no handoff.",
+            code="incomplete_checks",
+            outcome=Outcome.UNPROVEN,
+        )
+    if actual != expected:
+        raise ValueError("Unexpected or duplicated required check identities.")
+    artifact = result.artifact
+    if tuple(item.relative_path for item in artifact_files(artifact)) != contract.outputs:
+        raise ValueError("Output differs from the declaration.")
+    if isinstance(contract.produces, str) != isinstance(artifact, Artifact):
+        raise ValueError("Output version differs from the declaration.")
+    if not _same_json(data["checks"], result.checks) or not _same_json(data["artifact"], artifact):
+        raise ValueError("Duplicated artifact/check observations differ.")
+    producer = ProcessObservation(**data["producer"])
+    if (
+        type(producer.returncode) is not int
+        or normalize_check(producer) != 0
+        or producer.cleanup_confirmed is not True
+        or result.stop_reason is not None
+        or data["native_completion_observed"] is not True
+        or not _same_json(data.get("native_reported_exit_code"), None)
+        and not _same_json(data.get("native_reported_exit_code"), 0)
+    ):
+        raise ValueError("Producer completion or cleanup is unconfirmed.")
+    for check in result.checks:
+        if check.subject_digest != artifact.sha256 or check.resources_digest != resources_digest:
+            raise ValueError("A check assessed different bytes.")
+        if type(check.normalized) is not int or check.normalized != normalize_check(check.process):
+            raise ValueError("Raw and normalized check observations disagree.")
+        if check.normalized not in ((0, 1) if rejected else (0,)):
+            raise ContractError(
+                "Required checks did not all pass; no handoff.",
+                code="incomplete_checks",
+                outcome=Outcome.UNPROVEN,
+            )
+        if type(check.process.returncode) is not int or check.process.cleanup_confirmed is not True:
+            raise ValueError("Check completion/cleanup is unconfirmed.")
+
+
 def _assessed_inputs(
     plan: LeafPlan, result: RunResult, *, rejected: bool = False
 ) -> tuple[RetainedInput, ...]:
@@ -519,41 +576,6 @@ def _assessed_inputs(
                 code=result.stop_reason or "upstream_rejected",
                 outcome=result.outcome,
             )
-        expected = tuple((check.name, check.command) for check in plan.contract.checks)
-        actual = tuple((check.name, check.command) for check in result.checks)
-        if (
-            result.artifact is None
-            or not result.checks
-            or (len(actual) < len(expected) and actual == expected[: len(actual)])
-        ):
-            raise ContractError(
-                "Required output/checks are incomplete; no handoff.",
-                code="incomplete_checks",
-                outcome=Outcome.UNPROVEN,
-            )
-        if actual != expected:
-            raise ValueError("Unexpected or duplicated required check identities.")
-        artifact = result.artifact
-        files = artifact_files(artifact)
-        if tuple(item.relative_path for item in files) != plan.contract.outputs:
-            raise ValueError("Output differs from the declaration.")
-        if isinstance(plan.contract.produces, str) != isinstance(artifact, Artifact):
-            raise ValueError("Output version differs from the declaration.")
-        if not _same_json(data["checks"], result.checks) or not _same_json(
-            data["artifact"], artifact
-        ):
-            raise ValueError("Duplicated artifact/check observations differ.")
-        producer = ProcessObservation(**data["producer"])
-        if (
-            type(producer.returncode) is not int
-            or normalize_check(producer) != 0
-            or producer.cleanup_confirmed is not True
-            or result.stop_reason is not None
-            or data["native_completion_observed"] is not True
-            or not _same_json(data.get("native_reported_exit_code"), None)
-            and not _same_json(data.get("native_reported_exit_code"), 0)
-        ):
-            raise ValueError("Producer completion or cleanup is unconfirmed.")
         inventory = plan.input_inventory
         if inventory is None:
             inventory = inspect_workspace(plan)
@@ -568,26 +590,9 @@ def _assessed_inputs(
             or baseline.get("project_digest") != _digest(project_inventory(plan, inventory))
         ):
             raise ValueError("Recorded captured inputs/resources differ from admission.")
-        for check in result.checks:
-            if check.subject_digest != artifact.sha256 or check.resources_digest != _digest(
-                resources
-            ):
-                raise ValueError("A check assessed different bytes.")
-            if type(check.normalized) is not int or check.normalized != normalize_check(
-                check.process
-            ):
-                raise ValueError("Raw and normalized check observations disagree.")
-            if check.normalized not in ((0, 1) if rejected else (0,)):
-                raise ContractError(
-                    "Required checks did not all pass; no handoff.",
-                    code="incomplete_checks",
-                    outcome=Outcome.UNPROVEN,
-                )
-            if (
-                type(check.process.returncode) is not int
-                or check.process.cleanup_confirmed is not True
-            ):
-                raise ValueError("Check completion/cleanup is unconfirmed.")
+        _validate_assessed_outputs(
+            plan.contract, result, data, _digest(resources), rejected=rejected
+        )
         for item in inventory:
             _, observed = _read(directory / "baseline", item.relative_path, item.size)
             if observed != item:
@@ -598,7 +603,7 @@ def _assessed_inputs(
             raise ValueError("Finalized transcript changed.")
         bindings = tuple(
             RetainedInput(item, directory / "record.json", digest, result.controller)
-            for item in files
+            for item in artifact_files(result.artifact)
         )
         validate_binding(bindings[0], plan.project_root, plan.limits)
         return bindings
@@ -902,6 +907,160 @@ def _controller_plan(plan: LeafPlan, result: RunResult) -> LeafPlan:
         if isinstance(exc, ContractError):
             raise
         raise ContractError("Controller capture changed.", code="record_changed") from exc
+
+
+def _decoded_outcome(raw: dict) -> Outcome:
+    value = Outcome[raw["name"]]
+    if not _same_json(raw, value):
+        raise ValueError("Outcome name, type and exit code disagree.")
+    return value
+
+
+def _decoded_run(raw: dict) -> RunResult:
+    """Decode values only; the existing completion boundary remains the authority."""
+    values = dict(raw)
+    artifact = values["artifact"]
+    if artifact is not None:
+        if "files" in artifact:
+            artifact = ArtifactSet(
+                **{
+                    **artifact,
+                    "files": tuple(
+                        Artifact(**{**item, "path": Path(item["path"])})
+                        for item in artifact["files"]
+                    ),
+                }
+            )
+        else:
+            artifact = Artifact(**{**artifact, "path": Path(artifact["path"])})
+    checks = []
+    for check in values["checks"]:
+        process = dict(check["process"])
+        for key in ("signals", "residual_group"):
+            process[key] = tuple(process[key])
+        checks.append(CheckObservation(**{**check, "process": ProcessObservation(**process)}))
+    values.update(
+        run_directory=Path(values["run_directory"]),
+        outcome=_decoded_outcome(values["outcome"]),
+        artifact=artifact,
+        checks=tuple(checks),
+        observed_models=tuple(values["observed_models"]),
+        retained_provenance=tuple(FileEntry(**item) for item in values["retained_provenance"]),
+        native_exports=tuple(FileEntry(**item) for item in values.get("native_exports", ())),
+    )
+    if values.get("controller") is not None:
+        reference = values["controller"]
+        values["controller"] = RecordReference(**{**reference, "path": Path(reference["path"])})
+    return RunResult(**values)
+
+
+def _validate_loaded_assessment(result: RunResult) -> None:
+    from .frontend import parse_contract
+    from .workspace import _digest
+
+    directory = result.run_directory
+    data, _ = _record_bytes(directory / "record.json", ContractLimits())
+    contract = parse_contract(directory / "source/contract.contract.md")
+    inventory = tuple(FileEntry(**item) for item in data["baseline"]["files"])
+    resources = tuple(item for item in inventory if item.relative_path.startswith("checks/"))
+    caller = directory.parents[2]
+    if (
+        directory != caller / ".apm/runs" / result.run_id
+        or data["caller_root"] != str(caller)
+        or data["run_id"] != result.run_id
+        or data["attempt_id"] != result.run_id + "/1"
+        or data["profile"] != "native-advisory"
+        or data["source"]["sha256"] != contract.source_digest
+        or data["baseline"]["digest"] != _digest(inventory)
+        or data["baseline"]["resources_digest"] != _digest(resources)
+        or not _same_json(data["advisory_consent"], result.consent_source)
+        or any(data[key] is not None for key in ("child_pid", "child_pgid", "active_check"))
+        or any(data["controls"][key] != "unavailable" for key in ("isolation", "spend_cap"))
+        or bool(contract.budget) != (result.controller is not None)
+    ):
+        raise ValueError("Retained source, baseline or invocation observations disagree.")
+    validate_consent_source(result.consent_source)
+    _validate_assessed_outputs(contract, result, data, _digest(resources))
+    if result.controller is not None:
+        controller = _controller_document(
+            result.controller, caller, result.run_id, ContractLimits()
+        )
+        if not _same_json(controller["budget"], contract.budget):
+            raise ValueError("Retained controller budget differs from its declaration.")
+
+
+def load_completed_result(path: Path) -> RunResult | ChainResult:
+    """Read a finalized local result without resolving sources or changing outcomes.
+
+    This is an integrity-checked local projection, not fresh admission, replay,
+    signature verification or a claim of native isolation. Exporters must not
+    substitute parsing their own success booleans for this boundary.
+    """
+    from .workspace import _path
+
+    limits = ContractLimits()
+    try:
+        path = path.absolute()
+        caller = path.parents[3]
+        _path(caller, path.relative_to(caller).as_posix())
+        data, digest = _record_bytes(path, limits)
+        schema = data.get("schema")
+        if schema == CHAIN_SCHEMA:
+            raw = data["result"]
+            result = ChainResult(
+                **{
+                    **raw,
+                    "record_path": Path(raw["record_path"]),
+                    "outcome": _decoded_outcome(raw["outcome"]),
+                    "runs": tuple(_decoded_run(run) for run in raw["runs"]),
+                }
+            )
+            if result.record_path != path or not 1 <= len(result.runs) <= limits.chain_contracts:
+                raise ValueError("Factory record location/count differs.")
+        elif schema in (RUN_SCHEMA, CONTROLLER_SCHEMA):
+            result = _decoded_run(data["result"])
+            if schema == CONTROLLER_SCHEMA:
+                result = replace(result, controller=RecordReference(path, digest))
+            else:
+                if result.run_directory / "record.json" != path:
+                    raise ValueError("Leaf record location differs.")
+                if data.get("controller") is not None:
+                    parent = Path(data["controller"]["record"])
+                    if (
+                        parent.name != "record.json"
+                        or parent.parent.parent != caller / ".apm/controllers"
+                    ):
+                        raise ValueError("Controller is not caller-owned.")
+                    _path(caller, parent.relative_to(caller).as_posix())
+                    _, parent_digest = _record_bytes(parent, limits)
+                    result = replace(result, controller=RecordReference(parent, parent_digest))
+        else:
+            raise ContractError("Unsupported retained record version.", code="record_version")
+        if result.outcome is not Outcome.COMPLETE:
+            raise ContractError(
+                "The retained execution is not complete; its outcome remains unchanged.",
+                code="incomplete_evidence",
+            )
+        runs = result.runs if isinstance(result, ChainResult) else (result,)
+        for run in runs:
+            if (
+                run.run_directory != caller / ".apm/runs" / run.run_id
+                or run.run_directory.name != run.run_id
+            ):
+                raise ValueError("Retained child is not owned by this caller.")
+            _path(caller, run.run_directory.relative_to(caller).as_posix())
+        boundary = CompletionBoundary()
+        boundary.capture(result)
+        for run in runs:
+            _validate_loaded_assessment(run)
+        boundary.validate(result)
+        return result
+    except (OSError, ValueError, KeyError, TypeError, IndexError, RecursionError) as exc:
+        if isinstance(exc, ContractError):
+            raise
+        raise ContractError(
+            "Retained completion evidence is malformed or inconsistent.", code="record_changed"
+        ) from exc
 
 
 class CompletionBoundary:
