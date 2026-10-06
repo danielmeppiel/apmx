@@ -242,26 +242,33 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
     assert result.exit_code == Outcome.COMPLETE, result.output
     assert "PASS content" in result.output
     producer.assert_called_once()
-    assert install.call_count == 1 + int(packaged)
-    assert install.call_args.kwargs["scope"] == "consumer"
-    assert install.call_args.kwargs["frozen"] is frozen
+    assert install.call_count == 1
+    assert install.call_args.kwargs.get("scope", "package") == (
+        "package" if packaged else "consumer"
+    )
+    replayed_frozen = frozen and not packaged
+    assert install.call_args.kwargs["frozen"] is replayed_frozen
     assert (caller / "apm.yml").read_bytes() == before
     transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
     for output in (result.output, transcript):
-        started = "Installing project imports with APM 0.30.0"
-        completed = "Project imports ready."
+        started = (
+            "Installing packages with APM 0.30.0"
+            if packaged
+            else "Installing project imports with APM 0.30.0"
+        )
+        completed = "Packages ready." if packaged else "Project imports ready."
         assert output.count(started) == output.count(completed) == 1
         assert output.index(started) < output.index(completed) < output.index("Imported style")
         assert output.count("Packages ready.") == int(packaged)
         if packaged:
-            assert output.index("Packages ready.") < output.index(started)
+            assert "Installing project imports" not in output
         assert output.count("Imported style") == 1
-        assert ("Using locked versions." in output) is frozen
+        assert ("Using locked versions." in output) is replayed_frozen
         assert output.count("Temporary workspace; your project files are unchanged.") == 1
     options = [line for line in transcript.splitlines() if "APM options:" in line]
-    assert len(options) == 1 + int(packaged)
-    assert ("--frozen" in options[-1]) is frozen
-    assert result.output.count("Running: apm install") == (1 + int(packaged)) * int(verbose)
+    assert len(options) == 1
+    assert ("--frozen" in options[-1]) is replayed_frozen
+    assert result.output.count("Running: apm install") == int(verbose)
 
 
 @pytest.mark.parametrize("selection", ["local", "package", "remote"])

@@ -144,6 +144,8 @@ class ContractSource:
     imports_root: Path | None = None
     apm_backend: Mapping[str, str] | None = None
     managed_metadata: tuple[str, ...] = ()
+    resource_subdirectory: str = "."
+    consumer_identity: tuple[str | None, str | None] | None = None
 
 
 @dataclass(frozen=True)

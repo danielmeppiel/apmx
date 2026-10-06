@@ -38,14 +38,17 @@ class NativeCommand(click.Command):
     help=(
         "Run a factory directory or one .contract.md file. "
         "A factory's input and output files determine which steps run first.\n\n"
-        "Package contracts are package-relative .contract.md paths. Inputs and "
+        "Package entries are relative factory directories or .contract.md paths. Inputs and "
         "retained evidence belong to the calling directory, not the package. "
         "A factory directory is its own input, policy and retained-evidence root."
     ),
 )
 @click.argument("contract", type=str, metavar="FACTORY_OR_CONTRACT")
 @click.option(
-    "--from", "package_ref", metavar="PACKAGE_REF", help="Select a contract from an APM package."
+    "--from",
+    "package_ref",
+    metavar="PACKAGE_REF",
+    help="Select a factory or contract from an APM source package.",
 )
 @click.option("--on", "harness", required=True, type=str, help="Agent CLI to use (copilot).")
 @click.option("--model", metavar="MODEL", help="Model to use through the selected agent CLI.")
@@ -91,14 +94,14 @@ def main(
     try:
         selected = Path(contract).expanduser().absolute()
         factory_root = selected if package_ref is None and selected.is_dir() else None
-        if not planning and factory_root is None:
+        package_factory = package_ref is not None and not contract.endswith(".contract.md")
+        if not planning and factory_root is None and not package_factory:
             logger.execution_context()
-        if factory_root is None and not contract.endswith(".contract.md"):
+        if package_ref is None and factory_root is None and not contract.endswith(".contract.md"):
             raise click.UsageError(
-                "Select a local factory directory or one explicit .contract.md file. "
-                "--from supports package-relative leaf contracts only."
+                "Select a local factory directory or one explicit .contract.md file."
             )
-        if allow_unproven_inputs and factory_root is None:
+        if allow_unproven_inputs and factory_root is None and not package_factory:
             raise click.UsageError("--allow-unproven-inputs requires a factory directory.")
         if package_ref is None:
             result = invoke_contract(
@@ -136,6 +139,7 @@ def main(
             caller_root=caller_root,
             planning=planning,
             limits=limits,
+            factory=package_factory,
             on_preparation=logger.on_preparation,
             verbose=verbose,
         ) as source:
@@ -151,6 +155,8 @@ def main(
                 allow_advisory=allow_advisory,
                 source=source,
                 logger=logger,
+                factory_root=source.root / contract if package_factory else None,
+                allow_unproven_inputs=allow_unproven_inputs,
             )
         if result is not None:
             completion.validate(result)

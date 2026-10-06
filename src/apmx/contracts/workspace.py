@@ -372,7 +372,7 @@ def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
                 for item in context.resources
             )
     if plan.source is not None:
-        from ..install.contract_source_validation import validate_source
+        from ..install.contract_source_validation import resource_root, validate_source
 
         validate_source(plan.source, plan.contract, limits=plan.limits)
         for child in plan.project_root.iterdir():
@@ -397,9 +397,8 @@ def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
                 "_apmx_source/contract.contract.md",
             )
         )
-        selected.extend(
-            (plan.source.root, name, name) for name in _check_names(plan.source.root, plan.limits)
-        )
+        resources = resource_root(plan.source)
+        selected.extend((resources, name, name) for name in _check_names(resources, plan.limits))
     destinations = {name.casefold() for _, _, name in selected}
     if len(destinations) != len(selected):
         raise ContractError(

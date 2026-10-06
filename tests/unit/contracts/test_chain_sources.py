@@ -45,6 +45,105 @@ def package(caller: Path) -> Path:
     return root
 
 
+def nested_factory(caller: Path) -> Path:
+    root = package(caller)
+    factory = root / "factory"
+    factory.mkdir()
+    for contract in root.glob("*.contract.md"):
+        contract.rename(factory / contract.name)
+    checks = factory / "checks"
+    checks.mkdir()
+    (checks / "fixed.txt").write_text("package-owned checks\n", encoding="ascii")
+    (root / "unselected.contract.md").write_text("not a selected contract\n", encoding="ascii")
+    return root
+
+
+@pytest.mark.parametrize("planning", (False, True))
+def test_public_package_factory_keeps_source_resources_and_consumer_separate(
+    caller, monkeypatch, planning
+):
+    root = nested_factory(caller)
+    original = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    calls = producer(monkeypatch)
+    result = CliRunner().invoke(
+        main,
+        [
+            "factory",
+            "--from",
+            str(root),
+            "--on",
+            "copilot",
+            *(["--plan"] if planning else ["--allow-host-access", "--allow-unproven-inputs"]),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(calls) == (0 if planning else 2)
+    assert original == {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    assert (caller / "seed.txt").read_bytes() == b"seed"
+    if planning:
+        assert not (caller / ".apm").exists()
+        return
+    for plan, snapshot, _ in calls:
+        assert plan.project_root == caller
+        assert plan.source.resource_subdirectory == "factory"
+        assert (snapshot.root / "seed.txt").read_bytes() == b"seed"
+        assert (snapshot.root / "checks/fixed.txt").read_text() == "package-owned checks\n"
+        assert not (snapshot.root / "unselected.contract.md").exists()
+        assert not plan.source.root.exists()
+    record = json.loads(next((caller / ".apm/chains").glob("*/record.json")).read_bytes())
+    assert record["complete"] is True
+    assert record["graph"]["root"].endswith("/factory")
+    assert record["caller_root"] == str(caller)
+
+
+def test_focused_package_leaf_uses_same_factory_check_resources(caller, monkeypatch):
+    root = nested_factory(caller)
+    (caller / "first.txt").write_text("explicit captured upstream input\n", encoding="ascii")
+    calls = producer(monkeypatch)
+    result = CliRunner().invoke(
+        main,
+        [
+            "factory/a-target.contract.md",
+            "--from",
+            str(root),
+            "--on",
+            "copilot",
+            "--allow-host-access",
+        ],
+    )
+    assert result.exit_code == 0 and len(calls) == 1, result.output
+    plan, snapshot, _ = calls[0]
+    assert plan.source.resource_subdirectory == "factory"
+    assert (snapshot.root / "checks/fixed.txt").read_text() == "package-owned checks\n"
+    assert not (caller / ".apm/chains").exists()
+
+
+@pytest.mark.parametrize("selected", ("factory", "factory/a-target.contract.md"))
+def test_ambiguous_package_checker_roots_refuse_offline(caller, monkeypatch, selected):
+    root = nested_factory(caller)
+    (root / "checks").mkdir()
+    (root / "checks/other.txt").write_text("ambiguous\n", encoding="ascii")
+    install = Mock(side_effect=AssertionError("ambiguous resources must not install"))
+    monkeypatch.setattr(apm_backend, "install", install)
+    result = CliRunner().invoke(main, [selected, "--from", str(root), "--on", "copilot", "--plan"])
+    assert result.exit_code == 22 and "Package check resources are ambiguous" in result.output, (
+        result.output
+    )
+    install.assert_not_called()
+    assert not (caller / ".apm").exists()
+
+
+@pytest.mark.parametrize("selected", ("../factory", "/factory", "seed.txt", "missing"))
+def test_invalid_package_factory_paths_refuse_offline(caller, monkeypatch, selected):
+    root = nested_factory(caller)
+    install = Mock(side_effect=AssertionError("offline source must not install"))
+    monkeypatch.setattr(apm_backend, "install", install)
+    result = CliRunner().invoke(main, [selected, "--from", str(root), "--on", "copilot", "--plan"])
+    assert result.exit_code == 22, result.output
+    install.assert_not_called()
+    assert not (caller / ".apm").exists()
+
+
 @contextmanager
 def prepared(root: Path, caller: Path, *, planning: bool = False, allow: bool = True):
     """Retain prepared-source backend coverage without a public package-factory API."""
