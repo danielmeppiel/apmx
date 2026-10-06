@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from apmx.contracts.models import (
 )
 from apmx.core.contract_logger import ContractLogger
 from apmx.deps.lockfile import LockFile
+from apmx.install import contract_source
 
 __all__ = ["caller", "private_preparation"]
 
@@ -39,16 +41,34 @@ PROVENANCE_FILES = (
 )
 
 
-@pytest.fixture
+def provenance_files(leaf: LeafPlan) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in PROVENANCE_FILES
+        if name != "package-resolution-apm.lock.yaml" or leaf.source.consumer_identity is None
+    )
+
+
+@pytest.fixture(params=("shared", "separate"))
 def retained_package(
     caller: Path,
     monkeypatch: pytest.MonkeyPatch,
     private_preparation: None,
+    request: pytest.FixtureRequest,
 ) -> tuple[LeafPlan, RunResult, RetainedInput]:
     root = package(caller)
     LockFile().write(root / "apm.lock.yaml")
     (caller / "apm.yml").write_text("name: consumer\nversion: 1.0.0\n", encoding="ascii")
     LockFile().write(caller / "apm.lock.yaml")
+    if request.param == "separate":
+        original = contract_source.prepare_contract_source
+
+        @contextmanager
+        def historical_preparation(*args, **kwargs):
+            with original(*args, **kwargs) as source:
+                yield replace(source, consumer_identity=None)
+
+        monkeypatch.setattr(contract_source, "prepare_contract_source", historical_preparation)
     calls = producer(monkeypatch)
     with prepared(root, caller) as closure:
         node = closure.nodes[0]
@@ -57,7 +77,7 @@ def retained_package(
         receipt = records.admit_handoff(leaf, result, allow_unproven=True)
     assert len(calls) == 1 and not leaf.source.root.exists()
     data = json.loads(receipt.record_path.read_bytes())
-    assert set(data["source"]["retained"]) == set(PROVENANCE_FILES)
+    assert set(data["source"]["retained"]) == set(provenance_files(leaf))
     return leaf, result, receipt
 
 
@@ -72,9 +92,10 @@ def test_every_retained_metadata_copy_is_required(
     """Inject faults only at the canonical read boundary; leave all bytes intact."""
     leaf, result, receipt = retained_package
     source = result.run_directory / "source"
-    before = {name: (source / name).read_bytes() for name in PROVENANCE_FILES}
+    names = provenance_files(leaf)
+    before = {name: (source / name).read_bytes() for name in names}
     original = workspace._read
-    for selected in PROVENANCE_FILES:
+    for selected in names:
         observed = []
 
         def affected(
@@ -103,7 +124,7 @@ def test_every_retained_metadata_copy_is_required(
             assert rejected.value.outcome == Outcome.HALTED
             assert observed == [selected], selected
         records.validate_binding(receipt, leaf.project_root, leaf.limits)
-    assert before == {name: (source / name).read_bytes() for name in PROVENANCE_FILES}
+    assert before == {name: (source / name).read_bytes() for name in names}
 
 
 @pytest.mark.parametrize(
@@ -149,7 +170,7 @@ def test_actual_retained_metadata_drift_refuses(
 ) -> None:
     """Alter only this test's copies, preserving size for the changed-byte case."""
     leaf, result, receipt = retained_package
-    for name in PROVENANCE_FILES:
+    for name in provenance_files(leaf):
         path = result.run_directory / "source" / name
         raw = path.read_bytes()
         saved = path.with_name(name + ".saved")

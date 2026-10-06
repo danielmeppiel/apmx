@@ -20,6 +20,17 @@ Use the [source environment instructions](../../../docs/install.md#run-the-curre
 with this development checkout selected; do not replace it with an older
 pinned checkout. The native harness and checker tools are separate prerequisites.
 
+This directory is the unpublished `checkout-factory` **0.1.0-dev** APM source
+package. The separate [checkout project](../checkout-project/request.md) owns
+the request, application, existing tests and initial documentation. The build
+stage selects the maintained
+[`python-testing-patterns`](https://github.com/wshobson/agents/tree/46891e7e60da0e52baf1050b7b6391b64e84c6d9/plugins/python-development/skills/python-testing-patterns)
+capability at that exact commit. Its upstream semantic version is unknown;
+the native lock records the immutable commit and content hash instead.
+The capability supplies test-design guidance, not acceptance rules or permission
+to install pytest: this fixture still requires the standard `unittest` framework.
+No upstream skill content is copied into this factory package.
+
 Stay in that terminal: `APMX_SOURCE` identifies the pinned example checkout,
 and PATH selects this checkout's APMX plus the checker environment.
 **Behave 1.3.3 is optional
@@ -50,6 +61,9 @@ if git -C "$demo" rev-parse --show-toplevel >/dev/null 2>&1; then
 else
   mkdir "$demo/feature-factory" &&
   cp -R "$APMX_SOURCE/examples/contracts/software-factory/." "$demo/feature-factory/" &&
+  cp -R "$APMX_SOURCE/examples/contracts/checkout-project/." "$demo/feature-factory/" &&
+  APM_NO_SCRIPTS=1 "$APMX_SOURCE/dist/apm-backend/apm" install \
+    --root "$demo/feature-factory" --only apm --target agent-skills --no-trust-bin &&
   cd "$demo" &&
   printf 'Demo directory: %s\n' "$PWD"
 fi
@@ -60,6 +74,11 @@ your source installation. Temporary folders can be cleaned by your operating
 system; preserve the complete demo directory somewhere durable when finished.
 If your chosen location is inside Git, choose another location; never remove
 a real project's remotes or policy to bypass admission.
+This setup uses the checksum-verified source backend to install the pinned
+capability into the disposable example, so the subsequent offline preview can
+resolve it. It can access the network and native APM configuration; it makes
+no model calls. `APM_NO_SCRIPTS` applies only to that APM child, not the later
+APMX invocation. Never set it globally to bypass check execution.
 
 ### Windows
 
@@ -79,9 +98,18 @@ if ($LASTEXITCODE -eq 0) { throw "Choose a demo location outside any Git reposit
 $factory = Join-Path $demo "feature-factory"
 New-Item -ItemType Directory -Path $factory -ErrorAction Stop | Out-Null
 Copy-Item "$(Join-Path $env:APMX_SOURCE 'examples\contracts\software-factory')\*" $factory -Recurse -ErrorAction Stop
+Copy-Item "$(Join-Path $env:APMX_SOURCE 'examples\contracts\checkout-project')\*" $factory -Recurse -ErrorAction Stop
 Get-ChildItem (Join-Path $factory "contracts") -Filter "*.contract.md" | ForEach-Object {
   $text = [IO.File]::ReadAllText($_.FullName).Replace("python3 -I -B checks/", "python -I -B checks/")
   [IO.File]::WriteAllText($_.FullName, $text, [Text.UTF8Encoding]::new($false))
+}
+$previousNoScripts = $env:APM_NO_SCRIPTS
+try {
+  $env:APM_NO_SCRIPTS = "1"
+  & "$env:APMX_SOURCE\dist\apm-backend\apm.exe" install --root $factory --only apm --target agent-skills --no-trust-bin
+  if ($LASTEXITCODE -ne 0) { throw "Capability preparation failed." }
+} finally {
+  $env:APM_NO_SCRIPTS = $previousNoScripts
 }
 Set-Location $demo
 Write-Output "Demo directory: $demo"
@@ -90,6 +118,47 @@ Write-Output "Demo directory: $demo"
 Keep the selected environment on PATH. The original checkout and check resources
 are unchanged. The remaining APMX commands work in PowerShell too; use `python`
 instead of `python3` for manual checker replay.
+
+### Use the package from a separate consumer
+
+On macOS/Linux, a source-only development consumer can keep the factory outside
+its application tree instead of composing the local example:
+
+```sh
+factory_package="$APMX_SOURCE/examples/contracts/software-factory"
+consumer="$(mktemp -d "${TMPDIR:-/tmp}/apmx-consumer.XXXXXX")" &&
+if git -C "$consumer" rev-parse --show-toplevel >/dev/null 2>&1; then
+  printf '%s\n' "Stop: choose a consumer outside any Git repository." >&2
+  false
+else
+  cp -R "$APMX_SOURCE/examples/contracts/checkout-project/." "$consumer/" &&
+  APM_NO_SCRIPTS=1 "$APMX_SOURCE/dist/apm-backend/apm" install "$factory_package" \
+    --root "$consumer" --only apm --target agent-skills --no-trust-bin &&
+  cd "$consumer" &&
+  apmx --from "$factory_package" . --on copilot --plan
+fi
+```
+
+Confirm this new location is outside Git just as in the local setup, and stop
+if preparation or preview fails. Then run the same source selection:
+
+```sh
+apmx --from "$factory_package" . --on copilot \
+  --allow-host-access --allow-unproven-inputs
+```
+
+Here `.` selects all contracts at the package root, **not** the consumer's
+working directory as a contract catalog. The consumer remains the implicit
+workspace and evidence root. APMX prepares one dependency graph using any
+consumer choices; only the build stage receives the selected testing skill.
+A focused run selects `contracts/build.contract.md` from this same package
+after supplying its required upstream documents in the consumer.
+
+The local package and its source checkout must remain available throughout
+these development runs. This is not a published source release or an archive
+demonstration. The pinned APM 0.30.0 archive formats omit or reject these
+independent contract/check resources; **archive acceptance remains blocked**.
+Do not wrap them in a dummy skill or copy archive members manually.
 
 ## What the contracts deliver
 
@@ -120,7 +189,7 @@ Document checks assess format/reference consistency, not prose truth or review q
 The planning check retains its public `plan-sections` key for compatibility;
 in this development version it checks the full format and typed references,
 not just headings. Historical records retain their original, narrower scope.
-The [request](request.md) and [supplied acceptance](checks/features/free-shipping.feature)
+The [request](../checkout-project/request.md) and [supplied acceptance](checks/features/free-shipping.feature)
 remain authoritative. Producers are not asked to claim that they ran checks.
 
 The implementation contract publishes files, not source-directory write scopes:
@@ -141,7 +210,7 @@ publishes those two declared artifacts, not the whole working directory.
 The caller's source files are never overwritten.
 
 Documentation is a separate delivery: the next producer updates the actual
-`docs/checkout.md`, exports a **docs-only** `documentation.diff` and writes a
+`docs/checkout.md` in the consumer, exports a **docs-only** `documentation.diff` and writes a
 change report. It does not alter `changes.diff`. Final delivery is the pair
 of patches, applied **code first, documentation second** to the original
 project. Check evidence names both patch hashes, the accepted code-only tree

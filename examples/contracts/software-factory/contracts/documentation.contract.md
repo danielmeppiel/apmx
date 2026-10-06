@@ -13,10 +13,11 @@ verify:
   documentation-report-format: python3 -I -B checks/documents.py documentation documentation.md
 ---
 Update the actual project page docs/checkout.md for the admitted checkout
-change. Read the request, specification, accepted code patch, implementation
-report and captured documentation. The request and supplied acceptance cases
-remain authoritative. Documentation.md is a report, not a substitute for
-updating the project page.
+change. Read request.md, specification.md, changes.diff, implementation.md
+and the captured page docs/checkout.md. The request and supplied acceptance
+cases remain authoritative. Both declared outputs are new files:
+documentation.md and documentation.diff are not inputs to read. The new
+documentation.md is a report, not a substitute for updating the project page.
 
 Read the common, Documentation report and Project page formats in
 checks/document-formats.md. Use the supplied write_file artifact tool to edit

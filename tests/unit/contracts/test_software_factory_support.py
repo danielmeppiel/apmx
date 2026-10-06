@@ -14,8 +14,10 @@ from typing import Any
 import pytest
 
 from apmx.utils.path_security import safe_rmtree
+from apmx.utils.yaml_io import dump_yaml, load_yaml
 
 EXAMPLE = Path(__file__).resolve().parents[3] / "examples/contracts/software-factory"
+PROJECT = EXAMPLE.parent / "checkout-project"
 pytestmark = pytest.mark.component
 
 GENERATED_TESTS = '''"""Regression tests for the delivery threshold."""
@@ -53,6 +55,18 @@ def factory(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 
 def seed(root: Path) -> Path:
     shutil.copytree(EXAMPLE, root, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(PROJECT, root, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    capability = root / "capability-fixture"
+    capability.mkdir(exist_ok=True)
+    (capability / "apm.yml").write_text("name: python-testing-patterns\nversion: 0.0.0-fixture\n")
+    (capability / "SKILL.md").write_text(
+        "---\nname: python-testing-patterns\n"
+        "description: Deterministic test fixture, not upstream capability content.\n"
+        "---\nUse the framework required by the supplied agreement.\n"
+    )
+    manifest = load_yaml(root / "apm.yml")
+    manifest["dependencies"]["apm"] = [{"path": "./capability-fixture"}]
+    dump_yaml(manifest, root / "apm.yml")
     return root
 
 
@@ -84,7 +98,7 @@ def authored_patch(
     for name in ("src/__init__.py", "src/pricing.py", "src/checkout.py", "tests/test_checkout.py"):
         path = working / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        raw = (EXAMPLE / name).read_bytes()
+        raw = (PROJECT / name).read_bytes()
         _write_patch_file(path, raw, crlf=crlf)
 
     def git(*arguments: str) -> bytes:
@@ -173,7 +187,7 @@ def authored_documentation_patch(root: Path, text: str | None = None) -> bytes:
     working = root / "software-factory-documentation-patch"
     page = working / "docs/checkout.md"
     page.parent.mkdir(parents=True)
-    page.write_bytes((EXAMPLE / "docs/checkout.md").read_bytes())
+    page.write_bytes((PROJECT / "docs/checkout.md").read_bytes())
     _git(working, "init", "--quiet")
     _git(working, "add", "--", "docs")
     page.write_text(documentation_text() if text is None else text, encoding="ascii", newline="\n")

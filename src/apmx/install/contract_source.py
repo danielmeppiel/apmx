@@ -13,11 +13,21 @@ from apmx.contracts.imports import (
     read_project_manifest,
     resolve_installed_skills,
 )
-from apmx.contracts.models import ContractError, ContractLimits, ContractSource, Outcome
+from apmx.contracts.models import (
+    ContractError,
+    ContractLimits,
+    ContractSource,
+    LeafContract,
+    Outcome,
+)
 from apmx.contracts.native_integrity import verify_inventory_package
 from apmx.deps.lockfile import resolve_lockfile_path_for_read
 from apmx.install import apm_backend
-from apmx.install.contract_source_validation import source_hash, validate_reference
+from apmx.install.contract_source_validation import (
+    package_entry_path,
+    source_hash,
+    validate_reference,
+)
 from apmx.models.dependency.reference import DependencyReference
 from apmx.models.dependency.selection import (
     DependencySelectionStatus,
@@ -115,6 +125,40 @@ def _validate_source_pin(requested, locked):
         )
 
 
+def _entry_contracts(
+    root: Path, name: str, factory: bool, limits: ContractLimits
+) -> tuple[LeafContract, ...]:
+    if not factory:
+        return (parse_contract(package_contract_path(root, name), limits=limits),)
+    from apmx.contracts.resolution import discover, select_factory_root
+
+    selected = select_factory_root(package_entry_path(root, name))
+    contracts = discover(selected, limits)
+    if not contracts:
+        raise ContractError(
+            "The factory contains no ordinary .contract.md files.", code="empty_factory"
+        )
+    return contracts
+
+
+def _resource_subdirectory(root: Path, name: str, factory: bool) -> str:
+    selected = package_entry_path(root, name)
+    current = selected if factory else selected.parent
+    candidates = []
+    while True:
+        if (current / "checks").exists() or (current / "checks").is_symlink():
+            candidates.append(current)
+        if current == root:
+            break
+        current = current.parent
+    if len(candidates) > 1:
+        raise ContractError(
+            "Package check resources are ambiguous across entry ancestors.",
+            code="ambiguous_source_resources",
+        )
+    return candidates[0].relative_to(root).as_posix() if candidates else "."
+
+
 @contextmanager
 def prepare_contract_source(
     package_ref: str,
@@ -123,6 +167,7 @@ def prepare_contract_source(
     caller_root: Path,
     planning: bool,
     limits: ContractLimits,
+    factory: bool = False,
     on_preparation: PreparationSink | None = None,
     verbose: bool = False,
 ) -> Iterator[ContractSource]:
@@ -131,7 +176,10 @@ def prepare_contract_source(
     try:
         requested = DependencyReference.parse(package_ref)
         validate_reference(requested)
-        package_contract_path(caller_root, contract_relative_path)
+        if factory:
+            package_entry_path(caller_root, contract_relative_path)
+        else:
+            package_contract_path(caller_root, contract_relative_path)
         caller_package, _, caller_manifest_digest = read_project_manifest(
             caller_root, limits, allow_missing=True
         )
@@ -167,18 +215,19 @@ def prepare_contract_source(
             original_hash = source_hash(original, limits)
             manifest, lock_bytes = _original_bytes(original, limits)
             read_lock(original, limits)
-            parse_contract(package_contract_path(original, contract_relative_path), limits=limits)
+            contracts = _entry_contracts(original, contract_relative_path, factory, limits)
+            resources = _resource_subdirectory(original, contract_relative_path, factory)
             requested = DependencyReference.parse(str(original))
             if planning:
                 context_root = caller_root if declarations or caller_lock else original
                 context_package, _, _ = read_project_manifest(
                     context_root, limits, allow_missing=True
                 )
-                contract = parse_contract(
-                    package_contract_path(original, contract_relative_path), limits=limits
-                )
                 try:
-                    resolve_installed_skills(contract, context_root, context_package, limits=limits)
+                    for contract in contracts:
+                        resolve_installed_skills(
+                            contract, context_root, context_package, limits=limits
+                        )
                 except ContractError as exc:
                     if exc.code not in {"missing_lock", "missing_import"}:
                         raise
@@ -193,6 +242,7 @@ def prepare_contract_source(
                     package_ref,
                     package_hash=original_hash,
                     imports_root=original,
+                    resource_subdirectory=resources,
                 )
                 return
         elif planning:
@@ -203,6 +253,7 @@ def prepare_contract_source(
                     outcome=Outcome.UNPROVEN,
                 )
             root, locked, managed_metadata = _selected_source(caller_root, requested, limits)
+            _entry_contracts(root, contract_relative_path, factory, limits)
             yield ContractSource(
                 root,
                 contract_relative_path,
@@ -212,6 +263,8 @@ def prepare_contract_source(
                 "locked-package-hash",
                 imports_root=caller_root,
                 managed_metadata=managed_metadata,
+                resource_subdirectory=_resource_subdirectory(root, contract_relative_path, factory),
+                consumer_identity=(caller_manifest_digest, caller_lock_digest),
             )
             return
         with _private_root(caller_root, original) as stage:
@@ -260,7 +313,7 @@ def prepare_contract_source(
                     "Consumer declarations changed during preparation.", code="plan_changed"
                 )
             root, locked, managed_metadata = _selected_source(stage, requested, limits)
-            parse_contract(package_contract_path(root, contract_relative_path), limits=limits)
+            _entry_contracts(root, contract_relative_path, factory, limits)
             if original and source_hash(original, limits) != original_hash:
                 raise ContractError(
                     "Original package changed during preparation.", code="source_changed"
@@ -279,6 +332,8 @@ def prepare_contract_source(
                 imports_root=stage,
                 apm_backend=identity,
                 managed_metadata=managed_metadata,
+                resource_subdirectory=_resource_subdirectory(root, contract_relative_path, factory),
+                consumer_identity=(caller_manifest_digest, caller_lock_digest),
             )
     except (ValueError, TypeError, KeyError) as exc:
         if isinstance(exc, ContractError):
@@ -301,11 +356,23 @@ def prepare_imports(
     admit_caller_policy(caller_root, limits=limits)
     contract = parse_contract(contract_path, limits=limits)
     package, _, manifest_digest = read_project_manifest(caller_root, limits, allow_missing=True)
-    lock, _ = read_lock(caller_root, limits)
+    lock, lock_digest = read_lock(caller_root, limits)
     declarations = list((package.dependencies or {}).get("apm", []))
     declarations.extend((package.dev_dependencies or {}).get("apm", []))
     consumer = bool(declarations or lock is not None)
     fallback = source.imports_root or source.root if source else caller_root
+    if (
+        source
+        and source.apm_backend
+        and source.imports_root
+        and source.consumer_identity is not None
+    ):
+        if source.consumer_identity != (manifest_digest, lock_digest):
+            raise ContractError(
+                "Consumer declarations changed after package preparation.", code="plan_changed"
+            )
+        yield source.imports_root, dict(source.apm_backend)
+        return
     if planning or not contract.imports or not consumer:
         yield (
             caller_root if consumer else fallback,

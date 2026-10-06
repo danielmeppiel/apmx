@@ -10,6 +10,7 @@ import sys
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -63,7 +64,7 @@ def test_native_package_import_record_and_retained_bytes(fixture):
     assert source_hash(package, LIMITS) == before
 
 
-def test_consumer_lock_wins_for_packaged_contract(fixture, tmp_path):
+def test_consumer_lock_wins_for_packaged_contract(fixture, tmp_path, monkeypatch):
     caller, package = fixture
     override = tmp_path / "override"
     shutil.copytree(package / "skills/handoff-style", override)
@@ -74,6 +75,8 @@ def test_consumer_lock_wins_for_packaged_contract(fixture, tmp_path):
     )
     install(caller, limits=LIMITS)
     before = {name: (caller / name).read_bytes() for name in ("apm.yml", "apm.lock.yaml")}
+    observed_install = Mock(wraps=install)
+    monkeypatch.setattr("apmx.install.apm_backend.install", observed_install)
     with prepare_contract_source(
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
     ) as source:
@@ -92,7 +95,50 @@ def test_consumer_lock_wins_for_packaged_contract(fixture, tmp_path):
             )
             assert {item.version for item in plan.imported_skills} == {"9.0.0"}
             assert all("override" in item.lock_identity for item in plan.imported_skills)
+            assert root == source.imports_root
+            assert observed_install.call_count == 1
     assert all((caller / name).read_bytes() == raw for name, raw in before.items())
+
+
+def test_shared_package_inventory_rejects_changed_consumer_declarations(fixture):
+    caller, package = fixture
+    with prepare_contract_source(
+        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        (caller / "apm.yml").write_text("name: changed\nversion: 1.0.0\n")
+        with (
+            pytest.raises(ContractError, match="changed after package preparation"),
+            prepare_imports(
+                caller,
+                source.root / _contract(package),
+                source=source,
+                planning=False,
+                limits=LIMITS,
+            ),
+        ):
+            pytest.fail("Changed consumer was admitted against a stale prepared inventory.")
+
+
+def test_multiple_direct_capability_choices_remain_ambiguous(fixture, tmp_path):
+    caller, package = fixture
+    for name in ("first", "second"):
+        shutil.copytree(package / "skills/handoff-style", tmp_path / name)
+    (caller / "apm.yml").write_text(
+        "name: consumer\nversion: 1.0.0\ndependencies:\n  apm: [../first, ../second]\n"
+    )
+    with prepare_contract_source(
+        str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+    ) as source:
+        with pytest.raises(ContractError) as error:
+            plan_contract(
+                Path(_contract(package)),
+                caller,
+                harness="copilot",
+                source=source,
+                imports_root=source.imports_root,
+            )
+        assert error.value.code == "ambiguous_import"
+    assert not (caller / ".apm/runs").exists()
 
 
 def test_multiple_package_context_and_resources_exclude_decoys(fixture, tmp_path):

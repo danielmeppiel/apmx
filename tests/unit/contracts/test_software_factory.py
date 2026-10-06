@@ -1,4 +1,4 @@
-"""Five ordinary contracts with real leaf handoffs/checks; only production is replaced."""
+"""Real APM, leaf handoffs and checks; producer and capability content are fixtures."""
 
 import hashlib
 import importlib.util
@@ -11,11 +11,13 @@ import pytest
 from click.testing import CliRunner
 from test_chain import caller, producer
 from test_chain_sources import private_preparation
-from test_software_factory_support import EXAMPLE, invoke, outputs, seed
+from test_software_factory_support import EXAMPLE, PROJECT, invoke, outputs, seed
 
 from apmx.cli import main
 from apmx.contracts import resolution, workspace
-from apmx.utils.yaml_io import load_frontmatter_document
+from apmx.contracts.models import ContractLimits
+from apmx.install.apm_backend import install
+from apmx.utils.yaml_io import load_frontmatter_document, load_yaml
 
 __all__ = ["caller", "private_preparation"]
 pytestmark = pytest.mark.component
@@ -43,6 +45,27 @@ CHECKS = {
     ),
     "review.contract.md": ("review-format-references",),
 }
+
+
+def test_factory_package_has_separate_consumer_and_pinned_capability() -> None:
+    manifest = load_yaml(EXAMPLE / "apm.yml")
+    assert manifest["name"] == "checkout-factory" and manifest["version"] == "0.1.0-dev"
+    assert manifest["dependencies"]["apm"] == [
+        {
+            "git": "wshobson/agents",
+            "path": "plugins/python-development/skills/python-testing-patterns",
+            "ref": "46891e7e60da0e52baf1050b7b6391b64e84c6d9",
+        }
+    ]
+    for name in ("request.md", "src", "tests", "docs"):
+        assert (PROJECT / name).exists() and not (EXAMPLE / name).exists()
+    assert not (EXAMPLE / "SKILL.md").exists()
+    assert not (EXAMPLE / "capability-fixture").exists()
+    for name in DELIVERIES:
+        contract = load_frontmatter_document(EXAMPLE / "contracts" / name)
+        assert contract.metadata.get("imports", []) == (
+            ["python-testing-patterns"] if name == "build.contract.md" else []
+        )
 
 
 def prepare_example(root: Path, renamed: bool = False) -> dict[str, tuple[str, ...]]:
@@ -147,6 +170,7 @@ def test_factory_native_preview_and_five_real_leaf_handoffs(
     from apmx.core.contract_logger import ContractLogger
 
     deliveries = prepare_example(caller, renamed)
+    install(caller, limits=ContractLimits())
     expected = outputs(caller.parent)
     original = {
         path.relative_to(caller).as_posix(): path.read_bytes()
@@ -250,6 +274,7 @@ def test_factory_native_preview_and_five_real_leaf_handoffs(
 
 def test_factory_graph_follows_exact_artifact_edges_after_renaming(caller: Path) -> None:
     deliveries = prepare_example(caller, renamed=True)
+    install(caller, limits=ContractLimits())
     graph = resolution.resolve_factory(caller)
     assert [item.path.name for item in graph.order] == list(deliveries)
     assert [item.outputs for item in graph.order] == list(deliveries.values())
