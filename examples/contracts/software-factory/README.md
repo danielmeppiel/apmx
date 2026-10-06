@@ -404,6 +404,34 @@ rejected at exactly 5000 cents. Fix the proposed implementation, not the
 threshold check. The controlled replay below demonstrates that rejection;
 it is not evidence of an automatically repaired or failed model-generated run.
 
+## Development observations (2026-10-06)
+
+An unpublished local-source rehearsal at commit `40d7658` completed all five
+stages, nine checks and seven deliveries through real Copilot. The build
+natively loaded the pinned `python-testing-patterns` skill. The documentation
+patch updated the real project page without changing the accepted code patch;
+independent checker replays passed and the original consumer stayed unchanged.
+The retained chain is `20261006T113040Z-be237cafe4f6`. This run predates the
+build's repair budget and does not prove automatic repair.
+
+A separate **controlled native repair experiment** at runtime commit `77c2dc2`
+used a labelled build-task variant with a deliberately injected initial
+`> 5000` defect. Both attempts used real Copilot, the same original project,
+goal, pinned capability and unchanged acceptance checks. The first candidate
+was rejected by both executable suites; the shared controller supplied its
+rejected artifacts and diagnostics, and the second candidate passed all three
+checks. Both records were retained under controller
+`20261006T114927Z-cfbe7bcbf444`. Independent replays reproduced both outcomes;
+the two attempts finished in approximately 99 seconds under a shared
+two-attempt/300-second experimental budget. This demonstrates automatic native
+repair under controlled fault injection, not an organically occurring failure
+or an unchanged full-factory run.
+
+Both observations used the operator-configured `gpt-5.6-sol` model without an
+APMX model override. Their retained local records are not a published portable
+Evidence Package, release, archive demonstration or OpenCode parity claim.
+Historical recordings below remain separate and unchanged.
+
 ## Observed four-stage runs (historical)
 
 These retained observations predate the documentation stage and stronger
