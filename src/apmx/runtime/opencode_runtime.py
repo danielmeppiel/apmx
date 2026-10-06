@@ -161,8 +161,9 @@ class OpenCodeRuntime:
                 "startup_scope": (
                     "Native effective configuration verified before execution; project config and "
                     "external skill discovery disabled; selected skills supplied explicitly. "
-                    "Only the builtin build agent is selected and delegation is denied. "
-                    "Global prompt files, build/default-agent overrides, plugins/instructions "
+                    "The invocation selects builtin build and denies delegation. Native internal "
+                    "title/summary/compaction calls may still occur. Global prompt files, "
+                    "active-agent overrides, plugins/instructions "
                     "and conflicting managed settings refuse. Host/native installation is not isolated."
                 ),
                 "model_observation": (
@@ -314,8 +315,10 @@ class OpenCodeRuntime:
             or config.get("instructions", []) != []
             or not isinstance(agents, dict)
             or not isinstance(modes, dict)
-            or "build" in agents
-            or "build" in modes
+            or any(
+                name in agents or name in modes
+                for name in ("build", "title", "summary", "compaction")
+            )
             or config.get("default_agent") not in (None, "build")
         ):
             raise cls._unobservable()

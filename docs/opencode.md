@@ -68,8 +68,11 @@ configuration is never rewritten.
 
 Configured permissions or legacy tool settings refuse rather than being
 silently replaced. Global `AGENTS.md` (including a dangling symlink), plugins,
-instruction lists, overridden builtin `build` or custom default agent also
-refuse. Unselected named agents are not invoked. Inherited
+instruction lists, overridden builtin `build`, `title`, `summary` or
+`compaction` roles, or a custom default agent also refuse. Unselected named
+agents are not invoked. Native internal title/summary/compaction model calls
+can still occur; delegation denial is not a promise of one model call or a
+hard spending cap. Inherited
 `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG_DIR` or `OPENCODE_PERMISSION`
 overrides refuse; their values are not read into diagnostics. The final native
 effective configuration must match the bounded profile, including managed
@@ -89,6 +92,9 @@ failed tool, malformed bounded frame or mixed session prevents completion,
 even when the operating-system exit code is zero. The shared engine still
 requires successful process termination, confirmed cleanup, intact frozen
 resources, captured declared outputs and passing independent checks.
+The shared artifact server's durable failure state also blocks completion:
+OpenCode's MCP wrapper can turn an `isError` response into a completed native
+tool observation, so tool-event status is not the artifact-operation authority.
 
 Public text uses the shared bounded/redacted diagnostic path. Reasoning, tool
 arguments/results, skill bodies and arbitrary JSON metadata are not published.

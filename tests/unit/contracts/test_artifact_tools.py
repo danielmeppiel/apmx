@@ -13,6 +13,7 @@ import pytest
 from click.testing import CliRunner
 from test_artifacts import make_plan
 from test_chain import caller, write_contract
+from test_opencode_stream import frame
 
 from apmx.cli import main
 from apmx.contracts import chain, records, workspace
@@ -419,13 +420,16 @@ def test_frozen_dispatch_uses_bundled_executable_without_a_public_flag(prepared,
     assert "artifact-server" not in help_result.output
 
 
-@pytest.mark.parametrize("fault", ["none", "patch", "receipt", "active", "failed"])
-def test_real_engine_captures_export_evidence_and_refuses_tampering(caller, monkeypatch, fault):
+@pytest.mark.parametrize("fault", ["none", "patch", "receipt", "active", "failed", "tool-error"])
+@pytest.mark.parametrize("harness", ["copilot", "opencode"])
+def test_real_engine_captures_export_evidence_and_refuses_tampering(
+    caller, monkeypatch, fault, harness
+):
     (caller / "source.py").write_bytes(b"answer = 1\n")
     write_contract(
         caller, "job.contract.md", ("source.py",), '["changes.diff", "implementation.md"]'
     )
-    plan = make_plan(caller)
+    plan = make_plan(caller, harness=harness)
 
     def build(selected, snapshot, directory, *, timeout_seconds):
         artifact_tools.configure(selected, snapshot, directory)
@@ -450,7 +454,20 @@ def test_real_engine_captures_export_evidence_and_refuses_tampering(caller, monk
                 f"server.state[{fault!r}] = {'True' if fault == 'failed' else repr('export_changes')}\n"
                 "server.save()\n"
             )
-        code += f"print({json.dumps({'type': 'result', 'exitCode': 0, 'sessionId': 'deterministic', 'usage': {}})!r}, flush=True)\n"
+        elif fault == "tool-error":
+            code += (
+                "response = server.call({'name': 'write_file', 'arguments': "
+                "{'path': '.apm/forbidden', 'content': 'denied'}})\n"
+                "assert response['isError'] is True\n"
+            )
+        completion = (
+            (frame("step_start") + frame("step_finish", reason="stop")).decode("utf-8")
+            if harness == "opencode"
+            else json.dumps(
+                {"type": "result", "exitCode": 0, "sessionId": "deterministic", "usage": {}}
+            )
+        )
+        code += f"print({completion!r}, flush=True)\n"
         return ProcessRequest(
             (sys.executable, "-B", "-c", code),
             snapshot.producer,
