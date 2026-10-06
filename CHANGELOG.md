@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Capture the consumer project implicitly and run a five-stage source factory
+  that delivers checked code and documentation patches without per-file workspace declarations.
+- Support opt-in bounded repair with fixed inputs/checks, a shared deadline and
+  retained rejected-attempt history; contracts without a budget remain single-attempt.
+- Export eligible completed runs automatically as portable CycloneDX,
+  in-toto/SLSA and Test Result evidence, with independent verification tools.
+- Run the same source factory through the native OpenCode 1.2.24 profile;
+  genuine Copilot and OpenCode rehearsals completed the same definition.
+
+### Changed
+
+- Evidence-delivery failure returns command exit 23 without changing a recorded
+  COMPLETE outcome. Scripts must distinguish execution completion from package delivery.
+
+### Fixed
+
+- Bind native CI to the selected build interpreter and exercise automatic
+  evidence delivery and explicit ambiguous-inventory refusal in frozen acceptance.
+
 ## 0.4.2 - 2026-09-18
 
 - Make the Windows logger presentation tests assert dim styling on actual

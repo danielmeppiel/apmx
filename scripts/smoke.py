@@ -689,6 +689,25 @@ def require_child_cleanup(root: Path) -> None:
     require(heartbeat.read_bytes() == before, "Fixture descendant kept writing after recorded cleanup")
 
 
+def require_standard_delivery(run: Path, stdout: str, *, ambiguous_inventory: bool) -> str:
+    package = run / "evidence"
+    if ambiguous_inventory:
+        require(not package.exists() and not package.is_symlink(), "Failed export published a package")
+        require("Evidence delivery failed (command exit 23)" in stdout, "Missing delivery diagnostic")
+        require(
+            "official ABOM has missing or duplicate component identities" in stdout,
+            "Expected the pinned backend's ambiguous-inventory refusal",
+        )
+        require("Recorded execution remains COMPLETE" in stdout, "Delivery rewrote completion")
+        return "refused-ambiguous-inventory"
+    for name in ("index.json", "summary.md", "abom.cdx.json", "provenance.intoto.json"):
+        require((package / name).is_file(), f"Automatic evidence delivery missing {name}")
+    index = json.loads((package / "index.json").read_bytes())
+    require(index.get("schema") == "apmx-evidence-package/1", "Unexpected standard package index")
+    require("Standard package:" in stdout and "Summary:" in stdout, "Missing evidence paths")
+    return "delivered"
+
+
 def run_case(
     binary: Path, root: Path, actor: Path | None, selection: str, mode: str,
     *, fresh_home: bool = False, mixed_imports: bool = False,
@@ -804,10 +823,11 @@ def _run_case(
             require_child_cleanup(root)
         finally:
             Path(env["APMX_CHILD_STOP"]).write_text("fixture cleanup after observation\n", encoding="ascii")
-    code, outcome = {
+    outcome_code, outcome = {
         "pass": (0, "COMPLETE"), "reject": (20, "REJECTED"), "halt": (22, "HALTED"),
         "quiet": (0, "COMPLETE"), "linger": (22, "HALTED"),
     }[mode]
+    code = 23 if mixed_imports and outcome == "COMPLETE" else outcome_code
     require(
         result.returncode == code,
         f"{selection}/{mode}: expected {code}, got {result.returncode}\n{result.stdout}\n{result.stderr}"
@@ -824,7 +844,7 @@ def _run_case(
         Path(record["executable"]).resolve().is_relative_to(tools.resolve()),
         "Run did not select the explicitly identified hermetic actor",
     )
-    require(record["result"]["outcome"] == {"name": outcome, "exit_code": code}, "Record outcome")
+    require(record["result"]["outcome"] == {"name": outcome, "exit_code": outcome_code}, "Record outcome")
     require(record["source"]["sha256"] == digest(contract), "Selected source digest mismatch")
     require(Path(record["caller_root"]).resolve() == caller.resolve(), "Caller/source separation")
     require(record["child_pid"] is None and record["active_check"] is None, "Unfinished process state")
@@ -986,8 +1006,12 @@ def _run_case(
     require_actor_transcript(transcript, mode)
     calls = [json.loads(line) for line in Path(env["APMX_ACTOR_LOG"]).read_text().splitlines()]
     require(sum("-p" in call["argv"] for call in calls) == 1, "Expected exactly one fixture producer")
+    delivery = "not-eligible" if outcome == "COMPLETE" else "not-complete"
+    if selection == "package" and outcome == "COMPLETE":
+        delivery = require_standard_delivery(run, result.stdout, ambiguous_inventory=mixed_imports)
     return {
         "selection": selection, "mode": mode, "exit_code": result.returncode,
+        "evidence_delivery": delivery,
         "actor": "hermetic Copilot JSONL protocol fixture; NOT live model inference",
         "backend_installation": installation,
         "fresh_home": fresh_home, "profile_changes": profile_changes,

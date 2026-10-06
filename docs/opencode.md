@@ -7,15 +7,25 @@ acceptance model. Contract bodies, selected capabilities, original application
 bytes, handoffs and checks are unchanged; only the native invocation and
 observation adapter differ.
 
-**Native proof is still gated.** Deterministic protocol/engine conformance and
-actual OpenCode 1.2.24 preparation with the shared MCP artifact server have
-passed. A genuine minimal inference attempt selected the native default
-`github-copilot/claude-sonnet-4.6`; its provider rejected that model with
-`model_not_available_for_integrator`. OpenCode exited zero but emitted a JSON
-error, which is a failure, not completion. No positive OpenCode code-producing
-or five-stage factory proof is established. A supported model requires an
-explicit operator choice before another native rehearsal. Copilot observations
-and synthetic test events are not evidence of OpenCode inference.
+**The development source route has genuine native proof.** On 2026-10-06,
+OpenCode 1.2.24 completed the same five-stage factory definition as Copilot:
+nine checks, seven outputs, unchanged original consumer/package and automatic
+standard evidence delivery. The authored three-attempt/600-second build
+controller succeeded on its first attempt. The operator explicitly selected
+`github-copilot/gpt-5.6-sol`; no provider fallback or global-default change was used.
+Independent package verification, relocation and eight corruption controls
+passed. This is not archive-distribution or released-binary parity.
+
+A separate inspection of native assistant metadata confirmed that provider/model
+and an actual completed `python-testing-patterns` skill call. Production JSONL
+does not report model identity, so canonical and portable observed-model fields
+remain unknown. Auxiliary calls may be unobserved; skill loading does not prove
+a causal improvement.
+
+An earlier attempt using native default `github-copilot/claude-sonnet-4.6`
+was rejected with `model_not_available_for_integrator`. Its zero process exit
+and JSON error remain a failure, not completion. Native OAuth does not make
+every listed model usable.
 
 ## Prerequisites and selection
 

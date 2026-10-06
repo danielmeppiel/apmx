@@ -1,22 +1,25 @@
 # APMX
 
-**APMX runs Agentic Software Factories from Markdown contracts. Declare the files
-each task in your factory needs, the artifacts it must deliver, and the checks
-that must pass before another factory task can use them.**
+**APMX runs Agentic Software Factories from Markdown contracts. Your project is
+the workspace. Declare each task's required inputs and handoffs, the artifacts
+it must deliver, and the checks that must pass before another task can use them.**
 
 **Start locally with your own harness. Share and version contracts through APM.
 Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
-**The experimental v0.4.2 release page is the native download location.**
-[Use its prebuilt assets](https://github.com/danielmeppiel/apmx/releases/tag/v0.4.2)
-after the archives, checksums and manifest are listed, then follow the
-[native installation guide](docs/install.md#install-a-prebuilt-archive) and
-[set up and run the factory](examples/contracts/software-factory/README.md#set-up).
-Until those assets appear, use the
-[pinned source route](docs/install.md#run-the-current-source-checkout).
-Current harness support is **native GitHub Copilot CLI only**; authenticate
-with Copilot before execution.
+**Released and development behavior are different.** The experimental
+[v0.4.2 downloads](https://github.com/danielmeppiel/apmx/releases/tag/v0.4.2)
+contain the earlier four-stage Copilot implementation. Follow the
+[native installation guide](docs/install.md#install-a-prebuilt-archive) for
+those immutable assets.
+
+This development checkout adds implicit project capture, a five-stage factory,
+bounded repair, portable evidence and a native
+[OpenCode profile](docs/opencode.md), alongside Copilot. Follow the
+[development example setup](examples/contracts/software-factory/README.md#set-up)
+with this checkout selected, not the older pinned source. Authenticate in your
+chosen harness; its installation and model access remain external prerequisites.
 
 ## Start with a contract
 
@@ -50,12 +53,14 @@ Its contracts deliver:
 
 ```text
 request.md -> plan.md -> specification.md
-                        -> changes.diff + implementation.md -> review.md
+                        -> changes.diff + implementation.md
+                        -> documentation.diff + documentation.md -> review.md
 ```
 
-A **factory** is a directory of contracts, checks and starting inputs. APMX
-resolves their `needs` into execution order. No pipeline file or last-step
-selection.
+A **factory** is a directory of contracts and checks. APMX resolves their `needs`
+into execution order. The consumer supplies its project and request; source
+files do not need individual contract entries. No pipeline file or last-step
+selection is required.
 
 After [APMX installation](docs/install.md)
 and [example setup](examples/contracts/software-factory/README.md#set-up),
@@ -71,11 +76,13 @@ Preview makes no model calls, installs nothing and runs no checks; it does not
 verify Copilot login or checker readiness. Execution shows the work and asks
 for confirmation.
 
-**Observed with real Copilot and a local native macOS build:** all four
-contracts and six checks completed. The patch changed two source files and
-added regression tests. A 5000-cent subtotal now has free delivery; 4999 still
-costs 500 cents. In a separate checker replay,
-a [deliberately broken patch was rejected at the threshold](examples/contracts/software-factory/README.md#observed-run).
+**Observed with real Copilot and OpenCode in development:** the same factory
+definition completed all five stages and nine checks, retaining seven outputs
+through each harness. Both produced actual code and documentation patches and
+loaded the selected testing skill. A 5000-cent subtotal has free delivery;
+4999 still costs 500 cents. These are source-route observations, not a claim
+that the older downloads contain this implementation or that archive
+distribution is ready.
 
 ## Deliver files, not a working directory
 
@@ -117,29 +124,44 @@ block dependent work. Follow the printed paths:
 - `.apm/chains/<id>/artifacts/` collects the completed factory's artifacts.
 - `.apm/runs/<id>/record.json` records each contract's inputs and checks.
 
-For this example, completion means all four contracts completed, all six required
-checks passed and all five artifacts are retained. If a check fails, dependent work stops.
-[Inspect diagnostics, revise with your own harness and rerun](examples/contracts/software-factory/README.md#recover-after-a-failed-or-incomplete-run);
-APMX does not automatically repair or resume the factory.
+Completed invocations with retained official inventory also print a portable
+Evidence Package: a CycloneDX ABOM, in-toto/SLSA producer statements, Test Result
+statements, exact supporting files and a generated summary.
+[Inspect and independently validate the standard files](docs/evidence.md).
+These are unsigned content bindings, not authenticated attestations or proof
+that arbitrary prose is correct. Review captured source files before sharing.
+
+For this development example, completion means five stages, nine required
+checks and seven retained outputs. The build stage has an
+[authored repair budget](docs/repair.md): at most three attempts sharing
+600 seconds. Only eligible assessed rejections are retried, with unchanged
+inputs and checks; operational failures stop. Other stages remain single-attempt.
+Both current full rehearsals passed first time; a separate deliberately faulty
+candidate demonstrated the two-attempt repair path.
+[Recovery](examples/contracts/software-factory/README.md#recover-after-a-failed-or-incomplete-run)
+is not automatic factory resume.
 
 **Local execution is not a sandbox.** Agents and checks can use host files,
 network and logins; model usage may cost money. Passing checks does not certify
-isolation. **Current v0.4.2 source and downloads** return **COMPLETE (exit 0)**
+isolation. Operational **COMPLETE (exit 0)**
 only after all declared outputs are retained, every required check passed and
 evidence is finalized.
 Missing output, incomplete checks and policy/consent refusals remain nonzero.
+In development, eligible evidence-delivery failure returns command exit 23
+without rewriting a recorded COMPLETE execution.
 The historical **v0.3.2 downloads and pinned demo still return UNPROVEN
 (exit 21)** even when work completes; they are not rebuilt or reused by v0.4.2.
 See [result and record migration](docs/results.md).
 
 ## Go further
 
-APMX runs and checks; Copilot does the agent work. Bundled APM prepares shared
+APMX runs and checks; the selected harness does the agent work. Bundled APM prepares shared
 packages and skills when needed, with no separate APM installation.
 
 - [Factory setup, artifacts and manual recovery](examples/contracts/software-factory/README.md)
 - [Write your first contract](examples/contracts/first-contract/README.md)
 - [Reuse a packaged task and skill](examples/contracts/packaged-job/README.md)
+- [Use the development OpenCode profile](docs/opencode.md)
 - [Report a problem or contribute](https://github.com/danielmeppiel/apmx/issues) - include a small example and remove secrets from logs.
 
 APMX is an independent project by Daniel Meppiel, licensed under Apache-2.0

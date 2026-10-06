@@ -103,6 +103,14 @@ class WorkflowPermissionTests(unittest.TestCase):
             self.assertIn("factory", extras)
             self.assertIn("--frozen", arguments)
 
+    def test_native_ci_binds_the_verified_interpreter_before_dependency_resolution(self) -> None:
+        native = self.ci.split("  native:\n", 1)[1]
+        self.assertIn("id: python", native)
+        self.assertIn("SELECTED_PYTHON: ${{ steps.python.outputs.python-path }}", native)
+        for variable in ("UV_PYTHON", "APMX_BUILD_PYTHON"):
+            self.assertIn(f'echo "{variable}=$SELECTED_PYTHON" >> "$GITHUB_ENV"', native)
+        self.assertLess(native.index("APMX_BUILD_PYTHON="), native.index("uv sync"))
+
 
 class PublicWorkflowTests(unittest.TestCase):
     job = WorkflowPermissionTests.job

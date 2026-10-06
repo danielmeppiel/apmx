@@ -432,6 +432,30 @@ APMX model override. Their retained local records are not a published portable
 Evidence Package, release, archive demonstration or OpenCode parity claim.
 Historical recordings below remain separate and unchanged.
 
+## Same-definition native Copilot and OpenCode proof
+
+On 2026-10-06, the current source factory completed through both native harnesses:
+five stages, nine passing checks, seven outputs and automatic standard evidence.
+Both used the authored three-attempt/600-second build budget and succeeded on
+the first attempt. Their normalized definition was identical:
+`592fd7e09b4ed90a55f498fe511dea960ccc11756619d859e00c410a258eb4e9`.
+Generated patches need not be byte-identical for the factory definition to match.
+
+Copilot chain `20261006T132027Z-99d9821aa359` preserved its configured model.
+OpenCode 1.2.24 chain `20261006T133533Z-e57c3805cd2b` used the explicitly approved
+`github-copilot/gpt-5.6-sol` selection. Both loaded the actual selected skill,
+preserved original consumer/package files, and carried the accepted code patch
+unchanged through documentation and review. OpenCode's observed-model record
+remains unknown; its model was confirmed separately from native assistant
+metadata, not inferred from the request.
+
+Each automatically generated [Evidence Package](../../../docs/evidence.md)
+passed independent upstream/profile validation, relocation and eight corruption
+controls: 231 indexed files and 15 standard statements. The runtime trees at
+`91770f3` and `3b1398c` were identical. These are unpublished source-native
+observations, not official archive support, all-platform inference or an
+organic repair occurrence. The earlier controlled repair remains separate.
+
 ## Observed four-stage runs (historical)
 
 These retained observations predate the documentation stage and stronger
