@@ -152,6 +152,7 @@ def run_contract(
         input_bindings=plan.input_bindings,
         chain_outputs=plan.chain_outputs,
         input_inventory=plan.input_inventory,
+        project_snapshot=plan.project_snapshot,
     )
     if current_plan != plan:
         raise ContractError(

@@ -25,6 +25,7 @@ from .models import (
     LeafContract,
     LeafPlan,
     Outcome,
+    ProjectSnapshot,
     RetainedInput,
     SourceLocation,
 )
@@ -238,6 +239,7 @@ def plan_contract(
     input_bindings: tuple[RetainedInput, ...] = (),
     chain_outputs: tuple[str, ...] = (),
     input_inventory: tuple[FileEntry, ...] | None = None,
+    project_snapshot: ProjectSnapshot | None = None,
 ) -> LeafPlan:
     """Resolve a bounded leaf using local reads only; no version/inference probe."""
     from ..runtime.registry import get_runtime_descriptor
@@ -318,7 +320,16 @@ def plan_contract(
     for name in contract.needs:
         if name in deferred_inputs or name in supplied:
             continue
-        info = _regular(root / name, root, contract.locations.get("needs", source_location))
+        from .workspace import _resource_name
+
+        input_root = (
+            project_snapshot.root
+            if project_snapshot is not None and not _resource_name(name)
+            else root
+        )
+        info = _regular(
+            input_root / name, input_root, contract.locations.get("needs", source_location)
+        )
         size += info.st_size
         if info.st_size > limits.file_bytes or size > limits.input_bytes:
             raise ContractError("Selected inputs exceed the byte limit.", code="input_limit")
@@ -385,4 +396,5 @@ def plan_contract(
         input_bindings=input_bindings,
         chain_outputs=chain_outputs,
         input_inventory=input_inventory,
+        project_snapshot=project_snapshot,
     )

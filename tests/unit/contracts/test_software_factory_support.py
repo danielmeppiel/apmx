@@ -3,6 +3,7 @@
 import importlib
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,19 @@ def _write_patch_file(path: Path, raw: bytes, *, crlf: bool) -> None:
     path.write_bytes(raw)
 
 
+def _git(working: Path, *arguments: str) -> bytes:
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    return subprocess.run(
+        ["git", "-c", "core.autocrlf=false", *arguments],
+        cwd=working,
+        env=environment,
+        capture_output=True,
+        check=True,
+        timeout=15,
+    ).stdout
+
+
 def authored_patch(
     root: Path, variant: str = "good", tests: str = GENERATED_TESTS, *, crlf: bool = False
 ) -> bytes:
@@ -72,18 +86,9 @@ def authored_patch(
         path.parent.mkdir(parents=True, exist_ok=True)
         raw = (EXAMPLE / name).read_bytes()
         _write_patch_file(path, raw, crlf=crlf)
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
 
     def git(*arguments: str) -> bytes:
-        return subprocess.run(
-            ["git", "-c", "core.autocrlf=false", *arguments],
-            cwd=working,
-            env=environment,
-            capture_output=True,
-            check=True,
-            timeout=15,
-        ).stdout
+        return _git(working, *arguments)
 
     git("init", "--quiet")
     git("add", "--", "src", "tests")
@@ -126,30 +131,103 @@ def authored_patch(
     return raw
 
 
+def example_cases() -> tuple:
+    return runpy.run_path(str(EXAMPLE / "checks/software_factory_cases.py"))["CASES"]
+
+
+def document_output(kind: str, body: str, **metadata: Any) -> bytes:
+    fields = {"schema": "software-factory-document/2", "document": kind, **metadata}
+    return f"```json\n{json.dumps(fields)}\n```\n\n{body}".encode("ascii")
+
+
+def documentation_text() -> str:
+    rows = [
+        "# Checkout delivery",
+        "",
+        "## Delivery policy",
+        "Delivery is free from 5000 cents, including exactly 5000; otherwise the fee is 500.",
+        "See [pricing](../src/pricing.py) and [examples](#examples).",
+        "",
+        "## Examples",
+        "| Case | Subtotal | Delivery | Total | Error |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for name, subtotal, fee, total in example_cases():
+        charge, combined, error = (
+            ("-", "-", fee) if isinstance(fee, str) else (str(fee), str(total), "-")
+        )
+        rows.append(f"| {name} | {json.dumps(subtotal)} | {charge} | {combined} | {error} |")
+    rows.extend(
+        [
+            "",
+            "## Input errors",
+            "Negative integers raise ValueError; non-integers, including booleans, raise TypeError.",
+            "",
+        ]
+    )
+    return "\n".join(rows)
+
+
+def authored_documentation_patch(root: Path, text: str | None = None) -> bytes:
+    """Export a docs-only fixture patch against the original project page."""
+    working = root / "software-factory-documentation-patch"
+    page = working / "docs/checkout.md"
+    page.parent.mkdir(parents=True)
+    page.write_bytes((EXAMPLE / "docs/checkout.md").read_bytes())
+    _git(working, "init", "--quiet")
+    _git(working, "add", "--", "docs")
+    page.write_text(documentation_text() if text is None else text, encoding="ascii", newline="\n")
+    raw = _git(working, "diff", "--no-ext-diff", "--no-textconv", "--no-renames")
+    safe_rmtree(working, root)
+    return raw
+
+
 def outputs(root: Path, variant: str = "good") -> dict[str, bytes]:
+    acceptance = [case[0] for case in example_cases()]
     return {
-        "plan.md": (
+        "plan.md": document_output(
+            "planning",
             "# Checkout plan\n\n## Goal\nFree delivery from 5000 cents.\n\n"
             "## Changes\nUpdate pricing and checkout; add threshold tests.\n\n"
             "## Validation\nIndependent acceptance and regression checks.\n\n"
-            "## Risks\nCheck inclusive boundaries and reject booleans.\n"
-        ).encode("ascii"),
-        "specification.md": (
+            "## Risks\nCheck inclusive boundaries and reject booleans.\n",
+            acceptance=acceptance,
+            targets=[
+                {"path": "src/pricing.py", "state": "existing"},
+                {"path": "src/checkout.py", "state": "existing"},
+                {"path": "tests/test_free_shipping.py", "state": "new"},
+                {"path": "docs/checkout.md", "state": "existing"},
+            ],
+        ),
+        "specification.md": document_output(
+            "specification",
             "# Checkout specification\n\n## Behavior\nFree from 5000 cents; fee 500 below.\n\n"
             "## Interface\nPreserve delivery_fee and checkout; reject invalid input types.\n\n"
-            "## Acceptance\n4999, 5000, 5001, zero, negatives and invalid types.\n"
-        ).encode("ascii"),
+            "## Acceptance\n4999, 5000, 5001, zero, negatives and invalid types.\n",
+            acceptance=acceptance,
+            interfaces=["src/pricing.py:delivery_fee", "src/checkout.py:checkout"],
+        ),
         "changes.diff": authored_patch(root, variant),
-        "implementation.md": (
+        "implementation.md": document_output(
+            "implementation",
             "# Implementation\n\n## Changes\nPricing and totals use the requested delivery fee.\n\n"
             "## Validation\nSupplied acceptance and regression commands run separately.\n\n"
-            "## Limitations\nNo checks were run during artifact production.\n"
-        ).encode("ascii"),
-        "review.md": (
+            "## Limitations\nNo checks were run during artifact production.\n",
+        ),
+        "documentation.diff": authored_documentation_patch(root),
+        "documentation.md": document_output(
+            "documentation",
+            "## Changes\nUpdated the actual checkout page and example table.\n\n"
+            "## Validation\nIndependent docs and combined-candidate checks run separately.\n\n"
+            "## Limitations\nNo execution observed during production.\n",
+        ),
+        "review.md": document_output(
+            "review",
             "# Advisory review\n\n## Assessment\nThe supplied patch addresses the specification.\n\n"
             "## Findings\nNo additional concerns found by inspection.\n\n"
-            "## Limitations\nNo execution claims or production certification.\n"
-        ).encode("ascii"),
+            "## Limitations\nNo execution claims or production certification.\n",
+            findings=[],
+        ),
     }
 
 

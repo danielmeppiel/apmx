@@ -49,6 +49,12 @@ arbitrary concurrent modification by the same user.
 
 ## Record versions
 
+Current development additionally records the versioned
+[implicit project selection](workspace.md): per-leaf `baseline.selection_schema`
+and `baseline.project_digest`, and a factory's retained `project_capture`.
+These fields distinguish application identity from stage handoffs and checker
+resources. Historical records without them retain their original meaning.
+
 New leaf records use `apm-contract-run/0.3` for both scalar and multiple
 outputs. Scalar artifact objects and multi-output `{files, sha256}` inventories
 remain distinct; consumers must inspect that shape. New factory records use

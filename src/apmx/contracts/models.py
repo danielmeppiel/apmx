@@ -171,6 +171,7 @@ class LeafPlan:
     input_bindings: tuple["RetainedInput", ...] = ()
     chain_outputs: tuple[str, ...] = ()
     input_inventory: tuple["FileEntry", ...] | None = None
+    project_snapshot: "ProjectSnapshot | None" = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,17 @@ class CapturedInput:
     source_root: Path
     source_relative_path: str
     entry: FileEntry
+
+
+@dataclass(frozen=True)
+class ProjectSnapshot:
+    """One retained application selection, shared across stages and fresh attempts."""
+
+    root: Path
+    files: tuple[FileEntry, ...]
+    digest: str
+    original_head: str | None
+    schema: str = "apmx-project-selection/1"
 
 
 @dataclass(frozen=True)
@@ -213,6 +225,8 @@ class BaselineSnapshot:
     original_head: str | None
     synthetic_head: str
     resources_digest: str
+    selection_schema: str | None = None
+    project_digest: str | None = None
 
 
 @dataclass(frozen=True)

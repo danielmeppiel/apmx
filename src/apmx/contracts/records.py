@@ -25,6 +25,7 @@ from .models import (
     LeafPlan,
     Outcome,
     ProcessObservation,
+    ProjectSnapshot,
     RetainedInput,
     RunResult,
     artifact_files,
@@ -406,7 +407,14 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
     This proves completed observations, not a downstream assurance policy. The
     separate handoff gate below decides whether those observations may advance.
     """
-    from .workspace import _digest, _read, inspect_retained_log, inspect_workspace
+    from .workspace import (
+        SELECTION_SCHEMA,
+        _digest,
+        _read,
+        inspect_retained_log,
+        inspect_workspace,
+        project_inventory,
+    )
 
     try:
         directory = result.run_directory
@@ -511,6 +519,8 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
             or not _same_json(baseline["files"], inventory)
             or baseline["digest"] != _digest(inventory)
             or baseline["resources_digest"] != _digest(resources)
+            or baseline.get("selection_schema") != SELECTION_SCHEMA
+            or baseline.get("project_digest") != _digest(project_inventory(plan, inventory))
         ):
             raise ValueError("Recorded captured inputs/resources differ from admission.")
         for check in result.checks:
@@ -597,6 +607,8 @@ def _chain_nodes(data: dict) -> list[dict]:
 
 def _validate_chain_completion(data: dict, result: ChainResult, nodes: list[dict]) -> None:
     """Match each ordered graph node to its distinct, exact finalized child."""
+    from .workspace import validate_project
+
     try:
         order = data["graph"]["order"]
         if (
@@ -612,6 +624,18 @@ def _validate_chain_completion(data: dict, result: ChainResult, nodes: list[dict
             raise ValueError("Factory completion inventory disagrees.")
         caller = Path(data["caller_root"])
         source_root = Path(data["graph"]["root"])
+        project = _json_value(data.get("project_capture"))
+        if project is not None:
+            snapshot = ProjectSnapshot(
+                Path(project["root"]),
+                tuple(FileEntry(**item) for item in project["files"]),
+                project["digest"],
+                project["original_head"],
+                project["schema"],
+            )
+            if snapshot.root != result.record_path.parent / "project":
+                raise ValueError("Factory project capture belongs to another invocation.")
+            validate_project(snapshot, caller, ContractLimits())
         for expected, node, run in zip(order, nodes, result.runs, strict=True):
             if (
                 node["contract"] != expected["contract"]
@@ -629,6 +653,15 @@ def _validate_chain_completion(data: dict, result: ChainResult, nodes: list[dict
                 or not _same_json(child["result"], run)
                 or not _same_json(child["execution"], Outcome.COMPLETE)
                 or child["complete"] is not True
+                or (child["baseline"].get("selection_schema") is not None and project is None)
+                or (
+                    project is not None
+                    and (
+                        child["baseline"]["selection_schema"] != project["schema"]
+                        or child["baseline"]["project_digest"] != project["digest"]
+                        or child["baseline"]["original_head"] != project["original_head"]
+                    )
+                )
             ):
                 raise ValueError("Factory child identity changed.")
     except (ValueError, KeyError, TypeError) as exc:

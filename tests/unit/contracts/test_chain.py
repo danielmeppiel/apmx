@@ -217,7 +217,7 @@ def test_symlink_cases_refuse(caller: Path, where: str) -> None:
         prepare(caller)
 
 
-@pytest.mark.parametrize("kind", ("caller", "contract", "checks", "policy"))
+@pytest.mark.parametrize("kind", ("contract", "checks", "policy"))
 def test_mutation_between_leaves_stops_without_another_model(
     caller: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -232,7 +232,6 @@ def test_mutation_between_leaves_stops_without_another_model(
     def changed(*args, **kwargs):
         result = original(*args, **kwargs)
         path, content = {
-            "caller": ("seed.txt", b"changed"),
             "contract": ("a-target.contract.md", b"changed"),
             "checks": ("checks/fixed.txt", b"changed"),
             "policy": ("apm.yml", b"invalid: ["),
@@ -493,11 +492,13 @@ def test_frozen_inventory_rejects_last_moment_resource_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     two_nodes(caller)
+    (caller / "checks").mkdir()
+    (caller / "checks/fixed.txt").write_bytes(b"trusted")
     calls = producer(monkeypatch)
     original = workspace.capture_workspace
 
     def changed(plan, directory):
-        (caller / "seed.txt").write_bytes(b"changed after preflight")
+        (caller / "checks/fixed.txt").write_bytes(b"changed after preflight")
         return original(plan, directory)
 
     monkeypatch.setattr(workspace, "capture_workspace", changed)
@@ -645,6 +646,7 @@ def test_git_tracked_sibling_and_future_outputs_are_never_baseline_inputs(
     assert {item["relative_path"] for item in data["artifacts"]["files"]} == {
         *graph_outputs,
         "seed.txt",
+        "unrelated.txt",
     }
 
 

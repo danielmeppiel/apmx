@@ -1,7 +1,8 @@
 # Run a checkout feature factory
 
-Give Copilot a checkout feature request. Get a plan, specification, code patch,
-implementation report and advisory review, with independent checks between
+Give a native producer a checkout feature request. Get a plan, specification,
+code and documentation patches, two change reports and an advisory review,
+with independent checks between
 contracts. APMX follows artifact dependencies; there is no separate pipeline
 script or phase-name convention.
 
@@ -11,17 +12,17 @@ Both pricing and checkout totals must agree.
 
 ## Set up
 
-After the v0.4.2 assets are listed, install the
-[prebuilt release](../../../docs/install.md#install-a-prebuilt-archive) and
-complete its
-[example checker setup](../../../docs/install.md#example-tools-for-a-native-installation);
-the bundle supplies APMX and APM, not this example's checker tools. Until then, use the
-[pinned source fallback](../../../docs/install.md#run-the-current-source-checkout)
-with backend provisioning and the `factory` extra. Old v0.1/v0.2 archives remain
-withheld.
+This is the **development five-stage example**. It requires the corresponding
+APMX source checkout with implicit project capture, backend provisioning and
+the `factory` extra. Existing v0.4.2 downloads and historical recordings below
+contain the older four-stage example, not this implementation.
+Use the [source environment instructions](../../../docs/install.md#run-the-current-source-checkout)
+with this development checkout selected; do not replace it with an older
+pinned checkout. The native harness and checker tools are separate prerequisites.
 
 Stay in that terminal: `APMX_SOURCE` identifies the pinned example checkout,
-and PATH selects APMX plus the checker environment. **Behave 1.3.3 is optional
+and PATH selects this checkout's APMX plus the checker environment.
+**Behave 1.3.3 is optional
 for APMX**, but required in Python 3.12 for this example's Gherkin checks.
 
 On macOS or Linux, check the selected tools before copying anything:
@@ -33,9 +34,8 @@ git --version
 copilot --version
 ```
 
-With a prebuilt installation, APMX must come from the extracted native directory
-and Python from `.apmx-checks/bin/`. With the source fallback, both come from the
-checkout's `.venv/bin/`. Behave must report `1.3.3`. Copilot must be installed
+Both APMX and Python must come from the development checkout's `.venv/bin/`.
+Behave must report `1.3.3`. The commands below demonstrate Copilot, which must be installed
 and authenticated through its own CLI; a version response does not establish
 login. Stop on any missing tool.
 
@@ -63,12 +63,11 @@ a real project's remotes or policy to bypass admission.
 
 ### Windows
 
-Complete either the [Windows native installation](../../../docs/install.md#windows-native-installation)
-and [checker setup](../../../docs/install.md#windows-checker-setup), or the
-[Windows source fallback](../../../docs/install.md#windows-source-installation).
+Complete the [Windows source environment setup](../../../docs/install.md#windows-source-installation)
+for this development checkout.
 In that same PowerShell session, make a new caller and adjust only the disposable
 contract copies to use `python` from the selected checker environment
-(`.apmx-checks\Scripts` for native, `.venv\Scripts` for source).
+(`.venv\Scripts` for this source installation).
 A separate `py -3.12` launcher could select an environment without Behave, so
 it is not used here.
 
@@ -95,21 +94,32 @@ instead of `python3` for manual checker replay.
 ## What the contracts deliver
 
 ```text
-request.md -> plan.md -> specification.md -> changes.diff + implementation.md -> review.md
+plan -> specification -> code -> documentation -> advisory review
 ```
 
-Each `needs` list names the artifacts that contract consumes, including initial
-source files where needed. Several inputs from the same producer cause one
-producer execution, not several.
+The consumer project is the workspace by default: source and documentation
+do not need individual entries or a `workspace` field. Each `needs` list names
+explicit inputs and stage handoffs. Several inputs from the same producer
+cause one producer execution, not several. APMX retains the original eligible
+project files, then adds validated handoffs; private producer edits do not
+replace that baseline.
+See [workspace capture](../../../docs/workspace.md) for ignore rules, bounds and
+exclusions. Capture is not a secret scanner or native-host isolation.
 
 | Contract | Published artifact(s) | Independent verification |
 | --- | --- | --- |
-| [Planning](contracts/planning.contract.md) | `plan.md` | Nonempty planning sections |
-| [Specification](contracts/specification.contract.md) | `specification.md` | Nonempty behavior, interface and acceptance sections |
-| [Implementation](contracts/build.contract.md) | `changes.diff`, `implementation.md` | Apply patch and run supplied Gherkin; separately apply patch and run regressions; check report sections |
-| [Advisory review](contracts/review.contract.md) | `review.md` | Nonempty advisory-review sections |
+| [Planning](contracts/planning.contract.md) | `plan.md` | Unique sections, typed targets, complete supplied case references |
+| [Specification](contracts/specification.contract.md) | `specification.md` | Unique sections, captured public interfaces, complete case references |
+| [Implementation](contracts/build.contract.md) | `changes.diff`, `implementation.md` | Apply code patch; run fixed Gherkin/regressions; check report format |
+| [Documentation](contracts/documentation.contract.md) | `documentation.diff`, `documentation.md` | Compose both patches; check real docs, links and executable examples; rerun fixed suites; check report format |
+| [Advisory review](contracts/review.contract.md) | `review.md` | Typed findings referring to existing artifact lines; zero findings is valid |
 
-Markdown checks assess structure, not reasoning or application correctness.
+The [versioned example formats](checks/document-formats.md) keep reports readable
+and references machine-checkable. They are not a universal APMX schema.
+Document checks assess format/reference consistency, not prose truth or review quality.
+The planning check retains its public `plan-sections` key for compatibility;
+in this development version it checks the full format and typed references,
+not just headings. Historical records retain their original, narrower scope.
 The [request](request.md) and [supplied acceptance](checks/features/free-shipping.feature)
 remain authoritative. Producers are not asked to claim that they ran checks.
 
@@ -122,13 +132,27 @@ produces:
 verify:
   shipping-examples: python3 -I -B checks/acceptance.py changes.diff
   checkout-regression: python3 -I -B checks/regression.py changes.diff
-  implementation-report-sections: python3 -I -B checks/documents.py implementation implementation.md
+  implementation-report-format: python3 -I -B checks/documents.py implementation implementation.md
 ```
 
-Copilot edits its private source copies and uses the runtime's bounded Git
+The producer edits its private source copies and uses the runtime's bounded Git
 export tool to create the patch. It also writes the Markdown report. APMX
 publishes those two declared artifacts, not the whole working directory.
 The caller's source files are never overwritten.
+
+Documentation is a separate delivery: the next producer updates the actual
+`docs/checkout.md`, exports a **docs-only** `documentation.diff` and writes a
+change report. It does not alter `changes.diff`. Final delivery is the pair
+of patches, applied **code first, documentation second** to the original
+project. Check evidence names both patch hashes, the accepted code-only tree
+and the combined candidate tree. A report alone does not count as updated docs.
+
+The documentation checker verifies the complete typed example table against
+the supplied case inventory and executes those same cases through the patched
+APIs. It checks inline local links and H2 anchors but does not fetch external
+URLs or execute generated code fences. Another check reruns fixed Gherkin and
+both regression suites on the combined tree. These finite observations do not
+certify arbitrary prose semantics.
 
 The supplied feature includes this concrete threshold scenario:
 
@@ -152,8 +176,8 @@ From the directory containing `feature-factory`, preview without model work:
 apmx ./feature-factory --on copilot --plan
 ```
 
-Expect four contracts in dependency order: planning, specification, build and
-review; five declared output files; and six checks. Preview exits `0` and does
+Expect five contracts in dependency order: planning, specification, build,
+documentation and review; seven declared output files; and nine checks. Preview exits `0` and does
 not install packages, run checkers or verify Copilot login. Continue only when
 it succeeds and the plan matches the example.
 
@@ -197,18 +221,17 @@ feature-factory/.apm/runs/<run-id>/transcript.log
 The artifact view contains the exact admitted outputs and original required
 inputs/check resources. Do not edit retained records or artifacts. A directory
 existing, a green line or exit `21` is not proof of completion. Open the chain
-record and confirm `complete: true`, all four `nodes` are `completed`, no
-`result.stop_reason`, and all six checks have `normalized: 0` in the node
-results/per-run records. The six check names state what each command establishes:
-`plan-sections`, `specification-sections`, `shipping-examples`,
-`checkout-regression`, `implementation-report-sections` and `review-sections`.
-The four `*-sections` checks validate required Markdown structure, not the
-semantic correctness or quality of the documents.
+record and confirm `complete: true`, all five `nodes` are `completed`, no
+`result.stop_reason`, and all nine checks have `normalized: 0` in the node
+results/per-run records. The check names distinguish report format/reference
+checks from `shipping-examples`, `checkout-regression`,
+`documentation-format-links-examples` and `documented-checkout`.
 
-The completed artifact view must contain all five deliveries:
-`plan.md`, `specification.md`, `changes.diff`, `implementation.md` and `review.md`.
-Read the documents and review the patch yourself. The original source checkout
-is unchanged; APMX does not automatically apply the patch to a project.
+The completed artifact view must contain all seven deliveries:
+`plan.md`, `specification.md`, `changes.diff`, `implementation.md`,
+`documentation.diff`, `documentation.md` and `review.md`.
+Read the documents and review both patches yourself. The original source and
+documentation remain unchanged; APMX does not automatically apply patches to a project.
 
 Replay either patch-aware checker from that artifact view:
 
@@ -220,6 +243,10 @@ if cd "$artifacts"; then
   printf 'Acceptance exit: %s\n' "$?"
   python3 -I -B checks/regression.py changes.diff
   printf 'Regression exit: %s\n' "$?"
+  python3 -I -B checks/documentation.py changes.diff documentation.diff
+  printf 'Documentation exit: %s\n' "$?"
+  python3 -I -B checks/documented_checkout.py changes.diff documentation.diff
+  printf 'Combined-candidate exit: %s\n' "$?"
 fi
 ```
 
@@ -230,7 +257,7 @@ unrelated test invocation would not test the same workspace.
 On PowerShell, use `Set-Location (Read-Host "Paste the printed Artifacts directory")`
 and the same checker commands with `python`. Inspect each check's JSON and exit
 status (`$?` immediately after a check in a POSIX shell, `$LASTEXITCODE` in
-PowerShell); do not let the second invocation hide the first one's failure.
+PowerShell); do not let a later invocation hide an earlier failure.
 
 The regression command runs the supplied cases and original tests in one fresh
 Python process, then generated tests in another. Generated-test imports and mocks
@@ -246,8 +273,8 @@ only; they do not change global Git configuration or normalize captured bytes.
 
 Checker exit codes:
 
-- `0`: every required example and required test executed and passed.
-- `1`: application behavior or a test assertion failed.
+- `0`: every required observation completed and passed within that check's scope.
+- `1`: document format/references, application behavior or a test assertion failed.
 - `2`: tooling, inputs, patch application or execution was invalid/incomplete.
 
 Empty, filtered, skipped, undefined or pending Gherkin does not pass. External
@@ -291,15 +318,19 @@ aggregate `artifacts/` view.
    `feature-factory`, run `apmx ./feature-factory --on copilot --plan`, then
    `apmx ./feature-factory --on copilot` after the preview succeeds. This is a
    new full attempt, not a resume from the failed node; it can incur new model
-   costs. Keep both attempts and inspect the new chain's completion, all six
-   checks and all five outputs before using anything.
+   costs. Keep both attempts and inspect the new chain's completion, all nine
+   checks and all seven outputs before using anything.
 
 For example, free delivery at `> 5000` rather than `>= 5000` must still be
 rejected at exactly 5000 cents. Fix the proposed implementation, not the
 threshold check. The controlled replay below demonstrates that rejection;
 it is not evidence of an automatically repaired or failed model-generated run.
 
-## Observed run
+## Observed four-stage runs (historical)
+
+These retained observations predate the documentation stage and stronger
+document formats. They are not proof of a native five-stage run, OpenCode
+parity or APM archive-resource preservation.
 
 For the separate 2026-09-15 fresh-user source run, see the
 [sanitized terminal replays and proof record](../../../docs/demo/README.md).
@@ -343,7 +374,9 @@ This example accepts regular ASCII text edits to `src/pricing.py` and
 `src/checkout.py`, plus a new `tests/test_free_shipping.py`. It rejects edits
 to protected check resources, existing tests, symlinks, modes and other paths.
 These are this example's patch requirements, not restrictions on all APMX
-artifact types. Arbitrary Python execution is not sandboxed.
+artifact types. The separate docs profile permits only regular text edits to
+`docs/checkout.md` and requires every accepted non-doc byte to remain unchanged.
+Arbitrary Python execution is not sandboxed.
 
 The deterministic fixture suite uses actual Git exports and real check
 processes. Its negative controls retain structurally valid patches but propose
@@ -353,9 +386,11 @@ rejects both even when generated tests make no useful assertion.
 The observed run above supplements the deterministic suite; neither is
 production certification or permission to merge/deploy. Historical v0.3.2
 binaries, the pinned source and historical observation remain **UNPROVEN / 21**.
-Current v0.4.2 source and downloads return **COMPLETE / 0** only after all four
+The released v0.4.2 example returns **COMPLETE / 0** only after all four
 contracts, six checks and five artifacts have complete validated, finalized
-evidence.
+evidence. This development example requires five stages, nine checks and seven
+artifacts instead. Neither result establishes authenticated provenance or
+enterprise governed execution.
 Exit `21` still means noncomplete work or refused admission; inspect the
 [versioned record](../../../docs/results.md). A rejected check
 returns `20`, operational failure returns `22`, and preview returns `0`.

@@ -21,6 +21,7 @@ from typing import Any
 MAX_FILE = 128 * 1024
 BASE_FILES = ("src/__init__.py", "src/pricing.py", "src/checkout.py", "tests/test_checkout.py")
 CHANGED_FILES = ("src/pricing.py", "src/checkout.py", "tests/test_free_shipping.py")
+DOCUMENTATION_FILES = ("docs/checkout.md",)
 
 
 class Invalid(Exception):
@@ -94,24 +95,29 @@ def clean_environment(home: Path) -> dict[str, str]:
     return env
 
 
-def patch_paths(raw: bytes) -> tuple[str, ...]:
-    """Accept only regular text edits to the three requested application files."""
+def patch_paths(
+    raw: bytes,
+    *,
+    changed_files: tuple[str, ...] = CHANGED_FILES,
+    added_files: tuple[str, ...] = ("tests/test_free_shipping.py",),
+) -> tuple[str, ...]:
+    """Accept exactly the regular-file edits named by a trusted check profile."""
     try:
         text = raw.decode("ascii")
     except UnicodeError as exc:
         raise Invalid("This example expects an ASCII text patch.") from exc
     sections = re.split(r"(?m)^diff --git ", text)
-    if sections[0] or len(sections) != len(CHANGED_FILES) + 1:
-        raise Invalid("Patch must change both source files and add the requested test file.")
+    if sections[0] or len(sections) != len(changed_files) + 1:
+        raise Invalid("Patch must change exactly the files required by this check profile.")
     paths = []
     for section in sections[1:]:
         lines = section.splitlines()
         header = re.fullmatch(r"a/([a-zA-Z0-9_./-]+) b/\1", lines[0])
-        if not header or header[1] not in CHANGED_FILES or header[1] in paths:
+        if not header or header[1] not in changed_files or header[1] in paths:
             raise Invalid("Patch contains an unsafe, duplicate or protected path.")
         name = header[1]
         paths.append(name)
-        addition = name == "tests/test_free_shipping.py"
+        addition = name in added_files
         before = "--- /dev/null" if addition else f"--- a/{name}"
         after = f"+++ b/{name}"
         position = 1
@@ -148,19 +154,9 @@ def patch_paths(raw: bytes) -> tuple[str, ...]:
     return tuple(paths)
 
 
-def materialize(root: Path, patch: str, area: Path) -> tuple[Path, dict[str, Any]]:
-    """Apply these exact patch bytes to matching supplied baseline files."""
-    raw = read_file(root, patch)
-    patch_paths(raw)
-    base = inventory(root, BASE_FILES)
-    checks = check_inventory(root)
-    candidate = area / "candidate"
-    candidate.mkdir()
-    for name in BASE_FILES:
-        path = candidate / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(read_file(root, name))
-    exported = area / "captured.diff"
+def apply_patch(candidate: Path, raw: bytes, area: Path, name: str) -> None:
+    """Check and apply one already-profiled captured patch without ambient Git config."""
+    exported = area / name
     exported.write_bytes(raw)
     git = shutil.which("git")
     if git is None:
@@ -188,6 +184,21 @@ def materialize(root: Path, patch: str, area: Path) -> tuple[Path, dict[str, Any
         )
         if result.returncode:
             raise Invalid("Patch does not apply cleanly to the supplied baseline.")
+
+
+def materialize(root: Path, patch: str, area: Path) -> tuple[Path, dict[str, Any]]:
+    """Apply these exact patch bytes to matching supplied baseline files."""
+    raw = read_file(root, patch)
+    patch_paths(raw)
+    base = inventory(root, BASE_FILES)
+    checks = check_inventory(root)
+    candidate = area / "candidate"
+    candidate.mkdir()
+    for name in BASE_FILES:
+        path = candidate / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(read_file(root, name))
+    apply_patch(candidate, raw, area, "captured.diff")
     names = tuple(sorted(set(BASE_FILES) | set(CHANGED_FILES)))
     actual = {
         path.relative_to(candidate).as_posix()
@@ -204,6 +215,41 @@ def materialize(root: Path, patch: str, area: Path) -> tuple[Path, dict[str, Any
         "patch": digest(raw),
         "candidate": tree_hash(files),
         "checks": tree_hash(checks),
+        "base_files": base,
+        "candidate_files": files,
+    }
+
+
+def materialize_documented(
+    root: Path, patch: str, documentation_patch: str, area: Path
+) -> tuple[Path, dict[str, Any]]:
+    """Compose docs after code, retaining the accepted code-only tree identity."""
+    candidate, subject = materialize(root, patch, area)
+    raw = read_file(root, documentation_patch)
+    patch_paths(raw, changed_files=DOCUMENTATION_FILES, added_files=())
+    base = {**subject["base_files"], **inventory(root, DOCUMENTATION_FILES)}
+    for name in DOCUMENTATION_FILES:
+        path = candidate / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(read_file(root, name))
+    apply_patch(candidate, raw, area, "captured-documentation.diff")
+    if inventory(candidate, tuple(subject["candidate_files"])) != subject["candidate_files"]:
+        raise Invalid("Documentation changed the accepted application candidate.")
+    names = (*subject["candidate_files"], *DOCUMENTATION_FILES)
+    actual = {
+        path.relative_to(candidate).as_posix()
+        for path in candidate.rglob("*")
+        if not path.is_dir() or path.is_symlink()
+    }
+    if actual != set(names):
+        raise Invalid("Documentation changed files outside the combined candidate.")
+    files = inventory(candidate, names)
+    return candidate, {
+        **subject,
+        "base": tree_hash(base),
+        "code_candidate": subject["candidate"],
+        "documentation_patch": digest(raw),
+        "candidate": tree_hash(files),
         "base_files": base,
         "candidate_files": files,
     }
@@ -256,9 +302,13 @@ def execute(
     required: tuple[str, ...],
     inspect: Callable[[Path, Path, Path], tuple[int, list[dict[str, Any]]]],
     argv: list[str] | None = None,
+    *,
+    documentation: bool = False,
 ) -> int:
     parser = argparse.ArgumentParser(description=f"Apply a captured patch and run {name}.")
     parser.add_argument("patch", help="Relative patch artifact, normally changes.diff")
+    if documentation:
+        parser.add_argument("documentation_patch", help="Docs-only patch, applied after code")
     args = parser.parse_args(argv)
     root = Path.cwd().resolve()
     area = root / f".software-factory-check-{uuid.uuid4().hex}"
@@ -273,7 +323,11 @@ def execute(
     code = 2
     try:
         area.mkdir(mode=0o700)
-        candidate, subject = materialize(root, args.patch, area)
+        candidate, subject = (
+            materialize_documented(root, args.patch, args.documentation_patch, area)
+            if documentation
+            else materialize(root, args.patch, area)
+        )
         evidence["subject"] = subject
         code, rows = inspect(root, candidate, area)
         evidence["observed"] = rows
@@ -286,10 +340,14 @@ def execute(
             != subject["candidate"]
         ):
             raise Invalid("Candidate files changed while checks were running.")
-        if inventory(root, BASE_FILES) != subject["base_files"]:
+        if inventory(root, tuple(subject["base_files"])) != subject["base_files"]:
             raise Invalid("Supplied baseline changed while checks were running.")
         if digest(read_file(root, args.patch)) != subject["patch"]:
             raise Invalid("Patch artifact changed while checks were running.")
+        if documentation and (
+            digest(read_file(root, args.documentation_patch)) != subject["documentation_patch"]
+        ):
+            raise Invalid("Documentation patch changed while checks were running.")
         if tree_hash(check_inventory(root)) != subject["checks"]:
             raise Invalid("Supplied check resources changed while checks were running.")
         evidence["status"] = "passed" if code == 0 else "failed"

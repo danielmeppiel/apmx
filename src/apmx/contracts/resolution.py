@@ -250,7 +250,7 @@ def preflight(
     """Admit every selected leaf's known surface without making future-input files."""
     limits = limits or ContractLimits()
     nodes = []
-    outputs = tuple(name for item in graph.order for name in item.outputs)
+    outputs = tuple(name for item in graph.catalog for name in item.outputs)
     for contract in graph.order:
         selected_source = (
             replace(

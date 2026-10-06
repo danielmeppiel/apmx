@@ -1,4 +1,4 @@
-"""Four ordinary contracts with real leaf handoffs/checks; only production is replaced."""
+"""Five ordinary contracts with real leaf handoffs/checks; only production is replaced."""
 
 import hashlib
 import importlib.util
@@ -24,18 +24,24 @@ DELIVERIES = {
     "planning.contract.md": ("plan.md",),
     "specification.contract.md": ("specification.md",),
     "build.contract.md": ("changes.diff", "implementation.md"),
+    "documentation.contract.md": ("documentation.diff", "documentation.md"),
     "review.contract.md": ("review.md",),
 }
 
 CHECKS = {
     "planning.contract.md": ("plan-sections",),
-    "specification.contract.md": ("specification-sections",),
+    "specification.contract.md": ("specification-format-references",),
     "build.contract.md": (
         "shipping-examples",
         "checkout-regression",
-        "implementation-report-sections",
+        "implementation-report-format",
     ),
-    "review.contract.md": ("review-sections",),
+    "documentation.contract.md": (
+        "documentation-format-links-examples",
+        "documented-checkout",
+        "documentation-report-format",
+    ),
+    "review.contract.md": ("review-format-references",),
 }
 
 
@@ -66,7 +72,34 @@ def test_factory_check_names_describe_the_proven_outcomes() -> None:
         for name in DELIVERIES
     }
     assert actual == CHECKS
-    assert sum(map(len, actual.values())) == 6
+    assert sum(map(len, actual.values())) == 9
+
+
+def test_contracts_name_handoffs_not_a_source_inventory() -> None:
+    expected = {
+        "planning.contract.md": "request.md",
+        "specification.contract.md": ["request.md", "plan.md"],
+        "build.contract.md": ["request.md", "specification.md"],
+        "documentation.contract.md": [
+            "request.md",
+            "specification.md",
+            "changes.diff",
+            "implementation.md",
+        ],
+        "review.contract.md": [
+            "request.md",
+            "specification.md",
+            "changes.diff",
+            "implementation.md",
+            "documentation.diff",
+            "documentation.md",
+        ],
+    }
+    for name, needs in expected.items():
+        document = load_frontmatter_document(EXAMPLE / "contracts" / name)
+        assert document.metadata["needs"] == needs
+        assert "workspace" not in document.metadata
+        assert "Copilot" not in document.body and "OpenCode" not in document.body
 
 
 @pytest.mark.parametrize(
@@ -104,7 +137,7 @@ def test_factory_checks_preserve_shell_arguments_and_contract_body(
     reason="Optional example integration: install apmx[factory] (Behave==1.3.3).",
 )
 @pytest.mark.parametrize("interactive,renamed", [(False, False), (True, False), (False, True)])
-def test_factory_native_preview_and_four_real_leaf_handoffs(
+def test_factory_native_preview_and_five_real_leaf_handoffs(
     caller: Path,
     monkeypatch: pytest.MonkeyPatch,
     private_preparation: None,
@@ -134,11 +167,15 @@ def test_factory_native_preview_and_four_real_leaf_handoffs(
                 "Path('src/checkout.py').write_text('# private working copy, not a delivery\\n')\n"
                 "Path('private-scratch.txt').write_text('not a published artifact')\n"
             )
+        elif "documentation.diff" in files:
+            scratch = (
+                "Path('docs/checkout.md').write_text('private page, not a published artifact')\n"
+            )
         return "from pathlib import Path\n" + scratch + writes
 
     calls = producer(monkeypatch, body=produce)
     preview = CliRunner().invoke(main, [str(caller), "--on", "copilot", "--plan"])
-    assert preview.exit_code == 0 and "4 contracts" in preview.output, preview.output
+    assert preview.exit_code == 0 and "5 contracts" in preview.output, preview.output
     assert calls == [] and not (caller / ".apm").exists()
     result = CliRunner().invoke(
         main,
@@ -150,7 +187,7 @@ def test_factory_native_preview_and_four_real_leaf_handoffs(
         ],
         input="y\n",
     )
-    assert result.exit_code == 0 and len(calls) == 4, result.output
+    assert result.exit_code == 0 and len(calls) == 5, result.output
     aggregate = next((caller / ".apm/chains").glob("*/record.json"))
     data = json.loads(aggregate.read_bytes())
     assert data["complete"] is True and data["result"]["outcome"]["name"] == "COMPLETE"
@@ -181,9 +218,11 @@ def test_factory_native_preview_and_four_real_leaf_handoffs(
         "src/pricing.py",
         "src/checkout.py",
         "tests/test_checkout.py",
+        "docs/checkout.md",
         *(name for name in original if name.startswith("checks/")),
     }
-    assert {item["relative_path"] for item in data["artifacts"]["files"]} == {*expected, *initial}
+    published = {item["relative_path"] for item in data["artifacts"]["files"]}
+    assert {*expected, *initial} <= published <= {*expected, *original}
     for item in data["artifacts"]["files"]:
         raw = (view / item["relative_path"]).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == item["sha256"]
@@ -199,6 +238,14 @@ def test_factory_native_preview_and_four_real_leaf_handoffs(
             and report["subject"]["patch"] == hashlib.sha256(expected["changes.diff"]).hexdigest()
         ), report
     assert (view / "src/pricing.py").read_bytes() == original["src/pricing.py"]
+    assert (view / "docs/checkout.md").read_bytes() == original["docs/checkout.md"]
+    for checker in ("documentation.py", "documented_checkout.py"):
+        code, report = invoke(view, checker, "changes.diff", "documentation.diff")
+        assert code == 0, report
+        assert (
+            report["subject"]["documentation_patch"]
+            == hashlib.sha256(expected["documentation.diff"]).hexdigest()
+        )
 
 
 def test_factory_graph_follows_exact_artifact_edges_after_renaming(caller: Path) -> None:
@@ -210,8 +257,13 @@ def test_factory_graph_follows_exact_artifact_edges_after_renaming(caller: Path)
         ("plan.md", "stage-9.contract.md", "stage-8.contract.md"),
         ("specification.md", "stage-8.contract.md", "stage-7.contract.md"),
         ("specification.md", "stage-8.contract.md", "stage-6.contract.md"),
+        ("specification.md", "stage-8.contract.md", "stage-5.contract.md"),
         ("changes.diff", "stage-7.contract.md", "stage-6.contract.md"),
         ("implementation.md", "stage-7.contract.md", "stage-6.contract.md"),
+        ("changes.diff", "stage-7.contract.md", "stage-5.contract.md"),
+        ("implementation.md", "stage-7.contract.md", "stage-5.contract.md"),
+        ("documentation.diff", "stage-6.contract.md", "stage-5.contract.md"),
+        ("documentation.md", "stage-6.contract.md", "stage-5.contract.md"),
     }
     prepared = resolution.preflight(graph, caller, harness="copilot")
     assert all(workspace.inspect_workspace(node.plan) == node.inventory for node in prepared.nodes)
