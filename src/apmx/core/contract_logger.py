@@ -25,6 +25,7 @@ from apmx.contracts.models import (
     FileEntry,
     LeafPlan,
     Outcome,
+    RepairBudget,
     RunEvent,
     RunResult,
     artifact_files,
@@ -1254,6 +1255,7 @@ class ContractLogger:
             f"Time limits: run {plan.limits.attempt_seconds:g}s; "
             f"each check {plan.limits.check_seconds:g}s"
         )
+        self.repair_budget(plan.contract.budget)
         self._write("Complete execution returns COMPLETE (0); this does not certify isolation.")
         self._write("To run, use apmx with --allow-host-access and without --plan.")
         self._write(f"Source: {self._path(source)}", severity="detail", detail=True)
@@ -1313,6 +1315,27 @@ class ContractLogger:
         leaf._display_root = self._display_root
         return leaf
 
+    def new_attempt(self, *, index: int, count: int) -> ContractLogger:
+        """Give each attempt a private transcript while retaining the factory step."""
+        self._write(f"Attempt {index}/{count} (shared repair budget)", severity="info")
+        attempt = ContractLogger(verbose=self.verbose, _display=self._display, _step=self._step)
+        attempt._display_root = self._display_root
+        return attempt
+
+    def repair_budget(self, budget: RepairBudget | None) -> None:
+        """Disclose authored execution bounds before confirmation or plan execution."""
+        if budget is not None:
+            self._write(
+                f"Repair budget: at most {budget.max_attempts} "
+                f"{'attempt' if budget.max_attempts == 1 else 'attempts'}, "
+                f"{budget.max_seconds:g}s shared execution/check time; no model spend cap."
+            )
+
+    def repair_finished(self, *, reason: str, record: Path) -> None:
+        """Expose the durable link to all attempts, without another outcome decision."""
+        self._write(f"Repair controller: {reason}")
+        self._write(f"Controller record: {self._path(record)}")
+
     def select_factory_root(self, root: Path) -> None:
         self._display_root = self._caller_root
         self._caller_root = root
@@ -1338,6 +1361,7 @@ class ContractLogger:
             self.chain_node(index, count, contract.path, catalog=catalog)
             self._write("Produces: " + ", ".join(contract.outputs))
             self._write("Checks: " + ", ".join(check.name for check in contract.checks))
+            self.repair_budget(contract.budget)
             self._write(f"Source: {self._path(contract.path)}", severity="detail", detail=True)
             for value in contract.needs:
                 kind = (
@@ -1427,7 +1451,11 @@ class ContractLogger:
         self._write("Every run starts fresh; APMX does not cap model charges.")
         self._write(
             f"Limits: {plan.nodes[0].plan.limits.chain_contracts} discovered contracts; "
-            "one attempt per step, no retries."
+            + (
+                "retries only within the explicit per-contract budgets above."
+                if any(node.plan.contract.budget is not None for node in plan.nodes)
+                else "one attempt per step, no retries."
+            )
         )
         self._write(
             "Without --plan or consent flags, an interactive factory invocation asks for "

@@ -26,6 +26,7 @@ from .models import (
     LeafPlan,
     Outcome,
     ProjectSnapshot,
+    RepairBudget,
     RetainedInput,
     SourceLocation,
 )
@@ -111,7 +112,7 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
     for key in data:
         if key not in allowed:
             raise ContractError(f"Unknown contract field: {key}.", location=at(key))
-    for key in ("run", "budget", "sandbox"):
+    for key in ("run", "sandbox"):
         if key in data:
             raise ContractError(
                 f"{key} is unsupported by the native agent-only contract profile.",
@@ -119,6 +120,33 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
                 location=at(key),
                 outcome=Outcome.UNPROVEN,
             )
+    budget = None
+    if "budget" in data:
+        declared_budget = data["budget"]
+        if not isinstance(declared_budget, dict) or set(declared_budget) != {
+            "max_attempts",
+            "max_seconds",
+        }:
+            raise ContractError(
+                "budget requires exactly max_attempts and max_seconds.",
+                code="invalid_budget",
+                location=at("budget"),
+            )
+        attempts = declared_budget["max_attempts"]
+        seconds = declared_budget["max_seconds"]
+        if type(attempts) is not int or not 1 <= attempts <= 16:
+            raise ContractError(
+                "budget.max_attempts must be an integer from 1 to 16.",
+                code="invalid_budget",
+                location=at("budget", "max_attempts"),
+            )
+        if type(seconds) not in (int, float) or not 0 < seconds <= 86400:
+            raise ContractError(
+                "budget.max_seconds must be a finite positive number, at most 86400.",
+                code="invalid_budget",
+                location=at("budget", "max_seconds"),
+            )
+        budget = RepairBudget(attempts, seconds)
     if not document.body.strip() or "\0" in document.body:
         raise ContractError("Contract Markdown body must not be empty.", location=at("$body"))
     needs = data.get("needs", [])
@@ -205,6 +233,7 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
         produces=produces,
         checks=tuple(checks),
         imports=tuple(imports),
+        budget=budget,
         locations={str(key[0]): at(*key) for key in document.locations if len(key) == 1},
     )
 

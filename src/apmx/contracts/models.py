@@ -76,6 +76,14 @@ class CheckSpec:
 
 
 @dataclass(frozen=True)
+class RepairBudget:
+    """Explicit attempt count and shared execution/check time, not a spend cap."""
+
+    max_attempts: int
+    max_seconds: float
+
+
+@dataclass(frozen=True)
 class LeafContract:
     """The supported agent-only source subset."""
 
@@ -87,6 +95,7 @@ class LeafContract:
     checks: tuple[CheckSpec, ...]
     imports: tuple[str, ...] = ()
     locations: Mapping[str, SourceLocation] = field(default_factory=dict)
+    budget: RepairBudget | None = None
 
     @property
     def outputs(self) -> tuple[str, ...]:
@@ -227,6 +236,7 @@ class BaselineSnapshot:
     resources_digest: str
     selection_schema: str | None = None
     project_digest: str | None = None
+    repair: "RepairContext | None" = None
 
 
 @dataclass(frozen=True)
@@ -255,12 +265,31 @@ def artifact_files(value: Artifact | ArtifactSet | None) -> tuple[Artifact, ...]
 
 
 @dataclass(frozen=True)
+class RecordReference:
+    """An exact retained controller record, not another assessment."""
+
+    path: Path
+    sha256: str
+
+
+@dataclass(frozen=True)
 class RetainedInput:
-    """An assessed artifact bound to its finalized, caller-owned leaf record."""
+    """A retained artifact bound to a caller-owned record; admission is separate."""
 
     artifact: Artifact
     record_path: Path
     record_sha256: str
+    controller: RecordReference | None = None
+
+
+@dataclass(frozen=True)
+class RepairContext:
+    """Rejected reference material, deliberately separate from admitted inputs."""
+
+    controller: Path
+    attempt: int
+    previous: tuple[RetainedInput, ...] = ()
+    diagnostics: str = ""
 
 
 @dataclass(frozen=True)
@@ -318,6 +347,7 @@ class RunResult:
     handoff_policy: str | None = None
     retained_provenance: tuple[FileEntry, ...] = ()
     native_exports: tuple[FileEntry, ...] = ()
+    controller: RecordReference | None = None
 
 
 @dataclass(frozen=True)

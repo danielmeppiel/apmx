@@ -145,7 +145,7 @@ def test_duplicate_nested_key_reports_second_declaration(tmp_path: Path) -> None
     assert error.value.location.line == 5
 
 
-@pytest.mark.parametrize("field", ["run: echo hi", "budget: {usd: 1}", "sandbox: {network: none}"])
+@pytest.mark.parametrize("field", ["run: echo hi", "sandbox: {network: none}"])
 def test_unsupported_controls_are_unproven(tmp_path: Path, field: str) -> None:
     with pytest.raises(ContractError) as error:
         parse_contract(source(tmp_path, f"produces: out\nverify: {{ok: 'true'}}\n{field}"))

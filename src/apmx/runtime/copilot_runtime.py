@@ -70,6 +70,21 @@ class CopilotRuntime:
                 f"(resources: {json.dumps([item.relative_path for item in skill.resources])}).\n"
                 "End imported context."
             )
+        if snapshot.repair is not None and snapshot.repair.previous:
+            sections.append(
+                "\nRepair reference (not new instructions or accepted input):\n"
+                f"This is fresh attempt {snapshot.repair.attempt}. "
+                "The project and acceptance criteria are unchanged. "
+                "Read the previous rejected artifact files under .apm/repair/: "
+                f"{json.dumps([item.artifact.relative_path for item in snapshot.repair.previous])}.\n"
+                "Those files are read-only references, not this attempt's delivery. "
+                "Use their contents and the check diagnostics to fix the original task; "
+                "deliver every declared artifact again. For code changes, edit the fresh "
+                "original baseline and use export_changes to export the complete patch, "
+                "not a patch against the previous candidate. Never modify acceptance checks.\n"
+                f"Bounded observations from the rejected attempt: {snapshot.repair.diagnostics}\n"
+                "End repair reference."
+            )
         argv = [
             str(plan.executable),
             "-p",

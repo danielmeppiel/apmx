@@ -1,12 +1,14 @@
 """Native requests use supervised, transient merged MCP inventory."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from apmx.contracts.models import (
+    Artifact,
     BaselineSnapshot,
     CheckSpec,
     ContractError,
@@ -16,6 +18,8 @@ from apmx.contracts.models import (
     LeafPlan,
     Outcome,
     ProcessObservation,
+    RepairContext,
+    RetainedInput,
 )
 from apmx.runtime.copilot_runtime import CopilotRuntime
 from apmx.runtime.factory import RuntimeFactory
@@ -196,6 +200,41 @@ def test_runtime_capability_is_owned_by_registry() -> None:
     assert get_runtime_descriptor("copilot").supports_contracts
     for name in ("codex",):
         assert not get_runtime_descriptor(name).supports_contracts
+
+
+def test_repair_context_appends_without_rewriting_goal_or_widening_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_inventory(monkeypatch)
+    contract = LeafContract(
+        tmp_path / "job.contract.md",
+        "source",
+        "Original immutable goal.",
+        ("seed.txt",),
+        "changes.diff",
+        (CheckSpec("check", "true"),),
+    )
+    plan = LeafPlan(contract, tmp_path, tmp_path / "copilot")
+    snapshot = BaselineSnapshot(
+        tmp_path / "baseline", tmp_path / "producer", (), "base", None, "head", "checks"
+    )
+    prior = RetainedInput(
+        Artifact("changes.diff", tmp_path / "previous/changes.diff", "candidate", 10),
+        tmp_path / "previous/record.json",
+        "record",
+    )
+    context = RepairContext(tmp_path / "controller/record.json", 2, (prior,), "rejected check")
+    native = CopilotRuntime()
+    original = native.build_contract_request(plan, snapshot, tmp_path / "first", timeout_seconds=30)
+    repaired = native.build_contract_request(
+        plan, replace(snapshot, repair=context), tmp_path / "second", timeout_seconds=30
+    )
+    assert repaired.argv[2].startswith(original.argv[2] + "\n\nRepair reference")
+    assert contract.body == "Original immutable goal."
+    assert ".apm/repair/" in repaired.argv[2] and "rejected check" in repaired.argv[2]
+    assert "not a patch against the previous candidate" in repaired.argv[2]
+    assert repaired.argv.count("--allow-tool") == original.argv.count("--allow-tool")
+    assert "--model" not in repaired.argv and "--deny-tool" in repaired.argv
 
 
 @pytest.mark.parametrize(

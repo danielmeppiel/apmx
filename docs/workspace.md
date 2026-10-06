@@ -74,6 +74,9 @@ patched automatically. These are additive recorded observations; historical
 records without the selection fields do not acquire implicit-project semantics
 and are not rewritten.
 
-The capture can be reused by a future repair controller, but this change does
-not itself add retry budgets, OpenCode execution, packaged-factory archive
-support or standards Evidence Package exports.
+[Bounded repair](repair.md) reuses this capture across fresh attempts. A
+standalone budgeted contract retains its original application under
+`.apm/controllers/<id>/project/`; a budgeted factory stage reuses the chain's
+capture. Neither route recaptures the live caller between attempts. This does
+not add OpenCode execution, packaged-factory archive support or standards
+Evidence Package exports.

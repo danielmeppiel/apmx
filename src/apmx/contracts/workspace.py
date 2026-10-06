@@ -28,6 +28,7 @@ from .models import (
     FileEntry,
     LeafPlan,
     ProjectSnapshot,
+    RepairContext,
     RetainedInput,
     RunResult,
     artifact_files,
@@ -157,7 +158,8 @@ def validate_project(snapshot: ProjectSnapshot, root: Path, limits: ContractLimi
     if (
         snapshot.schema != SELECTION_SCHEMA
         or snapshot.root.name != "project"
-        or snapshot.root.parent.parent not in (root / ".apm/chains", root / ".apm/runs")
+        or snapshot.root.parent.parent
+        not in (root / ".apm/chains", root / ".apm/runs", root / ".apm/controllers")
         or len(snapshot.files) > limits.baseline_files
         or sum(entry.size for entry in snapshot.files) > limits.baseline_bytes
         or any(not _application_name(entry.relative_path) for entry in snapshot.files)
@@ -676,6 +678,26 @@ def inspect_artifact_view(view: ArtifactView) -> None:
         _, observed = _read(view.root, expected.relative_path, expected.size)
         if observed != expected:
             raise ContractError("Aggregate artifact bytes changed.", code="artifact_view_changed")
+
+
+def prepare_repair_context(
+    plan: LeafPlan, snapshot: BaselineSnapshot, context: RepairContext
+) -> BaselineSnapshot:
+    """Copy rejected references into protected state, never into the captured baseline."""
+    from .records import validate_binding
+
+    if context.previous:
+        target = snapshot.producer / ".apm" / "repair"
+        target.mkdir(parents=True, mode=0o700)
+        for binding in context.previous:
+            validate_binding(binding, plan.project_root, plan.limits)
+            artifact = binding.artifact
+            raw, entry = _read(artifact.path.parent, artifact.path.name, artifact.size)
+            if entry.sha256 != artifact.sha256 or entry.size != artifact.size:
+                raise ContractError("Repair reference changed.", code="artifact_changed")
+            _write(target, replace(entry, relative_path=artifact.relative_path, mode=0o400), raw)
+            validate_binding(binding, plan.project_root, plan.limits)
+    return replace(snapshot, repair=context)
 
 
 def capture_chain_view(

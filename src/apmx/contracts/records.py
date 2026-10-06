@@ -26,6 +26,7 @@ from .models import (
     Outcome,
     ProcessObservation,
     ProjectSnapshot,
+    RecordReference,
     RetainedInput,
     RunResult,
     artifact_files,
@@ -33,6 +34,7 @@ from .models import (
 
 RUN_SCHEMA = "apm-contract-run/0.3"
 CHAIN_SCHEMA = "apmx-contract-chain/0.2"
+CONTROLLER_SCHEMA = "apmx-contract-controller/1"
 NATIVE_ASSURANCE = {
     "profile": "native-advisory",
     "isolation": "unavailable",
@@ -94,9 +96,8 @@ def _json_value(value: object) -> object:
             field.name: _json_value(getattr(value, field.name))
             for field in fields(value)
             if not (
-                isinstance(value, RunResult)
-                and field.name == "native_exports"
-                and not value.native_exports
+                field.name in {"native_exports", "controller", "budget", "repair"}
+                and not getattr(value, field.name)
             )
         }
     if isinstance(value, dict):
@@ -397,6 +398,8 @@ def validate_binding(binding: RetainedInput, caller: Path, limits: ContractLimit
     _validate_retained_provenance(directory, data, limits)
     files = _retained_artifacts(data, directory, limits)
     _validate_native_exports(data, directory, files, limits)
+    if binding.controller is not None:
+        _controller_document(binding.controller, caller, directory.name, limits)
     if not any(_same_json(_json_value(binding.artifact), item) for item in files):
         raise ContractError("Retained predecessor output changed.", code="artifact_changed")
 
@@ -407,6 +410,46 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
     This proves completed observations, not a downstream assurance policy. The
     separate handoff gate below decides whether those observations may advance.
     """
+    if (
+        plan.contract.budget is not None
+        and result.controller is None
+        and native_assurance_limited(result)
+    ):
+        raise ContractError(
+            "Budgeted completion requires its finalized controller record; no handoff.",
+            code="controller_incomplete",
+            outcome=Outcome.UNPROVEN,
+        )
+    if result.controller is not None and result.outcome is Outcome.COMPLETE:
+        plan = _controller_plan(plan, result)
+    return _assessed_inputs(plan, result)
+
+
+def rejected_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, ...] | None:
+    """Validate a complete rejection for reference only, never for an accepted handoff."""
+    if (
+        result.outcome is not Outcome.REJECTED
+        or result.stop_reason is not None
+        or len(result.checks) != len(plan.contract.checks)
+        or not result.checks
+        or any(
+            check.normalized not in (0, 1)
+            or type(check.process.returncode) is not int
+            or check.process.returncode not in (0, 1)
+            or check.process.error
+            or check.process.stop_reason
+            or check.process.cleanup_confirmed is not True
+            for check in result.checks
+        )
+    ):
+        return None
+    return _assessed_inputs(plan, result, rejected=True)
+
+
+def _assessed_inputs(
+    plan: LeafPlan, result: RunResult, *, rejected: bool = False
+) -> tuple[RetainedInput, ...]:
+    """Share exact evidence validation without sharing the acceptance policy."""
     from .workspace import (
         SELECTION_SCHEMA,
         _digest,
@@ -430,7 +473,7 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
             and data["caller_root"] == str(plan.project_root)
             and data["source"]["sha256"] == plan.contract.source_digest
             and data["source"]["path"] == str(plan.contract.path)
-            and _same_json(data["result"], result)
+            and _same_json(data["result"], replace(result, controller=None))
             and _same_json(data["execution"], result.outcome)
             and _same_json(data["assurance"], NATIVE_ASSURANCE)
             and _same_json(data["source"]["retained_identities"], result.retained_provenance)
@@ -468,7 +511,9 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
         validate_consent_source(result.consent_source)
         if any(data["controls"][key] != "unavailable" for key in ("isolation", "spend_cap")):
             raise ValueError("Native assurance controls differ from the admitted profile.")
-        if result.outcome in (Outcome.REJECTED, Outcome.HALTED):
+        if result.outcome in (Outcome.REJECTED, Outcome.HALTED) and not (
+            rejected and result.outcome is Outcome.REJECTED
+        ):
             raise ContractError(
                 f"Predecessor stopped: {result.stop_reason or result.outcome.name}. Inspect its record.",
                 code=result.stop_reason or "upstream_rejected",
@@ -532,7 +577,7 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
                 check.process
             ):
                 raise ValueError("Raw and normalized check observations disagree.")
-            if check.normalized != 0:
+            if check.normalized not in ((0, 1) if rejected else (0,)):
                 raise ContractError(
                     "Required checks did not all pass; no handoff.",
                     code="incomplete_checks",
@@ -551,7 +596,10 @@ def finalized_inputs(plan: LeafPlan, result: RunResult) -> tuple[RetainedInput, 
             data["transcript"], inspect_retained_log(directory, plan.limits.transcript_bytes)
         ):
             raise ValueError("Finalized transcript changed.")
-        bindings = tuple(RetainedInput(item, directory / "record.json", digest) for item in files)
+        bindings = tuple(
+            RetainedInput(item, directory / "record.json", digest, result.controller)
+            for item in files
+        )
         validate_binding(bindings[0], plan.project_root, plan.limits)
         return bindings
     except (ValueError, KeyError, TypeError, RecursionError) as exc:
@@ -605,6 +653,17 @@ def _chain_nodes(data: dict) -> list[dict]:
     return nodes
 
 
+def _project_capture(raw: dict) -> ProjectSnapshot:
+    """Decode retained selection metadata; the workspace owner validates its bytes."""
+    return ProjectSnapshot(
+        Path(raw["root"]),
+        tuple(FileEntry(**item) for item in raw["files"]),
+        raw["digest"],
+        raw["original_head"],
+        raw["schema"],
+    )
+
+
 def _validate_chain_completion(data: dict, result: ChainResult, nodes: list[dict]) -> None:
     """Match each ordered graph node to its distinct, exact finalized child."""
     from .workspace import validate_project
@@ -626,13 +685,7 @@ def _validate_chain_completion(data: dict, result: ChainResult, nodes: list[dict
         source_root = Path(data["graph"]["root"])
         project = _json_value(data.get("project_capture"))
         if project is not None:
-            snapshot = ProjectSnapshot(
-                Path(project["root"]),
-                tuple(FileEntry(**item) for item in project["files"]),
-                project["digest"],
-                project["original_head"],
-                project["schema"],
-            )
+            snapshot = _project_capture(project)
             if snapshot.root != result.record_path.parent / "project":
                 raise ValueError("Factory project capture belongs to another invocation.")
             validate_project(snapshot, caller, ContractLimits())
@@ -650,7 +703,7 @@ def _validate_chain_completion(data: dict, result: ChainResult, nodes: list[dict
             if (
                 child["source"]["path"] != str(source_root / expected["contract"])
                 or node["record_sha256"] != digest
-                or not _same_json(child["result"], run)
+                or not _same_json(child["result"], replace(run, controller=None))
                 or not _same_json(child["execution"], Outcome.COMPLETE)
                 or child["complete"] is not True
                 or (child["baseline"].get("selection_schema") is not None and project is None)
@@ -674,7 +727,7 @@ def _validate_chain_completion(data: dict, result: ChainResult, nodes: list[dict
 
 def _retained_completion(result: RunResult | ChainResult) -> tuple[tuple[Path, str], ...]:
     """Revalidate retained evidence only; preparation sources may already be removed."""
-    from .workspace import _path, _read, inspect_artifact_view, inspect_retained_log
+    from .workspace import _path, inspect_artifact_view, inspect_retained_log
 
     limits = ContractLimits()
     identities = []
@@ -690,7 +743,9 @@ def _retained_completion(result: RunResult | ChainResult) -> tuple[tuple[Path, s
         if (
             data.get("complete") is not True
             or data.get("phase") != "finished"
-            or not _same_json(data.get("result"), current)
+            or not _same_json(
+                data.get("result"), current if is_chain else replace(current, controller=None)
+            )
             or not _same_json(data.get("execution"), Outcome.COMPLETE)
             or not _same_json(data.get("assurance"), NATIVE_ASSURANCE)
             or not _same_json(
@@ -720,16 +775,133 @@ def _retained_completion(result: RunResult | ChainResult) -> tuple[tuple[Path, s
                 raise ContractError("Factory artifact location changed.", code="artifact_changed")
             inspect_artifact_view(view)
         else:
-            files = _retained_artifacts(data, path.parent, limits)
-            _validate_retained_provenance(path.parent, data, limits)
-            _validate_native_exports(data, path.parent, files, limits)
-            for row in data["baseline"]["files"]:
-                entry = FileEntry(**row)
-                _, actual = _read(path.parent / "baseline", entry.relative_path, entry.size)
-                if actual != entry:
-                    raise ContractError("Retained baseline changed.", code="record_changed")
+            if bool(data.get("controller")) != (current.controller is not None):
+                raise ContractError(
+                    "Completion controller linkage is missing.", code="record_changed"
+                )
+            _retained_leaf_content(data, path.parent, limits)
+            if current.controller is not None:
+                _controller_document(current.controller, caller, current.run_id, limits)
+                identities.append((current.controller.path, current.controller.sha256))
         identities.append((path, digest))
     return tuple(identities)
+
+
+def _retained_leaf_content(data: dict, directory: Path, limits: ContractLimits) -> None:
+    """Validate retained bytes independently of now-removed preparation sources."""
+    from .workspace import _read, inspect_retained_log
+
+    files = _retained_artifacts(data, directory, limits)
+    _validate_retained_provenance(directory, data, limits)
+    _validate_native_exports(data, directory, files, limits)
+    for row in data["baseline"]["files"]:
+        entry = FileEntry(**row)
+        _, actual = _read(directory / "baseline", entry.relative_path, entry.size)
+        if actual != entry:
+            raise ContractError("Retained baseline changed.", code="record_changed")
+    if not _same_json(data["transcript"], inspect_retained_log(directory, limits.transcript_bytes)):
+        raise ContractError("Retained transcript changed.", code="record_changed")
+
+
+def _controller_document(
+    reference: RecordReference, caller: Path, selected: str, limits: ContractLimits
+) -> dict:
+    """Bind a selected passing leaf to its immutable, ordered controller history."""
+    from .workspace import _path, validate_project
+
+    try:
+        path = reference.path
+        if path.name != "record.json" or path.parent.parent != caller / ".apm/controllers":
+            raise ValueError("Controller is not caller-owned.")
+        _path(caller, path.relative_to(caller).as_posix())
+        data, digest = _record_bytes(path, limits)
+        attempts = data["attempts"]
+        if (
+            digest != reference.sha256
+            or data["schema"] != CONTROLLER_SCHEMA
+            or data["controller_id"] != path.parent.name
+            or data["caller_root"] != str(caller)
+            or data["finalized"] is not True
+            or data["phase"] != "finished"
+            or data["selected_run_id"] != selected
+            or not _same_json(data["execution"], Outcome.COMPLETE)
+            or not isinstance(attempts, list)
+            or not 1 <= len(attempts) <= data["budget"]["max_attempts"] <= 16
+            or len({item["run_id"] for item in attempts}) != len(attempts)
+            or attempts[-1]["run_id"] != selected
+        ):
+            raise ValueError("Controller selection or history changed.")
+        project = _project_capture(data["project_capture"])
+        if (
+            project.root.parent.parent == caller / ".apm/controllers"
+            and project.root != path.parent / "project"
+        ):
+            raise ValueError("Controller capture belongs to another invocation.")
+        validate_project(project, caller, limits)
+        for index, item in enumerate(attempts, start=1):
+            child_path = caller / ".apm/runs" / item["run_id"] / "record.json"
+            if (
+                item["index"] != index
+                or item["record"] != str(child_path)
+                or child_path.parent.parent != caller / ".apm/runs"
+            ):
+                raise ValueError("Controller attempt identity changed.")
+            _path(caller, child_path.relative_to(caller).as_posix())
+            child, child_digest = _record_bytes(child_path, limits)
+            _validate_version(child)
+            if (
+                child_digest != item["sha256"]
+                or child["complete"] is not True
+                or child["phase"] != "finished"
+                or child["source"]["sha256"] != data["source"]["sha256"]
+                or child["source"]["path"] != data["source"]["path"]
+                or child["baseline"]["digest"] != data["baseline_digest"]
+                or child["baseline"]["project_digest"] != project.digest
+                or child["baseline"]["original_head"] != project.original_head
+                or child["controller"] != {"record": str(path), "attempt": index}
+                or not _same_json(child["execution"], item["outcome"])
+                or (
+                    index == len(attempts)
+                    and (
+                        not _same_json(child["result"], data["result"])
+                        or not _same_json(child["execution"], Outcome.COMPLETE)
+                    )
+                )
+                or (index < len(attempts) and not _same_json(child["execution"], Outcome.REJECTED))
+            ):
+                raise ValueError("Controller child observations changed.")
+            _retained_leaf_content(child, child_path.parent, limits)
+        return data
+    except (ValueError, KeyError, TypeError, OSError) as exc:
+        if isinstance(exc, ContractError):
+            raise
+        raise ContractError("Controller evidence changed.", code="record_changed") from exc
+
+
+def _controller_plan(plan: LeafPlan, result: RunResult) -> LeafPlan:
+    """Recover the original capture, never substitute the current caller tree."""
+    from .workspace import validate_project
+
+    reference = result.controller
+    if reference is None:
+        raise ContractError("Controller reference is missing.", code="record_changed")
+    data = _controller_document(reference, plan.project_root, result.run_id, plan.limits)
+    try:
+        snapshot = _project_capture(data["project_capture"])
+        if (
+            not _same_json(data["budget"], plan.contract.budget)
+            or (plan.project_snapshot is not None and snapshot != plan.project_snapshot)
+            or (
+                plan.project_snapshot is None and snapshot.root != reference.path.parent / "project"
+            )
+        ):
+            raise ValueError("Controller capture differs from the admitted invocation.")
+        validate_project(snapshot, plan.project_root, plan.limits)
+        return replace(plan, project_snapshot=snapshot)
+    except (ValueError, KeyError, TypeError) as exc:
+        if isinstance(exc, ContractError):
+            raise
+        raise ContractError("Controller capture changed.", code="record_changed") from exc
 
 
 class CompletionBoundary:
@@ -905,7 +1077,7 @@ class AttemptStore:
         if not native_assurance_limited(result):
             return result
         try:
-            finalized_inputs(plan, result)
+            _assessed_inputs(plan, result)
         except ContractError as exc:
             failed = replace(
                 result,
@@ -928,7 +1100,7 @@ class AttemptStore:
         completed = replace(result, outcome=Outcome.COMPLETE)
         self.finish(completed)
         try:
-            finalized_inputs(plan, completed)
+            _assessed_inputs(plan, completed)
         except (ContractError, OSError, KeyboardInterrupt) as exc:
             self.fail_finalization(completed, exc)
         return completed
@@ -961,6 +1133,110 @@ class AttemptStore:
             "incomplete; inspect filesystem durability before retrying.",
             code=code,
         ) from error
+
+
+class ControllerStore(AttemptStore):
+    """Link attempts durably; acceptance remains the leaf record owner's decision."""
+
+    @classmethod
+    def create_controller(cls, plan: LeafPlan, consent_source: str) -> "ControllerStore":
+        validate_consent_source(consent_source)
+        if plan.contract.budget is None:
+            raise ContractError("A repair controller requires an authored budget.")
+        identity, directory = _allocate_directory(plan.project_root, "controllers")
+        store = cls(
+            identity,
+            directory,
+            {
+                "schema": CONTROLLER_SCHEMA,
+                "controller_id": identity,
+                "caller_root": str(plan.project_root),
+                "source": {"path": str(plan.contract.path), "sha256": plan.contract.source_digest},
+                "budget": plan.contract.budget,
+                "advisory_consent": consent_source,
+                "assurance": dict(NATIVE_ASSURANCE),
+                "provenance": "same-user observations; not signed or protected",
+                "created_at": datetime.now(UTC).isoformat(),
+                "phase": "admitted",
+                "finalized": False,
+                "attempts": [],
+                "selected_run_id": None,
+            },
+        )
+        store._write()
+        return store
+
+    def freeze(self, plan: LeafPlan) -> None:
+        from .workspace import _digest
+
+        if plan.input_inventory is None or plan.project_snapshot is None:
+            raise ContractError("Controller inputs must be captured.", code="unresolved_inputs")
+        self.update(
+            "captured",
+            project_capture=plan.project_snapshot,
+            baseline_digest=_digest(plan.input_inventory),
+        )
+
+    def attach_attempt(self, attempt: AttemptStore) -> None:
+        """Record allocation before any producer starts, including failed finalization."""
+        attempts = self._data["attempts"]
+        attempts.append(
+            {
+                "index": len(attempts) + 1,
+                "run_id": attempt.run_id,
+                "record": str(attempt.record_path),
+                "sha256": None,
+                "outcome": None,
+            }
+        )
+        self.update("executing")
+
+    def record_attempt(self, result: RunResult, limits: ContractLimits) -> None:
+        row = self._data["attempts"][-1]
+        if row["run_id"] != result.run_id or result.controller is not None:
+            raise ContractError("Controller attempt identity disagrees.", code="record_changed")
+        data, digest = _record_bytes(result.run_directory / "record.json", limits)
+        if not _same_json(data["result"], result):
+            raise ContractError("Controller child result changed.", code="record_changed")
+        row.update(sha256=digest, outcome=result.outcome)
+        self.update("assessed")
+
+    def finish_controller(self, plan: LeafPlan, result: RunResult, reason: str) -> RunResult:
+        if result.outcome is Outcome.COMPLETE:
+            _assessed_inputs(plan, result)
+        self.update(
+            "finished",
+            finalized=True,
+            finished_at=datetime.now(UTC).isoformat(),
+            selected_run_id=result.run_id if result.outcome is Outcome.COMPLETE else None,
+            result=result,
+            execution=result.outcome,
+            stop_reason=reason,
+        )
+        _, digest = _record_bytes(self.record_path, plan.limits)
+        linked = replace(result, controller=RecordReference(self.record_path, digest))
+        if result.outcome is Outcome.COMPLETE:
+            finalized_inputs(plan, linked)
+        return linked
+
+    def abort(self, code: str, error: BaseException) -> None:
+        """Never leave a visible selected success after controller persistence fails."""
+        try:
+            self.update(
+                "halted",
+                finalized=False,
+                selected_run_id=None,
+                execution=Outcome.HALTED,
+                result=None,
+                stop_reason=code,
+                error={"type": type(error).__name__, "message": str(error)},
+            )
+        except (OSError, KeyboardInterrupt) as persistence_error:
+            raise ContractError(
+                f"Controller failure-state persistence failed at {self.record_path}. "
+                "Treat this invocation as HALTED; do not rely on a visible success.",
+                code="controller_finalization_failure",
+            ) from persistence_error
 
 
 class ChainStore(AttemptStore):
