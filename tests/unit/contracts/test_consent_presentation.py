@@ -124,18 +124,19 @@ def test_work_precedes_single_disclosure_and_default_no(
 
 
 @pytest.mark.parametrize("outputs", ("one.md", ("one.md", "two.md")))
-def test_single_contract_grammar(tmp_path, monkeypatch, capsys, outputs):
+@pytest.mark.parametrize("harness,label", (("copilot", "Copilot"), ("opencode", "OpenCode")))
+def test_single_contract_grammar(tmp_path, monkeypatch, capsys, outputs, harness, label):
     graph = consent_graph(tmp_path)
     contract = replace(graph.order[0], produces=outputs)
     graph = replace(graph, catalog=(contract,), order=(contract,), targets=(contract.path,))
     logger = ContractLogger()
     monkeypatch.setattr(sys, "stdin", io.StringIO("\n"))
-    logger.render_factory_work(graph)
+    logger.render_factory_work(graph, harness=harness)
     assert not logger.confirm_factory()
     output = capsys.readouterr().out
     count = 1 if isinstance(outputs, str) else 2
     assert f"1 contract / {count} artifact{'s' if count == 2 else ''} / 1 planned check" in output
-    assert "Run this contract with Copilot? [y/N]" in output
+    assert f"Run this contract with {label}? [y/N]" in output
 
 
 def test_collision_names_match_execution(tmp_path, capsys):

@@ -523,6 +523,7 @@ class ContractLogger:
         self._display_root: Path | None = None
         self._factory_contract_count = 0
         self._produces = "saved output"
+        self._harness = "Copilot"
         self._activity_label = "Working"
         self._checks_heading_shown = False
         self._preparation_notice_shown = False
@@ -801,6 +802,7 @@ class ContractLogger:
 
     def _selected(self, event: RunEvent) -> None:
         self.execution_context()
+        self._harness = self._harness_label(self._field(event, "harness", "copilot"))
         caller = self._field(event, "caller_root", "")
         if caller:
             self._caller_root = Path(caller)
@@ -842,8 +844,8 @@ class ContractLogger:
         if phase == "checks":
             self._checks_heading()
         message = {
-            "preflight": "Preparing files for Copilot",
-            "execution": "Running Copilot",
+            "preflight": f"Preparing files for {self._harness}",
+            "execution": f"Running {self._harness}",
             "capture": "Saving output",
             "checks": f"Checking {self._produces}",
             "record": "Saving results",
@@ -857,7 +859,7 @@ class ContractLogger:
             )
 
     def _attribution(self, event: RunEvent) -> str:
-        source = {"harness": "Copilot", "checker": "Check"}.get(event.source, event.source)
+        source = {"harness": self._harness, "checker": "Check"}.get(event.source, event.source)
         label = self._field(event, "label", "")
         stream = self._field(event, "stream", "")
         parts = [source]
@@ -1182,7 +1184,7 @@ class ContractLogger:
             if result.artifact is None:
                 self._write("The declared output could not be checked.")
                 self._write(
-                    "Review the contract output path and Copilot diagnostics before retrying."
+                    f"Review the contract output path and {self._harness} diagnostics before retrying."
                 )
             else:
                 self._write("Checks could not establish a result.")
@@ -1191,20 +1193,20 @@ class ContractLogger:
             reason, action = {
                 "cancelled": ("Run interrupted.", "Review any saved output before rerunning."),
                 "producer_failed": (
-                    "Copilot did not complete successfully.",
-                    "Review Copilot diagnostics and logs before retrying.",
+                    f"{self._harness} did not complete successfully.",
+                    f"Review {self._harness} diagnostics and logs before retrying.",
                 ),
                 "native_reported_failure": (
-                    "Copilot reported a failure.",
-                    "Review Copilot diagnostics and logs before retrying.",
+                    f"{self._harness} reported a failure.",
+                    f"Review {self._harness} diagnostics and logs before retrying.",
                 ),
                 "native_protocol_error": (
-                    "Copilot output could not be interpreted.",
-                    "Review Copilot diagnostics and logs before retrying.",
+                    f"{self._harness} output could not be interpreted.",
+                    f"Review {self._harness} diagnostics and logs before retrying.",
                 ),
                 "native_completion_unobserved": (
-                    "Copilot completion was not observed.",
-                    "Review Copilot diagnostics and logs before retrying.",
+                    f"{self._harness} completion was not observed.",
+                    f"Review {self._harness} diagnostics and logs before retrying.",
                 ),
                 "attempt_deadline": (
                     "The run exceeded its time limit.",
@@ -1215,7 +1217,7 @@ class ContractLogger:
                     "Review the contract workload before retrying.",
                 ),
                 "producer_stop_unconfirmed": (
-                    "Copilot may still be running.",
+                    f"{self._harness} may still be running.",
                     "Inspect the reported process before retrying.",
                 ),
                 "checker_stop_unconfirmed": (
@@ -1234,6 +1236,7 @@ class ContractLogger:
 
     def render_plan(self, plan: LeafPlan, inventory: tuple[FileEntry, ...]) -> None:
         """Show the admitted surface without printing source bodies or prompts."""
+        self._harness = self._harness_label(plan.harness)
         relative = plan.source.contract_relative_path if plan.source else ""
         source = (
             (plan.source.original_root or plan.source.root) / relative
@@ -1244,7 +1247,7 @@ class ContractLogger:
         self._write(
             f"Preview: {identity} -> {plan.contract.output_label}", severity="heading", indent=0
         )
-        self._write(f"Copilot / {plan.model or 'default model'}", severity="detail")
+        self._write(f"{self._harness} / {plan.model or 'default model'}", severity="detail")
         self._write("Nothing will execute or download.")
         for name in plan.contract.needs:
             self._write(f"Input: {name}")
@@ -1344,8 +1347,13 @@ class ContractLogger:
         """The prompt uses stdout; both it and stdin must be interactive."""
         return console.can_confirm_factory()
 
-    def render_factory_work(self, graph: Graph) -> None:
+    @staticmethod
+    def _harness_label(name: str) -> str:
+        return {"copilot": "Copilot", "opencode": "OpenCode"}.get(name, name)
+
+    def render_factory_work(self, graph: Graph, *, harness: str = "copilot") -> None:
         self.stop_activity()
+        self._harness = self._harness_label(harness)
         count = self._factory_contract_count = len(graph.order)
         artifacts = sum(len(contract.outputs) for contract in graph.order)
         checks = sum(len(contract.checks) for contract in graph.order)
@@ -1390,7 +1398,7 @@ class ContractLogger:
             if self._factory_contract_count == 1
             else f"these {self._factory_contract_count} contracts"
         )
-        prompt = f"Run {subject} with Copilot? [y/N]"
+        prompt = f"Run {subject} with {self._harness}? [y/N]"
         self._write(prompt, accent=prompt, indent=0)
         if not self._display.enabled:
             return False
@@ -1439,7 +1447,7 @@ class ContractLogger:
         self._display.gap()
 
     def render_chain_plan(self, plan: ChainPlan) -> None:
-        self.render_factory_work(plan.graph)
+        self.render_factory_work(plan.graph, harness=plan.nodes[0].plan.harness)
         self._write(f"{plan.nodes[0].plan.harness} / {plan.nodes[0].plan.model or 'default model'}")
         self._write("Nothing will execute or download. Dependency resolution uses no model calls.")
         policy = (

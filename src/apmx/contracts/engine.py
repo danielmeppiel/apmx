@@ -250,7 +250,7 @@ def run_attempt(
             request, timeout_seconds=min(request.timeout_seconds, _remaining(deadline))
         )
         store.update("execution", native_controls=request.control_observations)
-        decoder = ContractStreamDecoder(events, limits=plan.limits)
+        decoder = RuntimeFactory.get_contract_decoder(plan.harness, events, limits=plan.limits)
         producer = process.supervise_process(
             request,
             on_bytes=decoder.feed,
@@ -309,7 +309,7 @@ def run_attempt(
                     "diagnostic",
                     severity="warning",
                     message=f"The complete delivery ({plan.contract.output_label}) was not produced.",
-                    action="Inspect the contract and retained Copilot transcript, then rerun.",
+                    action="Inspect the contract and retained native transcript, then rerun.",
                 )
     except KeyboardInterrupt:
         stop_reason = "cancelled"

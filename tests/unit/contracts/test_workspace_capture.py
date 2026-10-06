@@ -95,6 +95,8 @@ def test_managed_state_dependencies_and_native_skills_are_never_implicit(tmp_pat
         "node_modules/dep/data",
         "src/__pycache__/module.pyc",
         ".agents/skills/unselected/SKILL.md",
+        ".opencode/skills/unselected/SKILL.md",
+        ".opencode/skill/unselected/SKILL.md",
     )
     for name in excluded:
         path = tmp_path / name

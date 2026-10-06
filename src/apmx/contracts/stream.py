@@ -312,6 +312,11 @@ class ContractStreamDecoder:
         if len(kind) > 256:
             self._protocol_failure("Native JSONL event type exceeded the metadata limit.")
             return
+        self._event(event)
+
+    def _event(self, event: dict) -> None:
+        """Interpret one framed event using the selected native protocol."""
+        kind = event["type"]
         if kind == "result":
             self._native_result(event)
             return

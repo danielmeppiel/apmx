@@ -213,10 +213,12 @@ are rewritten, and unlisted markers or changed package content remain failures.
 Records expose any omitted metadata paths as `managed_metadata`; observed source
 hashes still describe the actual installed tree.
 
-Selected skills enter `.agents/skills/<skill-name>/` in the actual Copilot
+Selected skills enter `.agents/skills/<skill-name>/` in the actual
 producer workspace, with their original `SKILL.md` bytes and supporting files.
 Copilot discovers and loads them natively; their bodies are not embedded in the
-contract prompt. Instruction-type imports remain passive context beneath
+contract prompt. The development [OpenCode profile](opencode.md) supplies that
+same captured tree through native `skills.paths`, permitting only selected
+skill names. Instruction-type imports remain passive context beneath
 `_apmx_context/import-N/`. The destination/name authority is
 `contracts/context_layout.py`; package aliases are not native skill names.
 Supported sources are global `.apm/instructions/**/*.instructions.md`, root

@@ -23,7 +23,8 @@ The following directory names are excluded at every depth, case-insensitively:
 `.git`, `.apm`, `apm_modules`, `.venv`, `venv`, `node_modules`, `__pycache__`,
 `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.tox`, `.nox`, `_apmx_source`,
 and `_apmx_context`. Consumer native-skill trees (`.agents/skills`,
-`.github/skills`, `.claude/skills`), local dependency roots identified by the
+`.github/skills`, `.claude/skills`, `.opencode/skills`, `.opencode/skill`),
+local dependency roots identified by the
 effective lock, and the selected package's original source root also stay out.
 Skills are supplied only through selected imports.
 
@@ -78,5 +79,5 @@ and are not rewritten.
 standalone budgeted contract retains its original application under
 `.apm/controllers/<id>/project/`; a budgeted factory stage reuses the chain's
 capture. Neither route recaptures the live caller between attempts. This does
-not add OpenCode execution, packaged-factory archive support or standards
-Evidence Package exports.
+not establish [native harness parity](opencode.md), packaged-factory archive
+support or standards Evidence Package exports.

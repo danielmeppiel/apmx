@@ -64,7 +64,7 @@ def invoke_contract(
                 and not allow_unproven_inputs
                 and logger.can_confirm_factory()
             ):
-                logger.render_factory_work(graph)
+                logger.render_factory_work(graph, harness=harness)
                 if not logger.confirm_factory():
                     raise ContractError(
                         "Factory not started: the local execution profile was not authorized.",
@@ -82,7 +82,8 @@ def invoke_contract(
                 logger.execution_context(factory=True)
         if not planning and not allow_advisory:
             raise ContractError(
-                "Copilot, APM and checks can use host files, network and available login details. "
+                f"{ContractLogger._harness_label(harness)}, APM and checks can use host files, "
+                "network and available login details. "
                 "Add --allow-host-access to allow this run; policy still applies. "
                 "Factories in automation also need --allow-unproven-inputs for native handoffs.",
                 code="advisory_consent_required",

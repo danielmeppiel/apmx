@@ -45,7 +45,7 @@ until all three are listed. Published downloads do not require GitHub
 authentication.
 
 You need **Git** and the [native GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart).
-Authenticate through Copilot itself. APMX currently supports native Copilot
+Authenticate through Copilot itself. The published v0.4.2 supports native Copilot
 only; a Copilot account with model access is required, and model work can incur
 usage charges. The APMX executable does **not** require a separately installed
 Python, but Python is required for the example's checks described below.
@@ -295,8 +295,10 @@ checkout and use the approved system client instead:
 
 Install **Git**, [uv](https://docs.astral.sh/uv/getting-started/installation/)
 and the [native GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart).
-Open Copilot itself and authenticate before live execution. APMX currently
-supports **native Copilot only**. Model access and usage charges come from your
+Open Copilot itself and authenticate before live execution. The historical
+v0.4.2 commands below support **native Copilot only**; the unpublished
+development [OpenCode profile](opencode.md) has separate prerequisites and
+an outstanding native execution proof gate. Model access and usage charges come from your
 Copilot account; APMX does not supply credentials or a hard spending cap.
 
 The commands select **Python 3.12**; uv can provision it if needed. They include

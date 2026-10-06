@@ -50,7 +50,9 @@ class NativeCommand(click.Command):
     metavar="PACKAGE_REF",
     help="Select a factory or contract from an APM source package.",
 )
-@click.option("--on", "harness", required=True, type=str, help="Agent CLI to use (copilot).")
+@click.option(
+    "--on", "harness", required=True, type=str, help="Agent CLI to use (copilot, opencode)."
+)
 @click.option("--model", metavar="MODEL", help="Model to use through the selected agent CLI.")
 @click.option(
     "--plan", "planning", is_flag=True, help="Show steps and checks without running or downloading."
@@ -64,7 +66,7 @@ class NativeCommand(click.Command):
     "--allow-host-access",
     "allow_advisory",
     is_flag=True,
-    help="Allow Copilot and checks to use host files, network and available login details.",
+    help="Allow the selected agent CLI and checks to use host files, network and available login details.",
 )
 @click.option(
     "--verbose", "-v", is_flag=True, help="Show detailed planning and execution observations."

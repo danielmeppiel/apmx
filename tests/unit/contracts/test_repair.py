@@ -70,8 +70,9 @@ def test_invalid_budget_is_rejected_before_execution(caller: Path, budget: objec
     assert rejected.value.location.line >= 2
 
 
+@pytest.mark.parametrize("harness", ("copilot", "opencode"))
 def test_rejected_candidate_repairs_against_frozen_original_inputs(
-    caller: Path, monkeypatch: pytest.MonkeyPatch
+    caller: Path, monkeypatch: pytest.MonkeyPatch, harness: str
 ) -> None:
     path = budgeted_contract(
         caller,
@@ -94,7 +95,7 @@ def test_rejected_candidate_repairs_against_frozen_original_inputs(
         return f"from pathlib import Path\nPath('answer.txt').write_text({value!r})"
 
     calls = producer(monkeypatch, body=body)
-    plan = frontend.plan_contract(path, caller, harness="copilot")
+    plan = frontend.plan_contract(path, caller, harness=harness)
     result = engine.run_contract(plan, logger=ContractLogger(), allow_advisory=True)
     assert result.outcome is Outcome.COMPLETE
     assert len(calls) == 2 and produced == ["bad", "good"]
@@ -111,15 +112,16 @@ def test_rejected_candidate_repairs_against_frozen_original_inputs(
 
 
 @pytest.mark.parametrize("exit_code,expected", [(1, 2), (2, 1), (127, 1)])
+@pytest.mark.parametrize("harness", ("copilot", "opencode"))
 def test_only_complete_candidate_rejections_are_retryable(
-    caller: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int, expected: int
+    caller: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int, expected: int, harness: str
 ) -> None:
     path = budgeted_contract(
         caller, {"max_attempts": 3, "max_seconds": 30}, check=f"raise SystemExit({exit_code})"
     )
     calls = producer(monkeypatch)
     result = engine.run_contract(
-        frontend.plan_contract(path, caller, harness="copilot"),
+        frontend.plan_contract(path, caller, harness=harness),
         logger=ContractLogger(),
         allow_advisory=True,
     )
@@ -129,9 +131,9 @@ def test_only_complete_candidate_rejections_are_retryable(
     assert controller["stop_reason"] == ("no_progress" if exit_code == 1 else "not_retryable")
 
 
-def run(path: Path, caller: Path, **options):
+def run(path: Path, caller: Path, *, harness: str = "copilot", **options):
     return engine.run_contract(
-        frontend.plan_contract(path, caller, harness="copilot", **options),
+        frontend.plan_contract(path, caller, harness=harness, **options),
         logger=ContractLogger(),
         allow_advisory=True,
     )
@@ -180,8 +182,9 @@ def test_operational_error_takes_precedence_over_another_rejection(
 
 
 @pytest.mark.parametrize("failure", ["missing", "protocol", "cancelled", "cleanup"])
+@pytest.mark.parametrize("harness", ("copilot", "opencode"))
 def test_operational_producer_failures_never_retry(
-    caller: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+    caller: Path, monkeypatch: pytest.MonkeyPatch, failure: str, harness: str
 ) -> None:
     path = budgeted_contract(caller, {"max_attempts": 3, "max_seconds": 30})
     code = (
@@ -204,18 +207,19 @@ def test_operational_producer_failures_never_retry(
             return supervise(request, **kwargs)
 
         monkeypatch.setattr(engine.process, "supervise_process", native_failure)
-    result = run(path, caller)
+    result = run(path, caller, harness=harness)
     assert len(calls) == 1
     assert result.outcome is (Outcome.UNPROVEN if failure == "missing" else Outcome.HALTED)
     assert json.loads(result.controller.path.read_bytes())["stop_reason"] == "not_retryable"
 
 
+@pytest.mark.parametrize("harness", ("copilot", "opencode"))
 def test_one_shared_deadline_reaches_the_real_producer_supervisor(
-    caller: Path, monkeypatch: pytest.MonkeyPatch
+    caller: Path, monkeypatch: pytest.MonkeyPatch, harness: str
 ) -> None:
     path = budgeted_contract(caller, {"max_attempts": 3, "max_seconds": 1.5})
     calls = producer(monkeypatch, body=lambda *_: "import time; time.sleep(10)")
-    result = run(path, caller)
+    result = run(path, caller, harness=harness)
     assert len(calls) == 1
     assert result.outcome is Outcome.HALTED
     child = json.loads((result.run_directory / "record.json").read_bytes())
@@ -224,14 +228,15 @@ def test_one_shared_deadline_reaches_the_real_producer_supervisor(
     assert child["producer"]["elapsed_seconds"] < 5
 
 
+@pytest.mark.parametrize("harness", ("copilot", "opencode"))
 def test_check_timeout_never_becomes_candidate_repair(
-    caller: Path, monkeypatch: pytest.MonkeyPatch
+    caller: Path, monkeypatch: pytest.MonkeyPatch, harness: str
 ) -> None:
     path = budgeted_contract(
         caller, {"max_attempts": 3, "max_seconds": 30}, check="import time; time.sleep(10)"
     )
     calls = producer(monkeypatch)
-    result = run(path, caller, limits=replace(ContractLimits(), check_seconds=0.1))
+    result = run(path, caller, harness=harness, limits=replace(ContractLimits(), check_seconds=0.1))
     assert len(calls) == 1
     assert result.checks[0].process.stop_reason == "timeout"
     assert result.checks[0].normalized == 2 and result.outcome is Outcome.UNPROVEN
