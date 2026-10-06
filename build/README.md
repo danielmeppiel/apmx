@@ -266,6 +266,16 @@ descendant also terminates its extraction-cleanup process, leaving fixture-only
 temporary files. The strict app temporary-file cleanup check is not relaxed.
 `--report PATH` retains a JSON report containing the validated fixture records.
 
+## Read-only candidate CI
+
+`native-notice-ci.yml` runs on pull requests and pushes to `main`. It exercises
+the five native platforms, the source suite and frozen acceptance before
+retaining notice-verified candidate archives for one day and smoke reports for
+seven days. Windows protocol actors stay on their runners. This workflow has
+read-only repository permissions, no release token and no publication step.
+Candidate artifacts are not published releases, even when their version matches
+an existing release.
+
 ## Manual public experimental promotion
 
 The legacy CI, tag-release and bootstrap workflow identities remain disabled.
@@ -380,7 +390,7 @@ Infrastructure-only checks, before the source package exists:
 
 ```sh
 python3 -m unittest discover -s tests/release -v
-actionlint .github/workflows/ci.yml .github/workflows/release.yml
+actionlint .github/workflows/*.yml
 ```
 
 Those checks are not evidence of a functional frozen application build.
