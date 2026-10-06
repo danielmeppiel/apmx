@@ -6,9 +6,11 @@ from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
+from click.testing import CliRunner
 from test_engine import _plan, _python_check
 from test_opencode_stream import frame
 
+from apmx.cli import main
 from apmx.contracts import engine
 from apmx.contracts.models import (
     BaselineSnapshot,
@@ -23,6 +25,19 @@ from apmx.runtime.opencode_runtime import OpenCodeRuntime
 from apmx.runtime.registry import get_runtime_descriptor
 
 pytestmark = pytest.mark.component
+
+
+@pytest.mark.parametrize("harness,label", (("copilot", "Copilot"), ("opencode", "OpenCode")))
+def test_package_consent_names_the_selected_harness_before_preparation(
+    tmp_path, monkeypatch, harness, label
+):
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        main, ["--from", "owner/package", "job.contract.md", "--on", harness]
+    )
+    assert result.exit_code == 21
+    assert f"{label} and checks can read or change files" in result.output
+    assert not list(tmp_path.iterdir())
 
 
 def setup(tmp_path, monkeypatch, *, config=None, changed=None, version=b"1.2.24\n"):

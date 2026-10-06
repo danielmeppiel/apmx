@@ -148,7 +148,8 @@ def main(
         admit_caller_policy(caller_root, limits=limits)
         if not planning and not allow_advisory:
             raise ContractError(
-                "Copilot and checks can read or change files, use the network, and use "
+                f"{ContractLogger._harness_label(harness)} and checks can read or change files, "
+                "use the network, and use "
                 "available login details. Run only contracts you trust. Add "
                 "--allow-host-access to allow this run; policy still applies. "
                 "Use --plan to preview without running.",

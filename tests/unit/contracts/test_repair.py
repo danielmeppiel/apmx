@@ -100,6 +100,8 @@ def test_rejected_candidate_repairs_against_frozen_original_inputs(
     assert result.outcome is Outcome.COMPLETE
     assert len(calls) == 2 and produced == ["bad", "good"]
     assert result.controller is not None
+    assert records.load_completed_result(result.controller.path) == result
+    assert records.load_completed_result(result.run_directory / "record.json") == result
     controller = json.loads(result.controller.path.read_bytes())
     assert controller["schema"] == "apmx-contract-controller/1"
     assert controller["selected_run_id"] == result.run_id

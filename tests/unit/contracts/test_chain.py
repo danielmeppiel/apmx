@@ -159,6 +159,7 @@ def test_actual_leaf_chain_preserves_caller_and_assurance(
     assert result.record_path.name == "record.json"
     assert document["schema"] == "apmx-contract-chain/0.2"
     if allow:
+        assert records.load_completed_result(result.record_path) == result
         assert result.runs[-1].artifact.path.read_bytes() == b"seed"
         assert (calls[1][1].root / "first.txt").read_bytes() == b"seed"
         assert (
