@@ -5,6 +5,8 @@ needs:
 produces:
   - changes.diff
   - implementation.md
+imports:
+  - python-testing-patterns
 verify:
   shipping-examples: python3 -I -B checks/acceptance.py changes.diff
   checkout-regression: python3 -I -B checks/regression.py changes.diff
@@ -25,6 +27,9 @@ documented interfaces, zero handling and validation of negatives and invalid
 types, including booleans.
 
 Add tests/test_free_shipping.py using Python's standard unittest framework.
+Use the selected python-testing-patterns capability for test design, adapted
+to this existing framework. Its examples do not authorize new dependencies,
+tools, or changes to acceptance; the request and this agreement govern.
 Exercise the threshold and neighboring values, with useful regression coverage
 for the requested behavior. Do not change the existing tests or supplied checks.
 
