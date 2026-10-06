@@ -98,6 +98,14 @@ def test_factory_check_names_describe_the_proven_outcomes() -> None:
     assert sum(map(len, actual.values())) == 9
 
 
+def test_only_build_declares_a_shared_repair_budget() -> None:
+    for name in DELIVERIES:
+        document = load_frontmatter_document(EXAMPLE / "contracts" / name)
+        assert document.metadata.get("budget") == (
+            {"max_attempts": 3, "max_seconds": 600} if name == "build.contract.md" else None
+        )
+
+
 def test_contracts_name_handoffs_not_a_source_inventory() -> None:
     expected = {
         "planning.contract.md": "request.md",
@@ -217,6 +225,15 @@ def test_factory_native_preview_and_five_real_leaf_handoffs(
     assert data["complete"] is True and data["result"]["outcome"]["name"] == "COMPLETE"
     assert data["consent_source"] == ("interactive" if interactive else "flag")
     assert [tuple(item["checks"]) for item in data["graph"]["order"]] == list(CHECKS.values())
+    for node, declared_outputs in zip(data["nodes"], DELIVERIES.values(), strict=True):
+        reference = node["result"].get("controller")
+        if "changes.diff" in declared_outputs:
+            controller = json.loads(Path(reference["path"]).read_bytes())
+            assert controller["budget"] == {"max_attempts": 3, "max_seconds": 600}
+            assert len(controller["attempts"]) == 1
+            assert controller["selected_run_id"] == node["result"]["run_id"]
+        else:
+            assert reference is None
     assert Path.cwd() == caller.parent and not (caller.parent / ".apm").exists()
     previous = {}
     for plan, snapshot, directory in calls:

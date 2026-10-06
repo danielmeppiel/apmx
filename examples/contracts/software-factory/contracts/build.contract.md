@@ -7,6 +7,9 @@ produces:
   - implementation.md
 imports:
   - python-testing-patterns
+budget:
+  max_attempts: 3
+  max_seconds: 600
 verify:
   shipping-examples: python3 -I -B checks/acceptance.py changes.diff
   checkout-regression: python3 -I -B checks/regression.py changes.diff
