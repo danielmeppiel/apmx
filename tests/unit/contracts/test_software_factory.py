@@ -168,12 +168,14 @@ def test_factory_checks_preserve_shell_arguments_and_contract_body(
     reason="Optional example integration: install apmx[factory] (Behave==1.3.3).",
 )
 @pytest.mark.parametrize("interactive,renamed", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize("harness", ["copilot", "opencode"])
 def test_factory_native_preview_and_five_real_leaf_handoffs(
     caller: Path,
     monkeypatch: pytest.MonkeyPatch,
     private_preparation: None,
     interactive: bool,
     renamed: bool,
+    harness: str,
 ) -> None:
     from apmx.core.contract_logger import ContractLogger
 
@@ -206,7 +208,7 @@ def test_factory_native_preview_and_five_real_leaf_handoffs(
         return "from pathlib import Path\n" + scratch + writes
 
     calls = producer(monkeypatch, body=produce)
-    preview = CliRunner().invoke(main, [str(caller), "--on", "copilot", "--plan"])
+    preview = CliRunner().invoke(main, [str(caller), "--on", harness, "--plan"])
     assert preview.exit_code == 0 and "5 contracts" in preview.output, preview.output
     assert calls == [] and not (caller / ".apm").exists()
     result = CliRunner().invoke(
@@ -214,7 +216,7 @@ def test_factory_native_preview_and_five_real_leaf_handoffs(
         [
             str(caller),
             "--on",
-            "copilot",
+            harness,
             *([] if interactive else ["--allow-host-access", "--allow-unproven-inputs"]),
         ],
         input="y\n",
@@ -237,6 +239,14 @@ def test_factory_native_preview_and_five_real_leaf_handoffs(
     assert Path.cwd() == caller.parent and not (caller.parent / ".apm").exists()
     previous = {}
     for plan, snapshot, directory in calls:
+        assert plan.harness == harness
+        assert (
+            plan.contract.source_digest
+            == hashlib.sha256(plan.contract.path.read_bytes()).hexdigest()
+        )
+        leaf = json.loads((directory / "record.json").read_bytes())
+        assert leaf["harness"] == harness and leaf["native_completion_observed"] is True
+        assert leaf["requested_model"] is None and leaf["observed_models"] == []
         published = {
             path.relative_to(directory / "artifacts").as_posix(): path.read_bytes()
             for path in (directory / "artifacts").rglob("*")
@@ -287,6 +297,67 @@ def test_factory_native_preview_and_five_real_leaf_handoffs(
             report["subject"]["documentation_patch"]
             == hashlib.sha256(expected["documentation.diff"]).hexdigest()
         )
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("behave") is None,
+    reason="Optional example integration: install apmx[factory] (Behave==1.3.3).",
+)
+def test_identical_factory_agreement_survives_fixture_harness_switch(
+    caller: Path, monkeypatch: pytest.MonkeyPatch, private_preparation: None
+) -> None:
+    prepare_example(caller)
+    install(caller, limits=ContractLimits())
+    expected = outputs(caller.parent)
+    inventory = {name: (caller / name).read_bytes() for name in ("apm.yml", "apm.lock.yaml")}
+
+    def produce(plan, *_):
+        return "from pathlib import Path\n" + "\n".join(
+            f"Path({name!r}).write_bytes({expected[name]!r})" for name in plan.contract.outputs
+        )
+
+    calls = producer(monkeypatch, body=produce)
+    agreements = []
+    run_ids = []
+    for harness in ("copilot", "opencode"):
+        first = len(calls)
+        result = CliRunner().invoke(
+            main,
+            [str(caller), "--on", harness, "--allow-host-access", "--allow-unproven-inputs"],
+        )
+        assert result.exit_code == 0, result.output
+        selected = calls[first:]
+        assert len(selected) == 5
+        agreements.append(
+            tuple(
+                (
+                    plan.contract,
+                    snapshot.digest,
+                    snapshot.project_digest,
+                    snapshot.resources_digest,
+                    tuple(
+                        (
+                            item.name,
+                            item.context_name,
+                            item.source_digest,
+                            item.lock_identity,
+                            item.verified_package_hash,
+                            tuple(
+                                (resource.relative_path, resource.sha256, resource.size)
+                                for resource in item.resources
+                            ),
+                        )
+                        for item in plan.imported_skills
+                    ),
+                )
+                for plan, snapshot, _ in selected
+            )
+        )
+        run_ids.append({directory.name for _, _, directory in selected})
+        assert inventory == {name: (caller / name).read_bytes() for name in inventory}
+    assert agreements[0] == agreements[1]
+    assert run_ids[0].isdisjoint(run_ids[1])
+    assert all(not (caller / name).exists() for name in expected)
 
 
 def test_factory_graph_follows_exact_artifact_edges_after_renaming(caller: Path) -> None:
