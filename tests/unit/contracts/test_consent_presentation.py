@@ -74,7 +74,7 @@ def test_work_precedes_single_disclosure_and_default_no(
     monkeypatch.setattr(sys, "stdin", io.StringIO(answer))
     with _terminal(monkeypatch, width=width, mode=mode) as capture:
         logger.select_factory_root(graph.root)
-        logger.render_factory_work(graph)
+        logger.render_factory_work(graph, project_root=graph.root)
         assert logger.confirm_factory() is (answer == "y\n")
         logger.execution_context()
     raw = capture.text
@@ -131,7 +131,7 @@ def test_single_contract_grammar(tmp_path, monkeypatch, capsys, outputs, harness
     graph = replace(graph, catalog=(contract,), order=(contract,), targets=(contract.path,))
     logger = ContractLogger()
     monkeypatch.setattr(sys, "stdin", io.StringIO("\n"))
-    logger.render_factory_work(graph, harness=harness)
+    logger.render_factory_work(graph, project_root=graph.root, harness=harness)
     assert not logger.confirm_factory()
     output = capsys.readouterr().out
     count = 1 if isinstance(outputs, str) else 2
@@ -148,7 +148,7 @@ def test_collision_names_match_execution(tmp_path, capsys):
     graph = replace(graph, catalog=contracts, order=contracts)
     logger = ContractLogger()
     logger.select_factory_root(tmp_path)
-    logger.render_factory_work(graph)
+    logger.render_factory_work(graph, project_root=graph.root)
     preview = capsys.readouterr().out
     for index, contract in enumerate(contracts, 1):
         logger.chain_node(
@@ -182,7 +182,8 @@ from test_consent_presentation import consent_graph
 from apmx.core.contract_logger import ContractLogger
 logger = ContractLogger()
 assert logger.can_confirm_factory()
-logger.render_factory_work(consent_graph(Path.cwd() / "feature-factory"))
+graph = consent_graph(Path.cwd() / "feature-factory")
+logger.render_factory_work(graph, project_root=graph.root)
 accepted = logger.confirm_factory()
 logger.close()
 raise SystemExit(0 if accepted else 21)

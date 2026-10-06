@@ -81,6 +81,8 @@ def test_public_package_factory_keeps_source_resources_and_consumer_separate(
     assert original == {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
     assert (caller / "seed.txt").read_bytes() == b"seed"
     if planning:
+        evidence = [line for line in result.output.splitlines() if line.startswith("Evidence:")]
+        assert evidence == ["Evidence: will be saved under .apm/"]
         assert not (caller / ".apm").exists()
         return
     for plan, snapshot, _ in calls:

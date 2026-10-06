@@ -1351,7 +1351,9 @@ class ContractLogger:
     def _harness_label(name: str) -> str:
         return {"copilot": "Copilot", "opencode": "OpenCode"}.get(name, name)
 
-    def render_factory_work(self, graph: Graph, *, harness: str = "copilot") -> None:
+    def render_factory_work(
+        self, graph: Graph, *, project_root: Path, harness: str = "copilot"
+    ) -> None:
         self.stop_activity()
         self._harness = self._harness_label(harness)
         count = self._factory_contract_count = len(graph.order)
@@ -1380,7 +1382,7 @@ class ContractLogger:
                 self._write(f"Check {check.name}: {check.command}", severity="detail", detail=True)
         self._display.gap()
         self._write(
-            f"Evidence: will be saved under {self._path(graph.root / '.apm')}/",
+            f"Evidence: will be saved under {self._path(project_root / '.apm')}/",
             indent=0,
         )
         self._write(
@@ -1447,7 +1449,11 @@ class ContractLogger:
         self._display.gap()
 
     def render_chain_plan(self, plan: ChainPlan) -> None:
-        self.render_factory_work(plan.graph, harness=plan.nodes[0].plan.harness)
+        self.render_factory_work(
+            plan.graph,
+            project_root=plan.nodes[0].plan.project_root,
+            harness=plan.nodes[0].plan.harness,
+        )
         self._write(f"{plan.nodes[0].plan.harness} / {plan.nodes[0].plan.model or 'default model'}")
         self._write("Nothing will execute or download. Dependency resolution uses no model calls.")
         policy = (

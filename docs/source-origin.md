@@ -186,8 +186,10 @@ transitive matches without a top-level choice, remain an ambiguity error.
 package-relative `factory` directory using the same dependency graph as a local
 factory. `.` explicitly selects the package root. The calling directory remains
 the application/input/policy/evidence root; package fixtures never substitute
-for consumer input. Automation still requires both `--allow-host-access` and
-`--allow-unproven-inputs`. A focused `.contract.md` entry remains a single stage.
+for consumer input. Offline previews show the consumer's `.apm/` evidence
+destination separately from the selected factory location. Automation still
+requires both `--allow-host-access` and `--allow-unproven-inputs`. A focused
+`.contract.md` entry remains a single stage.
 
 Package checker resources come from the unique `checks/` directory alongside
 the selected entry or one of its package ancestors. For a focused leaf, the
