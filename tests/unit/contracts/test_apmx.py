@@ -239,7 +239,16 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
             *(["--verbose"] if verbose else []),
         ],
     )
-    assert result.exit_code == Outcome.COMPLETE, result.output
+    # APM 0.30.0 inventories this direct+transitive local skill twice with one bom-ref.
+    assert result.exit_code == (23 if packaged else Outcome.COMPLETE), result.output
+    if packaged:
+        assert "duplicate component identities" in result.output
+        assert "Evidence delivery failed" in result.output
+        from apmx.contracts.records import load_completed_result
+
+        record = next((caller / ".apm/runs").glob("*/record.json"))
+        assert load_completed_result(record).outcome is Outcome.COMPLETE
+        assert not (record.parent / "evidence").exists()
     assert "PASS content" in result.output
     producer.assert_called_once()
     assert install.call_count == 1

@@ -8,7 +8,7 @@ import click
 
 from apmx.commands.contracts import invoke_contract
 from apmx.contracts.frontend import admit_caller_policy
-from apmx.contracts.models import ContractError, ContractLimits, Outcome
+from apmx.contracts.models import ChainResult, ContractError, ContractLimits, Outcome, RunResult
 from apmx.contracts.records import CompletionBoundary, preparation_failure
 from apmx.core.contract_logger import ContractLogger
 from apmx.core.output_mode import configure_output_mode, detect_output_mode
@@ -29,6 +29,29 @@ class NativeCommand(click.Command):
                 raise SystemExit(code)
             return code
         return super().main(*args, **kwargs)
+
+
+def _finish_result(
+    result: RunResult | ChainResult, completion: CompletionBoundary, logger: ContractLogger
+) -> int:
+    """Delivery failure is separate from the already-finalized execution outcome."""
+    from apmx.contracts.evidence import export_completed
+
+    completion.validate(result)
+    logger.render_result(result)
+    if result.outcome is not Outcome.COMPLETE:
+        return int(result.outcome)
+    try:
+        package = export_completed(result)
+    except (ContractError, OSError, KeyboardInterrupt) as exc:
+        logger.evidence_delivery_failed(
+            str(exc)
+            if isinstance(exc, ContractError)
+            else "Export interrupted or files could not be written."
+        )
+        return 23
+    logger.evidence_package(package)
+    return int(result.outcome)
 
 
 @click.command(
@@ -120,9 +143,7 @@ def main(
                 allow_unproven_inputs=allow_unproven_inputs,
             )
             if result is not None:
-                completion.validate(result)
-                logger.render_result(result)
-                ctx.exit(int(result.outcome))
+                ctx.exit(_finish_result(result, completion, logger))
             return
         admit_caller_policy(caller_root, limits=limits)
         if not planning and not allow_advisory:
@@ -161,9 +182,7 @@ def main(
                 allow_unproven_inputs=allow_unproven_inputs,
             )
         if result is not None:
-            completion.validate(result)
-            logger.render_result(result)
-            ctx.exit(int(result.outcome))
+            ctx.exit(_finish_result(result, completion, logger))
     except ContractError as exc:
         error = preparation_failure(result, exc)
         logger.render_error(error)

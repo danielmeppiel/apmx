@@ -14,6 +14,12 @@ Preview also exits 0, but performs no execution and issues no completion
 record. Check labels are PASS, FAIL and INCOMPLETE; raw process observations
 remain in the record.
 
+Development source also uses command exit **23** when execution is COMPLETE
+but delivery of its eligible [standards Evidence Package](evidence.md) fails.
+This is not a new execution outcome: the canonical COMPLETE record and
+artifacts are not rewritten. Retry the read-only export, not the model run.
+Runs without retained official APM inventory keep their existing behavior.
+
 COMPLETE is not VERIFIED, trust, certification, correct software, a sandbox,
 or permission to merge/deploy. Native agents and checks use host files,
 network and available logins; model usage can cost money. Run only trusted
@@ -68,12 +74,17 @@ unconfirmed cleanup are explicit export failures, not revised execution
 outcomes. The BOM describes supplied inventory; it is not an input allegedly
 read by the model, nor proof that every installed capability was used.
 
-These are export building blocks, not yet an automatic portable Evidence
-Package or a new CLI command. Canonical records and transcripts remain local
-evidence and may contain private paths or diagnostic excerpts. Reading them
-does not sanitize them for sharing, authenticate their author, or establish
-isolation. An unsigned copied record with recomputed hashes is not a trusted
-attestation.
+Current development source automatically exports a portable
+[Evidence Package](evidence.md) after eligible completed executions and all
+preparation cleanup. It adds no CLI command or flag. The package includes
+ordinary CycloneDX inventory, in-toto/SLSA producer statements and in-toto
+Test Result statements; records remain the sole execution authority.
+
+Raw transcripts and repair diagnostic excerpts are omitted from this projection,
+but retained project/source files may contain private information. It is not
+a secret scrubber. Neither reading nor exporting records authenticates their
+author or establishes isolation. An unsigned copied package with recomputed
+hashes is not a trusted attestation.
 
 ## Record versions
 

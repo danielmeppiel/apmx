@@ -10,7 +10,7 @@ from test_execution_result import _execute
 from test_repair import budgeted_contract, run
 
 from apmx.contracts import chain, records
-from apmx.contracts.models import ContractError
+from apmx.contracts.models import ContractError, Outcome
 from apmx.core.contract_logger import ContractLogger
 
 __all__ = ["caller"]
@@ -146,6 +146,9 @@ def test_budgeted_reader_keeps_prior_rejection_linkage(
         else result.run_directory / "record.json"
     )
     assert records.load_completed_result(selected) == result
+    history = records.completed_attempt_history(result)
+    assert [attempt.outcome for attempt in history] == [Outcome.REJECTED, Outcome.COMPLETE]
+    assert all(attempt.controller == result.controller for attempt in history)
     controller = json.loads(result.controller.path.read_bytes())
     first = Path(controller["attempts"][0]["record"]).parent / "artifacts/answer.txt"
     first.chmod(0o600)

@@ -954,7 +954,9 @@ def _decoded_run(raw: dict) -> RunResult:
     return RunResult(**values)
 
 
-def _validate_loaded_assessment(result: RunResult) -> None:
+def _validate_loaded_assessment(
+    result: RunResult, *, controller_selected: str | None = None
+) -> None:
     from .frontend import parse_contract
     from .workspace import _digest
 
@@ -980,10 +982,12 @@ def _validate_loaded_assessment(result: RunResult) -> None:
     ):
         raise ValueError("Retained source, baseline or invocation observations disagree.")
     validate_consent_source(result.consent_source)
-    _validate_assessed_outputs(contract, result, data, _digest(resources))
+    _validate_assessed_outputs(
+        contract, result, data, _digest(resources), rejected=result.outcome is Outcome.REJECTED
+    )
     if result.controller is not None:
         controller = _controller_document(
-            result.controller, caller, result.run_id, ContractLimits()
+            result.controller, caller, controller_selected or result.run_id, ContractLimits()
         )
         if not _same_json(controller["budget"], contract.budget):
             raise ValueError("Retained controller budget differs from its declaration.")
@@ -1061,6 +1065,40 @@ def load_completed_result(path: Path) -> RunResult | ChainResult:
         raise ContractError(
             "Retained completion evidence is malformed or inconsistent.", code="record_changed"
         ) from exc
+
+
+def completed_attempt_history(result: RunResult | ChainResult) -> tuple[RunResult, ...]:
+    """Read assessed attempts, including rejections bound to completed controllers.
+
+    Returned rejections remain rejections. This projection cannot authorize a
+    handoff or make an unfinished invocation eligible for a completion export.
+    """
+    path = (
+        result.record_path
+        if isinstance(result, ChainResult)
+        else result.run_directory / "record.json"
+    )
+    if load_completed_result(path) != result:
+        raise ContractError("Retained result changed.", code="record_changed")
+    history = []
+    try:
+        for run in result.runs if isinstance(result, ChainResult) else (result,):
+            if run.controller is None:
+                history.append(run)
+                continue
+            controller = _controller_document(
+                run.controller, run.run_directory.parents[2], run.run_id, ContractLimits()
+            )
+            for item in controller["attempts"]:
+                data, _ = _record_bytes(Path(item["record"]), ContractLimits())
+                attempt = replace(_decoded_run(data["result"]), controller=run.controller)
+                _validate_loaded_assessment(attempt, controller_selected=run.run_id)
+                history.append(attempt)
+        return tuple(history)
+    except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+        if isinstance(exc, ContractError):
+            raise
+        raise ContractError("Retained attempt history changed.", code="record_changed") from exc
 
 
 class CompletionBoundary:

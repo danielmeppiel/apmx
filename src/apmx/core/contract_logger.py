@@ -1552,3 +1552,32 @@ class ContractLogger:
             self.render_chain_result(result)
         else:
             self._result(RunEvent(result.run_id, 0, 0, "finished", "engine", {"result": result}))
+
+    def evidence_package(self, path: Path | None) -> None:
+        """Report a delivered standards projection without changing recorded execution."""
+        if path is None:
+            self._write(
+                "Standard package: not applicable (no retained official APM inventory).",
+                severity="detail",
+                detail=True,
+            )
+            return
+        self._write(f"Standard package: {self._path(path)}")
+        self._write(f"Summary: {self._path(path / 'summary.md')}")
+        self._write(
+            "Unsigned evidence includes project/source files. Review before sharing.",
+            severity="detail",
+            detail=True,
+        )
+
+    def evidence_delivery_failed(self, reason: str) -> None:
+        """A failed export cannot relabel an already finalized COMPLETE record."""
+        self._write("Evidence delivery failed (command exit 23).", severity="error", indent=0)
+        self._write(reason)
+        self._write(
+            "Recorded execution remains COMPLETE; export did not rewrite its record or artifacts."
+        )
+        self._write(
+            "Inspect the retained record and source inventory, then retry the read-only "
+            "export described in docs/evidence.md; no model rerun is required."
+        )

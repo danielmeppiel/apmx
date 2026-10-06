@@ -100,3 +100,33 @@ def test_real_backend_exports_local_package_lock_without_source_resolution(tmp_p
     assert document["components"]
     assert (stage / "apm.yml").read_bytes() == manifest
     assert (stage / "apm.lock.yaml").read_bytes() == lock
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"repo_url": "../style", "source": "local", "content_hash": "sha256:" + "a" * 64},
+        {"repo_url": "team/style", "resolved_commit": "b" * 40},
+        {"repo_url": "team/style", "host_type": "gitlab", "resolved_commit": "c" * 40},
+        {
+            "repo_url": "team/style",
+            "source": "registry",
+            "resolved_url": "oci://registry.example/team/style",
+            "resolved_hash": "sha256:" + "d" * 64,
+        },
+    ],
+)
+def test_evidence_binding_matches_official_backend_inventory(fields: dict) -> None:
+    from apmx.contracts.evidence import _matches_component
+    from apmx.deps.lockfile import LockedDependency, LockFile
+
+    dependency = LockedDependency(**fields)
+    lock = LockFile()
+    lock.add_dependency(dependency)
+    identity = apm_backend.backend_identity(apm_backend.locate_backend())
+    raw = apm_backend.export_cyclonedx(MANIFEST, lock.to_yaml().encode(), expected_backend=identity)
+    (component,) = json.loads(raw)["components"]
+    assert _matches_component(component, dependency)
+    assert not _matches_component({**component, "bom-ref": "unrelated"}, dependency)
+    assert not _matches_component({**component, "name": "different"}, dependency)
+    assert not _matches_component({**component, "purl": component["purl"] + "?extra=1"}, dependency)
