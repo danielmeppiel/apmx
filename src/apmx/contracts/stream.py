@@ -48,7 +48,7 @@ def safe_text(text: str, *, limit: int = _DISPLAY_CHARS) -> str:
 
 
 class _Lines:
-    """Byte-bounded framing, draining oversized lines without exposing prefixes."""
+    """Bound LF/CRLF frames, draining oversized lines without exposing prefixes."""
 
     def __init__(
         self,
@@ -77,7 +77,7 @@ class _Lines:
             if newline < 0:
                 return
             if not self.discarding:
-                self.line(bytes(self.pending))
+                self.line(bytes(self.pending).removesuffix(b"\r"))
             self.pending.clear()
             self.discarding = False
             start = newline + 1

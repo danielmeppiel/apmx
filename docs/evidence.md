@@ -101,6 +101,8 @@ candidate files. Combined-candidate checks include both code and documentation
 patches; their producers remain separate.
 
 Reports must come from the retained logger's exact checker/stdout attribution.
+LF and Windows CRLF line endings delimit reports identically; embedded control
+characters remain visibly escaped. This does not normalize source or artifact bytes.
 Producer text or similarly named checkers cannot supply them. Missing, truncated,
 duplicate or unsupported reports refuse export for known example checkers.
 Per-test observations are copied only when explicitly reported. Document gates

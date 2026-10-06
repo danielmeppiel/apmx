@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from apmx.contracts import check_subjects
+from apmx.contracts.events import EventEmitter
 from apmx.contracts.models import ContractError
+from apmx.contracts.stream import ContractStreamDecoder
+from apmx.core.contract_logger import ContractLogger
 
 
 def digest(raw: bytes) -> str:
@@ -36,6 +39,29 @@ def test_only_exact_checker_attribution_can_supply_a_report() -> None:
     )
     assert check_subjects.read_report(transcript, "exact") == report
     assert check_subjects.read_report(transcript, "missing") is None
+
+
+@pytest.mark.parametrize("ending", [b"\n", b"\r\n"])
+@pytest.mark.parametrize("chunk_size", [1, 7, 4096])
+def test_checker_report_survives_native_line_framing(
+    tmp_path: Path, ending: bytes, chunk_size: int
+) -> None:
+    report = document_report()
+    logger = ContractLogger()
+    logger.attach_run("fixture", tmp_path)
+    decoder = ContractStreamDecoder(
+        EventEmitter("fixture", logger.on_event),
+        source="checker",
+        label="exact",
+        json_stdout=False,
+    )
+    wire = json.dumps(report).encode("ascii") + ending
+    for start in range(0, len(wire), chunk_size):
+        decoder.feed("stdout", wire[start : start + chunk_size])
+    decoder.finish()
+    logger.close()
+    transcript = (tmp_path / "transcript.log").read_text(encoding="utf-8")
+    assert check_subjects.read_report(transcript, "exact") == report
 
 
 @pytest.mark.parametrize("fault", ["duplicate", "malformed", "unknown-schema", "duplicate-key"])

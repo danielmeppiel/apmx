@@ -94,7 +94,7 @@ def test_public_package_factory_keeps_source_resources_and_consumer_separate(
         assert not plan.source.root.exists()
     record = json.loads(next((caller / ".apm/chains").glob("*/record.json")).read_bytes())
     assert record["complete"] is True
-    assert record["graph"]["root"].endswith("/factory")
+    assert Path(record["graph"]["root"]).name == "factory"
     assert record["caller_root"] == str(caller)
 
 

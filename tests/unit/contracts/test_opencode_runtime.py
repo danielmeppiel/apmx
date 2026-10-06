@@ -309,14 +309,16 @@ def test_expired_shared_deadline_starts_no_native_probe(tmp_path, monkeypatch):
         (b"invalid-json\n", 0, Outcome.HALTED, 0),
     ],
 )
+@pytest.mark.parametrize("content", [b"hello\n", b"hello\r\n"])
 def test_shared_engine_owns_capture_checks_and_completion(
-    tmp_path, monkeypatch, wire, exit_code, expected, checks
+    tmp_path, monkeypatch, wire, exit_code, expected, checks, content
 ):
     plan = replace(
         _plan(tmp_path, (_python_check("fixed", "assert True"),)),
         harness="opencode",
         model=None,
     )
+    (tmp_path / "input.txt").write_bytes(content)
     code = (
         "from pathlib import Path\nimport sys\n"
         "Path('result.txt').write_bytes(Path('input.txt').read_bytes())\n"
@@ -333,7 +335,7 @@ def test_shared_engine_owns_capture_checks_and_completion(
     logger = ContractLogger()
     result = engine.run_contract(plan, logger=logger, allow_advisory=True)
     assert result.outcome is expected and len(result.checks) == checks
-    assert result.artifact.path.read_bytes() == b"hello\n"
+    assert result.artifact.path.read_bytes() == content
     assert result.observed_models == ()
     assert not (tmp_path / "result.txt").exists()
     transcript = (result.run_directory / "transcript.log").read_text()
