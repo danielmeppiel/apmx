@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2] / ".github/workflows"
 class WorkflowPermissionTests(unittest.TestCase):
     def setUp(self):
         self.release = (ROOT / "release.yml").read_text(encoding="utf-8")
-        self.ci = (ROOT / "ci.yml").read_text(encoding="utf-8")
+        self.ci = (ROOT / "native-notice-ci.yml").read_text(encoding="utf-8")
 
     def job(self, name):
         match = re.search(
@@ -102,6 +102,32 @@ class WorkflowPermissionTests(unittest.TestCase):
             ]
             self.assertIn("factory", extras)
             self.assertIn("--frozen", arguments)
+
+    def test_native_ci_binds_the_verified_interpreter_before_dependency_resolution(self) -> None:
+        native = self.ci.split("  native:\n", 1)[1]
+        self.assertIn("id: python", native)
+        self.assertIn("SELECTED_PYTHON: ${{ steps.python.outputs.python-path }}", native)
+        for variable in ("UV_PYTHON", "APMX_BUILD_PYTHON"):
+            self.assertIn(f'echo "{variable}=$SELECTED_PYTHON" >> "$GITHUB_ENV"', native)
+        self.assertLess(native.index("APMX_BUILD_PYTHON="), native.index("uv sync"))
+
+    def test_native_ci_requires_notices_and_keeps_actor_binaries_local(self) -> None:
+        self.assertIn("scripts/release.py validate --require-native-notices", self.ci)
+        self.assertIn("--build-actor dist/smoke-actor", self.ci)
+        self.assertIn("on:\n  push:\n    branches: [main]\n  pull_request:", self.ci)
+        self.assertNotRegex(self.ci, r"(?m)^  (pull_request_target|workflow_run|workflow_call):")
+        self.assertNotRegex(self.ci, r"GH_TOKEN|GITHUB_TOKEN|github\.token|secrets\.")
+        self.assertNotIn("scripts.promotion", self.ci)
+        self.assertNotIn("continue-on-error:", self.ci)
+        for step in re.split(r"(?m)^      - ", self.ci)[1:]:
+            if "uses: actions/checkout@" in step:
+                self.assertIn("persist-credentials: false", step)
+            if "uses: actions/upload-artifact@" in step:
+                self.assertNotIn("smoke-actor", step)
+                self.assertNotIn("hermetic-copilot-windows", step)
+                self.assertIn("if-no-files-found: error", step)
+                if "name: apmx-${{ matrix.target }}" in step:
+                    self.assertIn("retention-days: 1", step)
 
 
 class PublicWorkflowTests(unittest.TestCase):

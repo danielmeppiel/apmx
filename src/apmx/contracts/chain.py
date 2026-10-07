@@ -51,6 +51,7 @@ def _current(node: Node) -> LeafPlan:
         apm_backend=plan.apm_backend,
         deferred_inputs=plan.deferred_inputs,
         chain_outputs=plan.chain_outputs,
+        project_snapshot=plan.project_snapshot,
     )
     if current != plan or workspace.inspect_workspace(current) != node.inventory:
         raise ContractError(
@@ -118,6 +119,16 @@ def run_chain(
     catalog = tuple(node.plan.contract.path for node in plan.nodes)
     try:
         logger.attach_run(store.run_id, store.directory)
+        project = workspace.capture_project(plan.nodes[0].plan, store.directory)
+        plan = replace(
+            plan,
+            nodes=tuple(
+                replace(node, plan=replace(node.plan, project_snapshot=project))
+                for node in plan.nodes
+            ),
+        )
+        _revalidate(plan)
+        store.update("capture", project_capture=project)
         store.update("execution", nodes=states)
         for current, node in enumerate(plan.nodes):
             states[current]["state"] = "running"

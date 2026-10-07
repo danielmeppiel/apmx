@@ -88,6 +88,7 @@ def test_effective_tracked_edits_deletions_and_selected_untracked(tmp_path: Path
     original = workspace.local_git(tmp_path, "rev-parse", "HEAD").decode().strip()
     (tmp_path / "input.txt").write_bytes(b"working bytes\n")
     (tmp_path / "deleted.txt").unlink()
+    (tmp_path / ".gitignore").write_text("unselected-secret.txt\n", encoding="utf-8")
     (tmp_path / "unselected-secret.txt").write_text("not selected", encoding="utf-8")
     snapshot = workspace.capture_workspace(plan, run)
     assert snapshot.original_head == original

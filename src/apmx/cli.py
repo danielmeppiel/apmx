@@ -8,7 +8,7 @@ import click
 
 from apmx.commands.contracts import invoke_contract
 from apmx.contracts.frontend import admit_caller_policy
-from apmx.contracts.models import ContractError, ContractLimits, Outcome
+from apmx.contracts.models import ChainResult, ContractError, ContractLimits, Outcome, RunResult
 from apmx.contracts.records import CompletionBoundary, preparation_failure
 from apmx.core.contract_logger import ContractLogger
 from apmx.core.output_mode import configure_output_mode, detect_output_mode
@@ -31,6 +31,29 @@ class NativeCommand(click.Command):
         return super().main(*args, **kwargs)
 
 
+def _finish_result(
+    result: RunResult | ChainResult, completion: CompletionBoundary, logger: ContractLogger
+) -> int:
+    """Delivery failure is separate from the already-finalized execution outcome."""
+    from apmx.contracts.evidence import export_completed
+
+    completion.validate(result)
+    logger.render_result(result)
+    if result.outcome is not Outcome.COMPLETE:
+        return int(result.outcome)
+    try:
+        package = export_completed(result)
+    except (ContractError, OSError, KeyboardInterrupt) as exc:
+        logger.evidence_delivery_failed(
+            str(exc)
+            if isinstance(exc, ContractError)
+            else "Export interrupted or files could not be written."
+        )
+        return 23
+    logger.evidence_package(package)
+    return int(result.outcome)
+
+
 @click.command(
     cls=NativeCommand,
     name="apmx",
@@ -38,16 +61,21 @@ class NativeCommand(click.Command):
     help=(
         "Run a factory directory or one .contract.md file. "
         "A factory's input and output files determine which steps run first.\n\n"
-        "Package contracts are package-relative .contract.md paths. Inputs and "
+        "Package entries are relative factory directories or .contract.md paths. Inputs and "
         "retained evidence belong to the calling directory, not the package. "
         "A factory directory is its own input, policy and retained-evidence root."
     ),
 )
 @click.argument("contract", type=str, metavar="FACTORY_OR_CONTRACT")
 @click.option(
-    "--from", "package_ref", metavar="PACKAGE_REF", help="Select a contract from an APM package."
+    "--from",
+    "package_ref",
+    metavar="PACKAGE_REF",
+    help="Select a factory or contract from an APM source package.",
 )
-@click.option("--on", "harness", required=True, type=str, help="Agent CLI to use (copilot).")
+@click.option(
+    "--on", "harness", required=True, type=str, help="Agent CLI to use (copilot, opencode)."
+)
 @click.option("--model", metavar="MODEL", help="Model to use through the selected agent CLI.")
 @click.option(
     "--plan", "planning", is_flag=True, help="Show steps and checks without running or downloading."
@@ -61,7 +89,7 @@ class NativeCommand(click.Command):
     "--allow-host-access",
     "allow_advisory",
     is_flag=True,
-    help="Allow Copilot and checks to use host files, network and available login details.",
+    help="Allow the selected agent CLI and checks to use host files, network and available login details.",
 )
 @click.option(
     "--verbose", "-v", is_flag=True, help="Show detailed planning and execution observations."
@@ -91,14 +119,14 @@ def main(
     try:
         selected = Path(contract).expanduser().absolute()
         factory_root = selected if package_ref is None and selected.is_dir() else None
-        if not planning and factory_root is None:
+        package_factory = package_ref is not None and not contract.endswith(".contract.md")
+        if not planning and factory_root is None and not package_factory:
             logger.execution_context()
-        if factory_root is None and not contract.endswith(".contract.md"):
+        if package_ref is None and factory_root is None and not contract.endswith(".contract.md"):
             raise click.UsageError(
-                "Select a local factory directory or one explicit .contract.md file. "
-                "--from supports package-relative leaf contracts only."
+                "Select a local factory directory or one explicit .contract.md file."
             )
-        if allow_unproven_inputs and factory_root is None:
+        if allow_unproven_inputs and factory_root is None and not package_factory:
             raise click.UsageError("--allow-unproven-inputs requires a factory directory.")
         if package_ref is None:
             result = invoke_contract(
@@ -115,14 +143,22 @@ def main(
                 allow_unproven_inputs=allow_unproven_inputs,
             )
             if result is not None:
-                completion.validate(result)
-                logger.render_result(result)
-                ctx.exit(int(result.outcome))
+                ctx.exit(_finish_result(result, completion, logger))
             return
         admit_caller_policy(caller_root, limits=limits)
-        if not planning and not allow_advisory:
+        if (
+            not planning
+            and not allow_advisory
+            and not (
+                package_factory
+                and not allow_unproven_inputs
+                and logger.can_confirm_factory()
+                and logger.confirm_package_preparation(package_ref)
+            )
+        ):
             raise ContractError(
-                "Copilot and checks can read or change files, use the network, and use "
+                f"{ContractLogger._harness_label(harness)} and checks can read or change files, "
+                "use the network, and use "
                 "available login details. Run only contracts you trust. Add "
                 "--allow-host-access to allow this run; policy still applies. "
                 "Use --plan to preview without running.",
@@ -136,6 +172,7 @@ def main(
             caller_root=caller_root,
             planning=planning,
             limits=limits,
+            factory=package_factory,
             on_preparation=logger.on_preparation,
             verbose=verbose,
         ) as source:
@@ -151,11 +188,11 @@ def main(
                 allow_advisory=allow_advisory,
                 source=source,
                 logger=logger,
+                factory_root=source.root / contract if package_factory else None,
+                allow_unproven_inputs=allow_unproven_inputs,
             )
         if result is not None:
-            completion.validate(result)
-            logger.render_result(result)
-            ctx.exit(int(result.outcome))
+            ctx.exit(_finish_result(result, completion, logger))
     except ContractError as exc:
         error = preparation_failure(result, exc)
         logger.render_error(error)

@@ -5,7 +5,13 @@ from typing import TypeGuard
 
 from .models import ContractError, ImportedSkill
 
-NATIVE_SKILL_ROOTS = (".agents/skills", ".github/skills", ".claude/skills")
+NATIVE_SKILL_ROOTS = (
+    ".agents/skills",
+    ".github/skills",
+    ".claude/skills",
+    ".opencode/skills",
+    ".opencode/skill",
+)
 
 
 def is_native_skill_name(name: object) -> TypeGuard[str]:

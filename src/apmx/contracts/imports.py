@@ -252,6 +252,9 @@ def resolve_installed_skills(
     total = resource_count = 0
     for name in contract.imports:
         matches = [item for item in inventory if name in item[2]]
+        direct = [item for item in matches if item[0].depth == 1]
+        if direct:
+            matches = direct
         if len(matches) != 1:
             raise ContractError(
                 "Import must identify exactly one installed APM package.",

@@ -1,6 +1,7 @@
 """Canonical lifecycle for one captured, assessed agent leaf."""
 
 import time
+from collections.abc import Callable
 from dataclasses import replace
 
 from ..core.contract_logger import ContractLogger
@@ -18,6 +19,7 @@ from .models import (
     Outcome,
     ProcessObservation,
     ProcessRequest,
+    RepairContext,
     RunResult,
 )
 from .stream import ContractStreamDecoder
@@ -128,7 +130,25 @@ def run_contract(
     allow_unproven_inputs: bool | None = None,
     announce_result: bool = True,
 ) -> RunResult:
-    """Admit, execute, capture, assess and atomically record one fresh run."""
+    """Dispatch an authored budget without changing ordinary one-attempt execution."""
+    runner = run_attempt
+    if plan.contract.budget is not None:
+        from .repair import run_repair
+
+        _admit(plan, allow_advisory)
+        runner = run_repair
+    return runner(
+        plan,
+        logger=logger,
+        allow_advisory=allow_advisory,
+        consent_source=consent_source,
+        allow_unproven_inputs=allow_unproven_inputs,
+        announce_result=announce_result,
+    )
+
+
+def _admit(plan: LeafPlan, allow_advisory: bool) -> None:
+    """Revalidate the original authority on every fresh attempt."""
     if plan.deferred_inputs:
         raise ContractError("Preview dependencies cannot be executed.", code="unresolved_inputs")
     if not allow_advisory:
@@ -152,16 +172,43 @@ def run_contract(
         input_bindings=plan.input_bindings,
         chain_outputs=plan.chain_outputs,
         input_inventory=plan.input_inventory,
+        project_snapshot=plan.project_snapshot,
     )
     if current_plan != plan:
         raise ContractError(
             "Contract source, installed context or native prerequisites changed. Plan again.",
             code="plan_changed",
         )
+
+
+def run_attempt(
+    plan: LeafPlan,
+    *,
+    logger: ContractLogger,
+    allow_advisory: bool = False,
+    consent_source: str = "flag",
+    allow_unproven_inputs: bool | None = None,
+    announce_result: bool = True,
+    shared_deadline: float | None = None,
+    repair_context: RepairContext | None = None,
+    on_created: Callable[[records.AttemptStore], None] | None = None,
+) -> RunResult:
+    """Admit, execute, capture, assess and atomically record one fresh run."""
+    _admit(plan, allow_advisory)
     policy = (
         records.handoff_policy(allow_unproven_inputs) if allow_unproven_inputs is not None else None
     )
     store = records.AttemptStore.create(plan, consent_source=consent_source, handoff_policy=policy)
+    if repair_context is not None:
+        store.update(
+            "admitted",
+            controller={
+                "record": str(repair_context.controller),
+                "attempt": repair_context.attempt,
+            },
+        )
+    if on_created is not None:
+        on_created(store)
     events = EventEmitter(store.run_id, logger.on_event)
     artifact: Artifact | ArtifactSet | None = None
     checks: list[CheckObservation] = []
@@ -169,6 +216,8 @@ def run_contract(
     observed_models: tuple[str, ...] = ()
     native_exports = ()
     deadline = time.monotonic() + plan.limits.attempt_seconds
+    if shared_deadline is not None:
+        deadline = min(deadline, shared_deadline)
     try:
         logger.attach_run(store.run_id, store.directory)
         events.emit(
@@ -189,6 +238,8 @@ def run_contract(
         events.emit("phase", name="preflight")
         store.update("preflight")
         snapshot = workspace.capture_workspace(plan, store.directory)
+        if repair_context is not None:
+            snapshot = workspace.prepare_repair_context(plan, snapshot, repair_context)
         store.update("execution", baseline=snapshot)
         events.emit("phase", name="execution")
         runtime = RuntimeFactory.get_runtime_by_name(plan.harness, plan.model)
@@ -199,7 +250,7 @@ def run_contract(
             request, timeout_seconds=min(request.timeout_seconds, _remaining(deadline))
         )
         store.update("execution", native_controls=request.control_observations)
-        decoder = ContractStreamDecoder(events, limits=plan.limits)
+        decoder = RuntimeFactory.get_contract_decoder(plan.harness, events, limits=plan.limits)
         producer = process.supervise_process(
             request,
             on_bytes=decoder.feed,
@@ -258,7 +309,7 @@ def run_contract(
                     "diagnostic",
                     severity="warning",
                     message=f"The complete delivery ({plan.contract.output_label}) was not produced.",
-                    action="Inspect the contract and retained Copilot transcript, then rerun.",
+                    action="Inspect the contract and retained native transcript, then rerun.",
                 )
     except KeyboardInterrupt:
         stop_reason = "cancelled"

@@ -44,12 +44,8 @@ def invoke_contract(
         if factory_root is not None:
             from ..contracts.resolution import resolve_factory, select_factory_root
 
-            if source is not None:
-                raise ContractError(
-                    "Package selection supports explicit leaf contracts only.",
-                    code="unsupported_factory_source",
-                )
-            root = select_factory_root(factory_root)
+            if source is None:
+                root = select_factory_root(factory_root)
             logger.select_factory_root(root)
         frontend.admit_caller_policy(root, limits=limits)
         selected = Path(contract)
@@ -57,7 +53,7 @@ def invoke_contract(
             selected = (source.root if source else root) / selected
         preparation_target = selected
         if factory_root is not None:
-            graph = resolve_factory(root, limits=limits)
+            graph = resolve_factory(factory_root, caller=root, limits=limits)
             preparation_target = next(
                 (item.path for item in graph.order if item.imports),
                 graph.order[0].path,
@@ -68,7 +64,7 @@ def invoke_contract(
                 and not allow_unproven_inputs
                 and logger.can_confirm_factory()
             ):
-                logger.render_factory_work(graph)
+                logger.render_factory_work(graph, project_root=root, harness=harness)
                 if not logger.confirm_factory():
                     raise ContractError(
                         "Factory not started: the local execution profile was not authorized.",
@@ -77,7 +73,7 @@ def invoke_contract(
                     )
                 allow_advisory = allow_unproven_inputs = True
                 consent_source = "interactive"
-                if resolve_factory(root, limits=limits) != graph:
+                if resolve_factory(factory_root, caller=root, limits=limits) != graph:
                     raise ContractError(
                         "Factory changed during confirmation. Preview it again.",
                         code="plan_changed",
@@ -86,7 +82,8 @@ def invoke_contract(
                 logger.execution_context(factory=True)
         if not planning and not allow_advisory:
             raise ContractError(
-                "Copilot, APM and checks can use host files, network and available login details. "
+                f"{ContractLogger._harness_label(harness)}, APM and checks can use host files, "
+                "network and available login details. "
                 "Add --allow-host-access to allow this run; policy still applies. "
                 "Factories in automation also need --allow-unproven-inputs for native handoffs.",
                 code="advisory_consent_required",

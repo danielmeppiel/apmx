@@ -54,6 +54,7 @@ def test_authored_patch_cleans_git_objects_without_changing_the_patch(tmp_path: 
         ("planning", "plan.md"),
         ("specification", "specification.md"),
         ("implementation", "implementation.md"),
+        ("documentation", "documentation.md"),
         ("review", "review.md"),
     ],
 )
@@ -64,13 +65,16 @@ def test_markdown_checks_report_their_limited_scope(
     code, report = invoke(candidate, "documents.py", document, artifact)
     assert code == 0 and report["status"] == "passed"
     assert report["sha256"] == hashlib.sha256(before).hexdigest()
-    assert report["scope"].startswith("Document sections only")
+    assert report["scope"].startswith("Document format and reference consistency")
+    assert "no semantic correctness or execution claim" in report["scope"]
     assert (candidate / artifact).read_bytes() == before
 
 
 def test_markdown_checks_do_not_pretend_to_establish_semantics(candidate: Path) -> None:
+    header = (candidate / "specification.md").read_text().split("```\n", 1)[0]
     (candidate / "specification.md").write_text(
-        "## Behavior\nAn intentionally wrong rule.\n## Interface\nA wrong interface.\n"
+        header
+        + "```\n\n## Behavior\nAn intentionally wrong rule.\n## Interface\nA wrong interface.\n"
         "## Acceptance\nNot correctness evidence.\n",
         encoding="ascii",
     )

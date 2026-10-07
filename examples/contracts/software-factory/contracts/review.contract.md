@@ -4,14 +4,19 @@ needs:
   - specification.md
   - changes.diff
   - implementation.md
+  - documentation.diff
+  - documentation.md
 produces: review.md
 verify:
-  review-sections: python3 -I -B checks/documents.py review review.md
+  review-format-references: python3 -I -B checks/documents.py review review.md
 ---
 Give a fresh-context advisory review of the supplied checkout change. Compare
-the specification, actual patch and implementation report with request.md.
+the specification, both patches and both change reports with request.md.
 Inspect the inclusive threshold, consistency of pricing and checkout totals,
-input validation, and added regression coverage.
+input validation, added regression coverage and the updated project documentation.
+Read the common and Advisory review formats in checks/document-formats.md.
+Start review.md with the required JSON metadata. Findings cite existing lines
+of admitted artifacts, not invented candidate paths; an empty findings list is valid.
 
 Write review.md with these nonempty Markdown sections:
 
@@ -28,7 +33,7 @@ Distinguish code inspection from observed executions. You receive artifacts,
 not runtime records; the implementation report is not test evidence. Separate
 passing checks do not establish host isolation or production readiness.
 
-Target native Copilot through APMX. Do not change inputs, apply the patch, run
+Do not change inputs, apply patches, run
 commands/checks, install, or delegate. Write ASCII Markdown under 16 KiB using
 the permitted file tools. Do not certify, authorize merge/deployment or claim
-you ran tests. The document checker validates sections, not review quality.
+you ran tests. Format and reference checks do not establish review quality.

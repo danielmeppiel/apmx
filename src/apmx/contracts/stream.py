@@ -18,7 +18,7 @@ from apmx.utils.git_env import redact_git_diagnostic
 from .events import ApmOutputEvent, EventEmitter, PreparationSink
 from .models import ContractLimits
 
-_TEXT_BYTES = 16 * 1024
+TEXT_LINE_BYTES = 16 * 1024
 _DISPLAY_CHARS = 4096
 _CORRELATED_MESSAGES = 64
 _PUBLIC_PHASES = frozenset({"commentary", "final_answer"})
@@ -48,7 +48,7 @@ def safe_text(text: str, *, limit: int = _DISPLAY_CHARS) -> str:
 
 
 class _Lines:
-    """Byte-bounded framing, draining oversized lines without exposing prefixes."""
+    """Bound LF/CRLF frames, draining oversized lines without exposing prefixes."""
 
     def __init__(
         self,
@@ -77,7 +77,7 @@ class _Lines:
             if newline < 0:
                 return
             if not self.discarding:
-                self.line(bytes(self.pending))
+                self.line(bytes(self.pending).removesuffix(b"\r"))
             self.pending.clear()
             self.discarding = False
             start = newline + 1
@@ -99,7 +99,7 @@ class ApmStreamDecoder:
         self._closed = False
         self._streams = {
             stream: _Lines(
-                min(_TEXT_BYTES, limits.frame_bytes),
+                min(TEXT_LINE_BYTES, limits.frame_bytes),
                 lambda value, stream=stream: self._line(stream, value),
                 lambda stream=stream: self._overflow(stream),
             )
@@ -274,7 +274,7 @@ class ContractStreamDecoder:
         prose_group: int | None = None,
     ) -> _Lines:
         return _Lines(
-            _TEXT_BYTES,
+            TEXT_LINE_BYTES,
             lambda value: self._activity(
                 value.decode("utf-8", errors="backslashreplace"),
                 stream,
@@ -312,6 +312,11 @@ class ContractStreamDecoder:
         if len(kind) > 256:
             self._protocol_failure("Native JSONL event type exceeded the metadata limit.")
             return
+        self._event(event)
+
+    def _event(self, event: dict) -> None:
+        """Interpret one framed event using the selected native protocol."""
+        kind = event["type"]
         if kind == "result":
             self._native_result(event)
             return
@@ -481,7 +486,7 @@ class ContractStreamDecoder:
             )
             # Verbose-only human detail, still retained through the same safety
             # path. Do not repeat the whole response in ordinary output.
-            if len(encoded) <= _TEXT_BYTES:
+            if len(encoded) <= TEXT_LINE_BYTES:
                 self._emit("metadata", text=f"Corrected final response: {content}")
             else:
                 self._emit("metadata", text="Corrected final response exceeded the text limit.")
@@ -496,7 +501,7 @@ class ContractStreamDecoder:
             self._protocol_failure("Native assistant intent is missing intent text.")
 
     def _bounded_activity(self, text: str) -> None:
-        if len(text.encode("utf-8", errors="surrogatepass")) > _TEXT_BYTES:
+        if len(text.encode("utf-8", errors="surrogatepass")) > TEXT_LINE_BYTES:
             self._notice_once("long-text", "Oversized native text omitted; draining continues.")
         else:
             self._activity(text, prose=True)
@@ -585,7 +590,7 @@ class ContractStreamDecoder:
             "unauthorized",
         }:
             action = "Run 'copilot login', then retry the contract."
-        if len(message) > _TEXT_BYTES or len(error_type) > 256:
+        if len(message) > TEXT_LINE_BYTES or len(error_type) > 256:
             message, error_type = "Error detail exceeded the text limit.", "native"
         self._emit(
             "diagnostic",

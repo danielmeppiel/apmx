@@ -19,6 +19,47 @@ from tests.release.test_backend import add_backend_fixture
 
 
 class SmokeFixtureTests(unittest.TestCase):
+    def test_completed_package_requires_automatic_standard_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            stdout = "Standard package: evidence\nSummary: evidence/summary.md"
+            with self.assertRaisesRegex(AssertionError, "missing index.json"):
+                smoke.require_standard_delivery(run, stdout, ambiguous_inventory=False)
+            package = run / "evidence"
+            package.mkdir()
+            (package / "index.json").write_text('{"schema":"apmx-evidence-package/1"}')
+            for name in ("summary.md", "abom.cdx.json", "provenance.intoto.json"):
+                (package / name).write_text("fixture")
+            self.assertEqual(
+                smoke.require_standard_delivery(run, stdout, ambiguous_inventory=False), "delivered"
+            )
+            with self.assertRaisesRegex(AssertionError, "Missing evidence paths"):
+                smoke.require_standard_delivery(run, "", ambiguous_inventory=False)
+
+    def test_ambiguous_inventory_requires_explicit_refusal_not_a_published_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            stdout = (
+                "Evidence delivery failed (command exit 23)\n"
+                "The official ABOM has missing or duplicate component identities.\n"
+                "Recorded execution remains COMPLETE"
+            )
+            self.assertEqual(
+                smoke.require_standard_delivery(run, stdout, ambiguous_inventory=True),
+                "refused-ambiguous-inventory",
+            )
+            with self.assertRaisesRegex(AssertionError, "Missing delivery diagnostic"):
+                smoke.require_standard_delivery(run, "", ambiguous_inventory=True)
+            with self.assertRaisesRegex(AssertionError, "ambiguous-inventory refusal"):
+                smoke.require_standard_delivery(
+                    run,
+                    stdout.replace("duplicate component identities", "unexpected error"),
+                    ambiguous_inventory=True,
+                )
+            (run / "evidence").mkdir()
+            with self.assertRaisesRegex(AssertionError, "published a package"):
+                smoke.require_standard_delivery(run, stdout, ambiguous_inventory=True)
+
     def test_factory_write_boundary_uses_real_path_flavor(self):
         for relative in (
             PureWindowsPath(
@@ -352,10 +393,13 @@ class SmokeFixtureTests(unittest.TestCase):
                     ["Hermetic fixture progress.\n", "Hermetic fixture finished.\n"],
                 )
                 self.assertEqual(json.loads(stdout.splitlines()[-1])["type"], "result")
-                self.assertEqual(json.loads((root / "handoff.json").read_text()), {
-                    "source": "caller",
-                    "value": 7,
-                })
+                self.assertEqual(
+                    json.loads((root / "handoff.json").read_text()),
+                    {
+                        "source": "caller",
+                        "value": 7,
+                    },
+                )
                 self.assertFalse((root / "gate").exists())
             finally:
                 if process.poll() is None:
@@ -366,14 +410,12 @@ class SmokeFixtureTests(unittest.TestCase):
 
     def test_actor_transcript_allows_package_skill_progress_without_weakening_tool_identity(self):
         skill = (
-            "  Copilot (untrusted) > Tool started: skill\n"
-            "  Copilot (untrusted) > Tool completed\n"
+            "  Copilot (untrusted) > Tool started: skill\n  Copilot (untrusted) > Tool completed\n"
         )
         progress = "  Copilot (untrusted) > Hermetic fixture progress.\n"
         finished = "  Copilot (untrusted) > Hermetic fixture finished.\n"
         view = (
-            "  Copilot (untrusted) > Tool started: view\n"
-            "  Copilot (untrusted) > Tool completed\n"
+            "  Copilot (untrusted) > Tool started: view\n  Copilot (untrusted) > Tool completed\n"
         )
         smoke.require_actor_transcript(skill + progress + view + finished, "pass")
         smoke.require_actor_transcript(skill + progress, "halt")
@@ -381,7 +423,9 @@ class SmokeFixtureTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "Input tool progress"):
             smoke.require_actor_transcript(skill + progress + finished, "pass")
         with self.assertRaisesRegex(AssertionError, "starts and completions"):
-            smoke.require_actor_transcript(skill + progress + "Tool started: view\n" + finished, "pass")
+            smoke.require_actor_transcript(
+                skill + progress + "Tool started: view\n" + finished, "pass"
+            )
 
     def test_lingering_fixture_is_detected_and_fixture_stop_cleans_it(self):
         with tempfile.TemporaryDirectory() as temporary:

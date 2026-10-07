@@ -34,7 +34,10 @@ def test_instruction_indices_stay_stable() -> None:
     assert context_directory(context, 3) == "_apmx_context/import-3"
 
 
-@pytest.mark.parametrize("root", [".agents/skills", ".github/skills", ".claude/skills"])
+@pytest.mark.parametrize(
+    "root",
+    [".agents/skills", ".github/skills", ".claude/skills", ".opencode/skills", ".opencode/skill"],
+)
 def test_discovery_roots_are_recognized_case_insensitively(root: str) -> None:
     assert is_native_skill_path(root.upper() + "/decoy/SKILL.md")
     assert not is_native_skill_path(root + "-other/file.txt")
@@ -47,6 +50,8 @@ def test_discovery_roots_are_recognized_case_insensitively(root: str) -> None:
         ".agents/skills/new/SKILL.md",
         ".GITHUB/skills/new/SKILL.md",
         ".claude/skills",
+        ".opencode/skills/new/SKILL.md",
+        ".opencode/skill/new/SKILL.md",
         "_apmx_context/new.md",
     ],
 )
@@ -76,7 +81,7 @@ def test_inputs_cannot_smuggle_a_discovery_tree(tmp_path: Path) -> None:
 
 def test_context_destinations_have_one_static_owner() -> None:
     root = Path(__file__).resolve().parents[3] / "src/apmx"
-    for relative in ("contracts/workspace.py", "runtime/copilot_runtime.py"):
+    for relative in ("contracts/workspace.py", "runtime/contract_prompt.py"):
         tree = ast.parse((root / relative).read_text())
         nodes = list(ast.walk(tree))
         assert any(

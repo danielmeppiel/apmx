@@ -95,6 +95,24 @@ def test_apm_framing_preserves_utf8_and_dangerous_controls_for_safe_renderer():
     assert all(" " <= char <= "~" for char in text)
 
 
+def test_line_framing_consumes_only_the_crlf_delimiter() -> None:
+    events = []
+    decoder = ApmStreamDecoder(events.append, limits=ContractLimits())
+    wire = b"first\r\nembedded\rcontrol\nextra\r\r\nunterminated\r"
+    for byte in wire:
+        decoder.feed("stdout", bytes([byte]))
+    decoder.finish()
+    assert [event.text for event in events] == [
+        "first",
+        "embedded\rcontrol",
+        "extra\r",
+        "unterminated\r",
+    ]
+    assert decoder.bytes_received == {"stdout": len(wire), "stderr": 0}
+    assert safe_text(events[1].text) == r"embedded\rcontrol"
+    assert safe_text(events[-1].text) == r"unterminated\r"
+
+
 def _frame(kind: str, **data: object) -> bytes:
     return (json.dumps({"type": kind, "data": data}, ensure_ascii=False) + "\n").encode("utf-8")
 

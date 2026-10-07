@@ -358,7 +358,7 @@ def test_all_finalization_inspection_failures_repair_the_record(
     from apmx.contracts import workspace
 
     target = records if stage == "validation" else workspace
-    name = "finalized_inputs" if stage == "validation" else "inspect_retained_log"
+    name = "_assessed_inputs" if stage == "validation" else "inspect_retained_log"
     original = getattr(target, name)
     calls = 0
 

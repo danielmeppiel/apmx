@@ -7,7 +7,36 @@ from pathlib import Path
 from apmx.contracts.models import ContractError, ContractLimits, ContractSource, LeafContract
 from apmx.models.dependency.reference import DependencyReference
 from apmx.utils.content_hash import compute_package_hash, verify_package_hash
-from apmx.utils.path_security import ensure_path_within, has_symlink_component, is_link_or_reparse
+from apmx.utils.path_security import (
+    ensure_path_within,
+    has_symlink_component,
+    is_link_or_reparse,
+    validate_path_segments,
+)
+
+
+def package_entry_path(root: Path, name: str) -> Path:
+    """Confine an explicit package file/directory selection before acquisition."""
+    try:
+        validate_path_segments(
+            name, context="package entry", reject_empty=True, allow_current_dir=name == "."
+        )
+        if Path(name).is_absolute():
+            raise ValueError("Package entries must be relative.")
+        selected = root / name
+        ensure_path_within(selected, root)
+        if has_symlink_component(root, selected):
+            raise ValueError("Package entry contains a symlink.")
+    except ValueError as exc:
+        raise ContractError(str(exc), code="invalid_source") from exc
+    return selected
+
+
+def resource_root(source: ContractSource) -> Path:
+    root = package_entry_path(source.root, source.resource_subdirectory)
+    if not root.is_dir():
+        raise ContractError("Package resource root is missing.", code="source_changed")
+    return root
 
 
 def bounded_tree(root: Path, limits: ContractLimits) -> tuple[str, ...]:
@@ -71,6 +100,7 @@ def validate_source(
 ) -> None:
     """A prepared source is not trusted: recheck package bytes and supported shape."""
     ensure_path_within(contract.path, source.root)
+    ensure_path_within(contract.path, resource_root(source))
     if has_symlink_component(source.root, contract.path):
         raise ContractError("Selected package source contains a symlink.", code="source_escape")
     bounded_tree(source.root, limits)

@@ -25,6 +25,8 @@ from .models import (
     LeafContract,
     LeafPlan,
     Outcome,
+    ProjectSnapshot,
+    RepairBudget,
     RetainedInput,
     SourceLocation,
 )
@@ -110,7 +112,7 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
     for key in data:
         if key not in allowed:
             raise ContractError(f"Unknown contract field: {key}.", location=at(key))
-    for key in ("run", "budget", "sandbox"):
+    for key in ("run", "sandbox"):
         if key in data:
             raise ContractError(
                 f"{key} is unsupported by the native agent-only contract profile.",
@@ -118,6 +120,33 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
                 location=at(key),
                 outcome=Outcome.UNPROVEN,
             )
+    budget = None
+    if "budget" in data:
+        declared_budget = data["budget"]
+        if not isinstance(declared_budget, dict) or set(declared_budget) != {
+            "max_attempts",
+            "max_seconds",
+        }:
+            raise ContractError(
+                "budget requires exactly max_attempts and max_seconds.",
+                code="invalid_budget",
+                location=at("budget"),
+            )
+        attempts = declared_budget["max_attempts"]
+        seconds = declared_budget["max_seconds"]
+        if type(attempts) is not int or not 1 <= attempts <= 16:
+            raise ContractError(
+                "budget.max_attempts must be an integer from 1 to 16.",
+                code="invalid_budget",
+                location=at("budget", "max_attempts"),
+            )
+        if type(seconds) not in (int, float) or not 0 < seconds <= 86400:
+            raise ContractError(
+                "budget.max_seconds must be a finite positive number, at most 86400.",
+                code="invalid_budget",
+                location=at("budget", "max_seconds"),
+            )
+        budget = RepairBudget(attempts, seconds)
     if not document.body.strip() or "\0" in document.body:
         raise ContractError("Contract Markdown body must not be empty.", location=at("$body"))
     needs = data.get("needs", [])
@@ -204,6 +233,7 @@ def parse_contract(path: Path, *, limits: ContractLimits | None = None) -> LeafC
         produces=produces,
         checks=tuple(checks),
         imports=tuple(imports),
+        budget=budget,
         locations={str(key[0]): at(*key) for key in document.locations if len(key) == 1},
     )
 
@@ -238,6 +268,7 @@ def plan_contract(
     input_bindings: tuple[RetainedInput, ...] = (),
     chain_outputs: tuple[str, ...] = (),
     input_inventory: tuple[FileEntry, ...] | None = None,
+    project_snapshot: ProjectSnapshot | None = None,
 ) -> LeafPlan:
     """Resolve a bounded leaf using local reads only; no version/inference probe."""
     from ..runtime.registry import get_runtime_descriptor
@@ -318,7 +349,16 @@ def plan_contract(
     for name in contract.needs:
         if name in deferred_inputs or name in supplied:
             continue
-        info = _regular(root / name, root, contract.locations.get("needs", source_location))
+        from .workspace import _resource_name
+
+        input_root = (
+            project_snapshot.root
+            if project_snapshot is not None and not _resource_name(name)
+            else root
+        )
+        info = _regular(
+            input_root / name, input_root, contract.locations.get("needs", source_location)
+        )
         size += info.st_size
         if info.st_size > limits.file_bytes or size > limits.input_bytes:
             raise ContractError("Selected inputs exceed the byte limit.", code="input_limit")
@@ -385,4 +425,5 @@ def plan_contract(
         input_bindings=input_bindings,
         chain_outputs=chain_outputs,
         input_inventory=input_inventory,
+        project_snapshot=project_snapshot,
     )

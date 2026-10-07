@@ -140,8 +140,10 @@ def select_factory_root(root: Path) -> Path:
     return root.resolve()
 
 
-def resolve_factory(root: Path, *, limits: ContractLimits | None = None) -> Graph:
-    """Resolve every local factory contract through the union of its derived sinks."""
+def resolve_factory(
+    root: Path, *, caller: Path | None = None, limits: ContractLimits | None = None
+) -> Graph:
+    """Resolve every source-factory contract against the original consumer's inputs."""
     limits = limits or ContractLimits()
     root = select_factory_root(root)
     catalog = discover(root, limits)
@@ -149,7 +151,7 @@ def resolve_factory(root: Path, *, limits: ContractLimits | None = None) -> Grap
         raise ContractError(
             "The factory contains no ordinary .contract.md files.", code="empty_factory"
         )
-    return _resolve_catalog(root, root, catalog, None)
+    return _resolve_catalog(root, caller if caller is not None else root, catalog, None)
 
 
 def _resolve_catalog(
@@ -250,7 +252,7 @@ def preflight(
     """Admit every selected leaf's known surface without making future-input files."""
     limits = limits or ContractLimits()
     nodes = []
-    outputs = tuple(name for item in graph.order for name in item.outputs)
+    outputs = tuple(name for item in graph.catalog for name in item.outputs)
     for contract in graph.order:
         selected_source = (
             replace(

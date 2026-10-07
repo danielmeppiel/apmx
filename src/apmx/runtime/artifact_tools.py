@@ -34,8 +34,10 @@ def save_json(path: Path, value: dict) -> None:
     )
 
 
-def configure(plan: LeafPlan, snapshot: BaselineSnapshot, run_directory: Path) -> Path:
-    """Create a session-local plugin; never install or alter native user configuration."""
+def configure_server(
+    plan: LeafPlan, snapshot: BaselineSnapshot, run_directory: Path
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Prepare the shared bounded stdio server independently of its native launcher."""
     root = run_directory / "native-tools"
     root.mkdir(mode=0o700, parents=True)
     config = root / "config.json"
@@ -64,6 +66,16 @@ def configure(plan: LeafPlan, snapshot: BaselineSnapshot, run_directory: Path) -
     if not frozen:
         environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    command = (
+        (sys.executable,) if frozen else (sys.executable, "-B", "-m", "apmx.runtime.artifact_mcp")
+    )
+    return command, environment
+
+
+def configure(plan: LeafPlan, snapshot: BaselineSnapshot, run_directory: Path) -> Path:
+    """Create a session-local plugin; never install or alter native user configuration."""
+    command, environment = configure_server(plan, snapshot, run_directory)
+    root = run_directory / "native-tools"
     manifest = root / "plugin" / ".github" / "plugin" / "plugin.json"
     manifest.parent.mkdir(parents=True)
     save_json(
@@ -74,8 +86,8 @@ def configure(plan: LeafPlan, snapshot: BaselineSnapshot, run_directory: Path) -
             "mcpServers": {
                 SERVER: {
                     "type": "local",
-                    "command": sys.executable,
-                    "args": [] if frozen else ["-B", "-m", "apmx.runtime.artifact_mcp"],
+                    "command": command[0],
+                    "args": list(command[1:]),
                     "env": environment,
                     "tools": list(TOOLS),
                 },

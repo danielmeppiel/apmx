@@ -1,4 +1,4 @@
-"""Four ordinary contracts with real leaf handoffs/checks; only production is replaced."""
+"""Real APM, leaf handoffs and checks; producer and capability content are fixtures."""
 
 import hashlib
 import importlib.util
@@ -11,11 +11,13 @@ import pytest
 from click.testing import CliRunner
 from test_chain import caller, producer
 from test_chain_sources import private_preparation
-from test_software_factory_support import EXAMPLE, invoke, outputs, seed
+from test_software_factory_support import EXAMPLE, PROJECT, invoke, outputs, seed
 
 from apmx.cli import main
 from apmx.contracts import resolution, workspace
-from apmx.utils.yaml_io import load_frontmatter_document
+from apmx.contracts.models import ContractLimits
+from apmx.install.apm_backend import install
+from apmx.utils.yaml_io import load_frontmatter_document, load_yaml
 
 __all__ = ["caller", "private_preparation"]
 pytestmark = pytest.mark.component
@@ -24,19 +26,46 @@ DELIVERIES = {
     "planning.contract.md": ("plan.md",),
     "specification.contract.md": ("specification.md",),
     "build.contract.md": ("changes.diff", "implementation.md"),
+    "documentation.contract.md": ("documentation.diff", "documentation.md"),
     "review.contract.md": ("review.md",),
 }
 
 CHECKS = {
     "planning.contract.md": ("plan-sections",),
-    "specification.contract.md": ("specification-sections",),
+    "specification.contract.md": ("specification-format-references",),
     "build.contract.md": (
         "shipping-examples",
         "checkout-regression",
-        "implementation-report-sections",
+        "implementation-report-format",
     ),
-    "review.contract.md": ("review-sections",),
+    "documentation.contract.md": (
+        "documentation-format-links-examples",
+        "documented-checkout",
+        "documentation-report-format",
+    ),
+    "review.contract.md": ("review-format-references",),
 }
+
+
+def test_factory_package_has_separate_consumer_and_pinned_capability() -> None:
+    manifest = load_yaml(EXAMPLE / "apm.yml")
+    assert manifest["name"] == "checkout-factory" and manifest["version"] == "0.1.0-dev"
+    assert manifest["dependencies"]["apm"] == [
+        {
+            "git": "wshobson/agents",
+            "path": "plugins/python-development/skills/python-testing-patterns",
+            "ref": "46891e7e60da0e52baf1050b7b6391b64e84c6d9",
+        }
+    ]
+    for name in ("request.md", "src", "tests", "docs"):
+        assert (PROJECT / name).exists() and not (EXAMPLE / name).exists()
+    assert not (EXAMPLE / "SKILL.md").exists()
+    assert not (EXAMPLE / "capability-fixture").exists()
+    for name in DELIVERIES:
+        contract = load_frontmatter_document(EXAMPLE / "contracts" / name)
+        assert contract.metadata.get("imports", []) == (
+            ["python-testing-patterns"] if name == "build.contract.md" else []
+        )
 
 
 def prepare_example(root: Path, renamed: bool = False) -> dict[str, tuple[str, ...]]:
@@ -66,7 +95,59 @@ def test_factory_check_names_describe_the_proven_outcomes() -> None:
         for name in DELIVERIES
     }
     assert actual == CHECKS
-    assert sum(map(len, actual.values())) == 6
+    assert sum(map(len, actual.values())) == 9
+
+
+def test_only_build_declares_a_shared_repair_budget() -> None:
+    for name in DELIVERIES:
+        document = load_frontmatter_document(EXAMPLE / "contracts" / name)
+        assert document.metadata.get("budget") == (
+            {"max_attempts": 3, "max_seconds": 600} if name == "build.contract.md" else None
+        )
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_build_discovers_files_without_relaxing_tool_error_stop(
+    tmp_path: Path, newline: str
+) -> None:
+    path = tmp_path / "build.contract.md"
+    path.write_text(
+        (EXAMPLE / "contracts/build.contract.md").read_text(encoding="ascii"),
+        encoding="ascii",
+        newline=newline,
+    )
+    body = load_frontmatter_document(path).body
+    assert "inspect the relevant directories with" in body
+    assert "Use the returned paths rather than guessing" in body
+    assert f"If any tool reports an{newline}error, stop" in body
+    assert "Do not run commands/checks, install packages or delegate." in body
+
+
+def test_contracts_name_handoffs_not_a_source_inventory() -> None:
+    expected = {
+        "planning.contract.md": "request.md",
+        "specification.contract.md": ["request.md", "plan.md"],
+        "build.contract.md": ["request.md", "specification.md"],
+        "documentation.contract.md": [
+            "request.md",
+            "specification.md",
+            "changes.diff",
+            "implementation.md",
+        ],
+        "review.contract.md": [
+            "request.md",
+            "specification.md",
+            "changes.diff",
+            "implementation.md",
+            "documentation.diff",
+            "documentation.md",
+        ],
+    }
+    for name, needs in expected.items():
+        document = load_frontmatter_document(EXAMPLE / "contracts" / name)
+        assert document.metadata["needs"] == needs
+        assert "workspace" not in document.metadata
+        assert "Copilot" not in document.body and "OpenCode" not in document.body
 
 
 @pytest.mark.parametrize(
@@ -104,16 +185,19 @@ def test_factory_checks_preserve_shell_arguments_and_contract_body(
     reason="Optional example integration: install apmx[factory] (Behave==1.3.3).",
 )
 @pytest.mark.parametrize("interactive,renamed", [(False, False), (True, False), (False, True)])
-def test_factory_native_preview_and_four_real_leaf_handoffs(
+@pytest.mark.parametrize("harness", ["copilot", "opencode"])
+def test_factory_native_preview_and_five_real_leaf_handoffs(
     caller: Path,
     monkeypatch: pytest.MonkeyPatch,
     private_preparation: None,
     interactive: bool,
     renamed: bool,
+    harness: str,
 ) -> None:
     from apmx.core.contract_logger import ContractLogger
 
     deliveries = prepare_example(caller, renamed)
+    install(caller, limits=ContractLimits())
     expected = outputs(caller.parent)
     original = {
         path.relative_to(caller).as_posix(): path.read_bytes()
@@ -134,31 +218,52 @@ def test_factory_native_preview_and_four_real_leaf_handoffs(
                 "Path('src/checkout.py').write_text('# private working copy, not a delivery\\n')\n"
                 "Path('private-scratch.txt').write_text('not a published artifact')\n"
             )
+        elif "documentation.diff" in files:
+            scratch = (
+                "Path('docs/checkout.md').write_text('private page, not a published artifact')\n"
+            )
         return "from pathlib import Path\n" + scratch + writes
 
     calls = producer(monkeypatch, body=produce)
-    preview = CliRunner().invoke(main, [str(caller), "--on", "copilot", "--plan"])
-    assert preview.exit_code == 0 and "4 contracts" in preview.output, preview.output
+    preview = CliRunner().invoke(main, [str(caller), "--on", harness, "--plan"])
+    assert preview.exit_code == 0 and "5 contracts" in preview.output, preview.output
     assert calls == [] and not (caller / ".apm").exists()
     result = CliRunner().invoke(
         main,
         [
             str(caller),
             "--on",
-            "copilot",
+            harness,
             *([] if interactive else ["--allow-host-access", "--allow-unproven-inputs"]),
         ],
         input="y\n",
     )
-    assert result.exit_code == 0 and len(calls) == 4, result.output
+    assert result.exit_code == 0 and len(calls) == 5, result.output
     aggregate = next((caller / ".apm/chains").glob("*/record.json"))
     data = json.loads(aggregate.read_bytes())
     assert data["complete"] is True and data["result"]["outcome"]["name"] == "COMPLETE"
     assert data["consent_source"] == ("interactive" if interactive else "flag")
     assert [tuple(item["checks"]) for item in data["graph"]["order"]] == list(CHECKS.values())
+    for node, declared_outputs in zip(data["nodes"], DELIVERIES.values(), strict=True):
+        reference = node["result"].get("controller")
+        if "changes.diff" in declared_outputs:
+            controller = json.loads(Path(reference["path"]).read_bytes())
+            assert controller["budget"] == {"max_attempts": 3, "max_seconds": 600}
+            assert len(controller["attempts"]) == 1
+            assert controller["selected_run_id"] == node["result"]["run_id"]
+        else:
+            assert reference is None
     assert Path.cwd() == caller.parent and not (caller.parent / ".apm").exists()
     previous = {}
     for plan, snapshot, directory in calls:
+        assert plan.harness == harness
+        assert (
+            plan.contract.source_digest
+            == hashlib.sha256(plan.contract.path.read_bytes()).hexdigest()
+        )
+        leaf = json.loads((directory / "record.json").read_bytes())
+        assert leaf["harness"] == harness and leaf["native_completion_observed"] is True
+        assert leaf["requested_model"] is None and leaf["observed_models"] == []
         published = {
             path.relative_to(directory / "artifacts").as_posix(): path.read_bytes()
             for path in (directory / "artifacts").rglob("*")
@@ -181,9 +286,11 @@ def test_factory_native_preview_and_four_real_leaf_handoffs(
         "src/pricing.py",
         "src/checkout.py",
         "tests/test_checkout.py",
+        "docs/checkout.md",
         *(name for name in original if name.startswith("checks/")),
     }
-    assert {item["relative_path"] for item in data["artifacts"]["files"]} == {*expected, *initial}
+    published = {item["relative_path"] for item in data["artifacts"]["files"]}
+    assert {*expected, *initial} <= published <= {*expected, *original}
     for item in data["artifacts"]["files"]:
         raw = (view / item["relative_path"]).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == item["sha256"]
@@ -199,10 +306,80 @@ def test_factory_native_preview_and_four_real_leaf_handoffs(
             and report["subject"]["patch"] == hashlib.sha256(expected["changes.diff"]).hexdigest()
         ), report
     assert (view / "src/pricing.py").read_bytes() == original["src/pricing.py"]
+    assert (view / "docs/checkout.md").read_bytes() == original["docs/checkout.md"]
+    for checker in ("documentation.py", "documented_checkout.py"):
+        code, report = invoke(view, checker, "changes.diff", "documentation.diff")
+        assert code == 0, report
+        assert (
+            report["subject"]["documentation_patch"]
+            == hashlib.sha256(expected["documentation.diff"]).hexdigest()
+        )
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("behave") is None,
+    reason="Optional example integration: install apmx[factory] (Behave==1.3.3).",
+)
+def test_identical_factory_agreement_survives_fixture_harness_switch(
+    caller: Path, monkeypatch: pytest.MonkeyPatch, private_preparation: None
+) -> None:
+    prepare_example(caller)
+    install(caller, limits=ContractLimits())
+    expected = outputs(caller.parent)
+    inventory = {name: (caller / name).read_bytes() for name in ("apm.yml", "apm.lock.yaml")}
+
+    def produce(plan, *_):
+        return "from pathlib import Path\n" + "\n".join(
+            f"Path({name!r}).write_bytes({expected[name]!r})" for name in plan.contract.outputs
+        )
+
+    calls = producer(monkeypatch, body=produce)
+    agreements = []
+    run_ids = []
+    for harness in ("copilot", "opencode"):
+        first = len(calls)
+        result = CliRunner().invoke(
+            main,
+            [str(caller), "--on", harness, "--allow-host-access", "--allow-unproven-inputs"],
+        )
+        assert result.exit_code == 0, result.output
+        selected = calls[first:]
+        assert len(selected) == 5
+        agreements.append(
+            tuple(
+                (
+                    plan.contract,
+                    snapshot.digest,
+                    snapshot.project_digest,
+                    snapshot.resources_digest,
+                    tuple(
+                        (
+                            item.name,
+                            item.context_name,
+                            item.source_digest,
+                            item.lock_identity,
+                            item.verified_package_hash,
+                            tuple(
+                                (resource.relative_path, resource.sha256, resource.size)
+                                for resource in item.resources
+                            ),
+                        )
+                        for item in plan.imported_skills
+                    ),
+                )
+                for plan, snapshot, _ in selected
+            )
+        )
+        run_ids.append({directory.name for _, _, directory in selected})
+        assert inventory == {name: (caller / name).read_bytes() for name in inventory}
+    assert agreements[0] == agreements[1]
+    assert run_ids[0].isdisjoint(run_ids[1])
+    assert all(not (caller / name).exists() for name in expected)
 
 
 def test_factory_graph_follows_exact_artifact_edges_after_renaming(caller: Path) -> None:
     deliveries = prepare_example(caller, renamed=True)
+    install(caller, limits=ContractLimits())
     graph = resolution.resolve_factory(caller)
     assert [item.path.name for item in graph.order] == list(deliveries)
     assert [item.outputs for item in graph.order] == list(deliveries.values())
@@ -210,8 +387,13 @@ def test_factory_graph_follows_exact_artifact_edges_after_renaming(caller: Path)
         ("plan.md", "stage-9.contract.md", "stage-8.contract.md"),
         ("specification.md", "stage-8.contract.md", "stage-7.contract.md"),
         ("specification.md", "stage-8.contract.md", "stage-6.contract.md"),
+        ("specification.md", "stage-8.contract.md", "stage-5.contract.md"),
         ("changes.diff", "stage-7.contract.md", "stage-6.contract.md"),
         ("implementation.md", "stage-7.contract.md", "stage-6.contract.md"),
+        ("changes.diff", "stage-7.contract.md", "stage-5.contract.md"),
+        ("implementation.md", "stage-7.contract.md", "stage-5.contract.md"),
+        ("documentation.diff", "stage-6.contract.md", "stage-5.contract.md"),
+        ("documentation.md", "stage-6.contract.md", "stage-5.contract.md"),
     }
     prepared = resolution.preflight(graph, caller, harness="copilot")
     assert all(workspace.inspect_workspace(node.plan) == node.inventory for node in prepared.nodes)

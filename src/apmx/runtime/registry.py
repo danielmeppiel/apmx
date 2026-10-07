@@ -10,6 +10,8 @@ class RuntimeDescriptor:
 def get_runtime_descriptor(name: str) -> RuntimeDescriptor:
     if name == "copilot":
         return RuntimeDescriptor("copilot", True)
+    if name == "opencode":
+        return RuntimeDescriptor("opencode", True)
     if name == "codex":
         return RuntimeDescriptor("codex", False)
     raise ValueError(f"Unknown runtime: {name}")

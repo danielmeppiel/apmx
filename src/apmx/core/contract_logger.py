@@ -25,11 +25,12 @@ from apmx.contracts.models import (
     FileEntry,
     LeafPlan,
     Outcome,
+    RepairBudget,
     RunEvent,
     RunResult,
     artifact_files,
 )
-from apmx.contracts.stream import safe_text
+from apmx.contracts.stream import TEXT_LINE_BYTES, safe_text
 from apmx.utils import console
 from apmx.utils.paths import portable_link_relpath, portable_relpath
 
@@ -522,6 +523,7 @@ class ContractLogger:
         self._display_root: Path | None = None
         self._factory_contract_count = 0
         self._produces = "saved output"
+        self._harness = "Copilot"
         self._activity_label = "Working"
         self._checks_heading_shown = False
         self._preparation_notice_shown = False
@@ -596,6 +598,7 @@ class ContractLogger:
         display_message: str | None = None,
         display: _DisplayLine | None = None,
         layout: _Layout = _Layout.LITERAL,
+        retained_limit: int | None = None,
     ) -> None:
         """Retain the canonical logical line before any human-only transformation."""
         text = safe_text(message)
@@ -604,7 +607,8 @@ class ContractLogger:
         marker = self._display.marker(role, source)
         if not self._closed:
             retained_prefix = f"{source} (untrusted) > " if source else ""
-            self._transcript.append(" " * indent + marker + retained_prefix + text)
+            retained = text if retained_limit is None else safe_text(message, limit=retained_limit)
+            self._transcript.append(" " * indent + marker + retained_prefix + retained)
         visibility = (
             _Visibility.RETAINED
             if retained_only
@@ -800,6 +804,7 @@ class ContractLogger:
 
     def _selected(self, event: RunEvent) -> None:
         self.execution_context()
+        self._harness = self._harness_label(self._field(event, "harness", "copilot"))
         caller = self._field(event, "caller_root", "")
         if caller:
             self._caller_root = Path(caller)
@@ -841,8 +846,8 @@ class ContractLogger:
         if phase == "checks":
             self._checks_heading()
         message = {
-            "preflight": "Preparing files for Copilot",
-            "execution": "Running Copilot",
+            "preflight": f"Preparing files for {self._harness}",
+            "execution": f"Running {self._harness}",
             "capture": "Saving output",
             "checks": f"Checking {self._produces}",
             "record": "Saving results",
@@ -856,7 +861,7 @@ class ContractLogger:
             )
 
     def _attribution(self, event: RunEvent) -> str:
-        source = {"harness": "Copilot", "checker": "Check"}.get(event.source, event.source)
+        source = {"harness": self._harness, "checker": "Check"}.get(event.source, event.source)
         label = self._field(event, "label", "")
         stream = self._field(event, "stream", "")
         parts = [source]
@@ -911,6 +916,7 @@ class ContractLogger:
             display_message=displayed,
             detail=not stderr and tool_status != "failed",
             layout=_Layout.PROSE if not tool_status else _Layout.LITERAL,
+            retained_limit=TEXT_LINE_BYTES if checker_stdout else None,
             display=(
                 _DisplayLine(
                     safe_text(text),
@@ -1181,7 +1187,7 @@ class ContractLogger:
             if result.artifact is None:
                 self._write("The declared output could not be checked.")
                 self._write(
-                    "Review the contract output path and Copilot diagnostics before retrying."
+                    f"Review the contract output path and {self._harness} diagnostics before retrying."
                 )
             else:
                 self._write("Checks could not establish a result.")
@@ -1190,20 +1196,20 @@ class ContractLogger:
             reason, action = {
                 "cancelled": ("Run interrupted.", "Review any saved output before rerunning."),
                 "producer_failed": (
-                    "Copilot did not complete successfully.",
-                    "Review Copilot diagnostics and logs before retrying.",
+                    f"{self._harness} did not complete successfully.",
+                    f"Review {self._harness} diagnostics and logs before retrying.",
                 ),
                 "native_reported_failure": (
-                    "Copilot reported a failure.",
-                    "Review Copilot diagnostics and logs before retrying.",
+                    f"{self._harness} reported a failure.",
+                    f"Review {self._harness} diagnostics and logs before retrying.",
                 ),
                 "native_protocol_error": (
-                    "Copilot output could not be interpreted.",
-                    "Review Copilot diagnostics and logs before retrying.",
+                    f"{self._harness} output could not be interpreted.",
+                    f"Review {self._harness} diagnostics and logs before retrying.",
                 ),
                 "native_completion_unobserved": (
-                    "Copilot completion was not observed.",
-                    "Review Copilot diagnostics and logs before retrying.",
+                    f"{self._harness} completion was not observed.",
+                    f"Review {self._harness} diagnostics and logs before retrying.",
                 ),
                 "attempt_deadline": (
                     "The run exceeded its time limit.",
@@ -1214,7 +1220,7 @@ class ContractLogger:
                     "Review the contract workload before retrying.",
                 ),
                 "producer_stop_unconfirmed": (
-                    "Copilot may still be running.",
+                    f"{self._harness} may still be running.",
                     "Inspect the reported process before retrying.",
                 ),
                 "checker_stop_unconfirmed": (
@@ -1233,6 +1239,7 @@ class ContractLogger:
 
     def render_plan(self, plan: LeafPlan, inventory: tuple[FileEntry, ...]) -> None:
         """Show the admitted surface without printing source bodies or prompts."""
+        self._harness = self._harness_label(plan.harness)
         relative = plan.source.contract_relative_path if plan.source else ""
         source = (
             (plan.source.original_root or plan.source.root) / relative
@@ -1243,7 +1250,7 @@ class ContractLogger:
         self._write(
             f"Preview: {identity} -> {plan.contract.output_label}", severity="heading", indent=0
         )
-        self._write(f"Copilot / {plan.model or 'default model'}", severity="detail")
+        self._write(f"{self._harness} / {plan.model or 'default model'}", severity="detail")
         self._write("Nothing will execute or download.")
         for name in plan.contract.needs:
             self._write(f"Input: {name}")
@@ -1254,6 +1261,7 @@ class ContractLogger:
             f"Time limits: run {plan.limits.attempt_seconds:g}s; "
             f"each check {plan.limits.check_seconds:g}s"
         )
+        self.repair_budget(plan.contract.budget)
         self._write("Complete execution returns COMPLETE (0); this does not certify isolation.")
         self._write("To run, use apmx with --allow-host-access and without --plan.")
         self._write(f"Source: {self._path(source)}", severity="detail", detail=True)
@@ -1313,6 +1321,27 @@ class ContractLogger:
         leaf._display_root = self._display_root
         return leaf
 
+    def new_attempt(self, *, index: int, count: int) -> ContractLogger:
+        """Give each attempt a private transcript while retaining the factory step."""
+        self._write(f"Attempt {index}/{count} (shared repair budget)", severity="info")
+        attempt = ContractLogger(verbose=self.verbose, _display=self._display, _step=self._step)
+        attempt._display_root = self._display_root
+        return attempt
+
+    def repair_budget(self, budget: RepairBudget | None) -> None:
+        """Disclose authored execution bounds before confirmation or plan execution."""
+        if budget is not None:
+            self._write(
+                f"Repair budget: at most {budget.max_attempts} "
+                f"{'attempt' if budget.max_attempts == 1 else 'attempts'}, "
+                f"{budget.max_seconds:g}s shared execution/check time; no model spend cap."
+            )
+
+    def repair_finished(self, *, reason: str, record: Path) -> None:
+        """Expose the durable link to all attempts, without another outcome decision."""
+        self._write(f"Repair controller: {reason}")
+        self._write(f"Controller record: {self._path(record)}")
+
     def select_factory_root(self, root: Path) -> None:
         self._display_root = self._caller_root
         self._caller_root = root
@@ -1321,8 +1350,15 @@ class ContractLogger:
         """The prompt uses stdout; both it and stdin must be interactive."""
         return console.can_confirm_factory()
 
-    def render_factory_work(self, graph: Graph) -> None:
+    @staticmethod
+    def _harness_label(name: str) -> str:
+        return {"copilot": "Copilot", "opencode": "OpenCode"}.get(name, name)
+
+    def render_factory_work(
+        self, graph: Graph, *, project_root: Path, harness: str = "copilot"
+    ) -> None:
         self.stop_activity()
+        self._harness = self._harness_label(harness)
         count = self._factory_contract_count = len(graph.order)
         artifacts = sum(len(contract.outputs) for contract in graph.order)
         checks = sum(len(contract.checks) for contract in graph.order)
@@ -1338,6 +1374,7 @@ class ContractLogger:
             self.chain_node(index, count, contract.path, catalog=catalog)
             self._write("Produces: " + ", ".join(contract.outputs))
             self._write("Checks: " + ", ".join(check.name for check in contract.checks))
+            self.repair_budget(contract.budget)
             self._write(f"Source: {self._path(contract.path)}", severity="detail", detail=True)
             for value in contract.needs:
                 kind = (
@@ -1348,7 +1385,7 @@ class ContractLogger:
                 self._write(f"Check {check.name}: {check.command}", severity="detail", detail=True)
         self._display.gap()
         self._write(
-            f"Evidence: will be saved under {self._path(graph.root / '.apm')}/",
+            f"Evidence: will be saved under {self._path(project_root / '.apm')}/",
             indent=0,
         )
         self._write(
@@ -1366,7 +1403,21 @@ class ContractLogger:
             if self._factory_contract_count == 1
             else f"these {self._factory_contract_count} contracts"
         )
-        prompt = f"Run {subject} with Copilot? [y/N]"
+        return self._confirm(f"Run {subject} with {self._harness}? [y/N]")
+
+    def confirm_package_preparation(self, package_ref: str) -> bool:
+        """Authorize acquisition only; factory execution still needs its own consent."""
+        self._write(f"Package: {package_ref}", severity="heading", indent=0)
+        self._write(
+            "Preparation may install dependencies using host files, network and available "
+            "logins. Run only packages you trust. No agent runs yet; inspect the factory "
+            "and confirm execution afterward.",
+            layout=_Layout.PROSE,
+            indent=0,
+        )
+        return self._confirm("Prepare this package using host access? [y/N]")
+
+    def _confirm(self, prompt: str) -> bool:
         self._write(prompt, accent=prompt, indent=0)
         if not self._display.enabled:
             return False
@@ -1415,7 +1466,11 @@ class ContractLogger:
         self._display.gap()
 
     def render_chain_plan(self, plan: ChainPlan) -> None:
-        self.render_factory_work(plan.graph)
+        self.render_factory_work(
+            plan.graph,
+            project_root=plan.nodes[0].plan.project_root,
+            harness=plan.nodes[0].plan.harness,
+        )
         self._write(f"{plan.nodes[0].plan.harness} / {plan.nodes[0].plan.model or 'default model'}")
         self._write("Nothing will execute or download. Dependency resolution uses no model calls.")
         policy = (
@@ -1427,7 +1482,11 @@ class ContractLogger:
         self._write("Every run starts fresh; APMX does not cap model charges.")
         self._write(
             f"Limits: {plan.nodes[0].plan.limits.chain_contracts} discovered contracts; "
-            "one attempt per step, no retries."
+            + (
+                "retries only within the explicit per-contract budgets above."
+                if any(node.plan.contract.budget is not None for node in plan.nodes)
+                else "one attempt per step, no retries."
+            )
         )
         self._write(
             "Without --plan or consent flags, an interactive factory invocation asks for "
@@ -1516,3 +1575,32 @@ class ContractLogger:
             self.render_chain_result(result)
         else:
             self._result(RunEvent(result.run_id, 0, 0, "finished", "engine", {"result": result}))
+
+    def evidence_package(self, path: Path | None) -> None:
+        """Report a delivered standards projection without changing recorded execution."""
+        if path is None:
+            self._write(
+                "Standard package: not applicable (no retained official APM inventory).",
+                severity="detail",
+                detail=True,
+            )
+            return
+        self._write(f"Standard package: {self._path(path)}")
+        self._write(f"Summary: {self._path(path / 'summary.md')}")
+        self._write(
+            "Unsigned evidence includes project/source files. Review before sharing.",
+            severity="detail",
+            detail=True,
+        )
+
+    def evidence_delivery_failed(self, reason: str) -> None:
+        """A failed export cannot relabel an already finalized COMPLETE record."""
+        self._write("Evidence delivery failed (command exit 23).", severity="error", indent=0)
+        self._write(reason)
+        self._write(
+            "Recorded execution remains COMPLETE; export did not rewrite its record or artifacts."
+        )
+        self._write(
+            "Inspect the retained record and source inventory, then retry the read-only "
+            "export described in docs/evidence.md; no model rerun is required."
+        )

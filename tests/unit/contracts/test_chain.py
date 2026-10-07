@@ -11,6 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 from click.testing import CliRunner
+from test_opencode_stream import frame
 
 from apmx.cli import main
 from apmx.contracts import chain, engine, records, resolution, workspace
@@ -39,9 +40,10 @@ def write_contract(
 def caller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     tools = tmp_path / "tools"
     tools.mkdir()
-    executable = tools / ("copilot.exe" if os.name == "nt" else "copilot")
-    executable.write_bytes(b"Discovery only; never launched.\n")
-    executable.chmod(0o700)
+    for harness in ("copilot", "opencode"):
+        executable = tools / (f"{harness}.exe" if os.name == "nt" else harness)
+        executable.write_bytes(b"Discovery only; never launched.\n")
+        executable.chmod(0o700)
     monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
     root = tmp_path / "caller"
     root.mkdir()
@@ -55,11 +57,13 @@ def two_nodes(root: Path) -> None:
     write_contract(root, "a-target.contract.md", ("first.txt",), "last.txt")
 
 
-def prepare(root: Path, *, target: str = "a-target.contract.md", allow: bool = True):
+def prepare(
+    root: Path, *, target: str = "a-target.contract.md", allow: bool = True, harness="copilot"
+):
     return resolution.preflight(
         resolution.resolve(Path(target), root),
         root,
-        harness="copilot",
+        harness=harness,
         allow_unproven_inputs=allow,
     )
 
@@ -80,6 +84,8 @@ def producer(monkeypatch: pytest.MonkeyPatch, *, body=None):
         completion = json.dumps(
             {"type": "result", "exitCode": 0, "sessionId": "fixture", "usage": {}}
         )
+        if plan.harness == "opencode":
+            completion = (frame("step_start") + frame("step_finish", reason="stop")).decode("utf-8")
         return ProcessRequest(
             (sys.executable, "-B", "-c", code + f"\nprint({completion!r}, flush=True)\n"),
             snapshot.producer,
@@ -128,10 +134,12 @@ def test_preview_is_free_symbolic_and_engine_refuses_it(
 
 
 @pytest.mark.parametrize("allow", (False, True))
+@pytest.mark.parametrize("harness", ("copilot", "opencode"))
 def test_actual_leaf_chain_preserves_caller_and_assurance(
     caller: Path,
     monkeypatch: pytest.MonkeyPatch,
     allow: bool,
+    harness: str,
 ) -> None:
     two_nodes(caller)
     (caller / "first.txt").write_bytes(b"stale, not an input")
@@ -139,7 +147,7 @@ def test_actual_leaf_chain_preserves_caller_and_assurance(
     original = {p.name: p.read_bytes() for p in caller.iterdir()}
     calls = producer(monkeypatch)
     result = chain.run_chain(
-        prepare(caller, allow=allow), logger=ContractLogger(), allow_advisory=True
+        prepare(caller, allow=allow, harness=harness), logger=ContractLogger(), allow_advisory=True
     )
     assert result.outcome == (Outcome.COMPLETE if allow else Outcome.UNPROVEN)
     assert result.complete is allow
@@ -151,6 +159,7 @@ def test_actual_leaf_chain_preserves_caller_and_assurance(
     assert result.record_path.name == "record.json"
     assert document["schema"] == "apmx-contract-chain/0.2"
     if allow:
+        assert records.load_completed_result(result.record_path) == result
         assert result.runs[-1].artifact.path.read_bytes() == b"seed"
         assert (calls[1][1].root / "first.txt").read_bytes() == b"seed"
         assert (
@@ -217,7 +226,7 @@ def test_symlink_cases_refuse(caller: Path, where: str) -> None:
         prepare(caller)
 
 
-@pytest.mark.parametrize("kind", ("caller", "contract", "checks", "policy"))
+@pytest.mark.parametrize("kind", ("contract", "checks", "policy"))
 def test_mutation_between_leaves_stops_without_another_model(
     caller: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -232,7 +241,6 @@ def test_mutation_between_leaves_stops_without_another_model(
     def changed(*args, **kwargs):
         result = original(*args, **kwargs)
         path, content = {
-            "caller": ("seed.txt", b"changed"),
             "contract": ("a-target.contract.md", b"changed"),
             "checks": ("checks/fixed.txt", b"changed"),
             "policy": ("apm.yml", b"invalid: ["),
@@ -493,11 +501,13 @@ def test_frozen_inventory_rejects_last_moment_resource_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     two_nodes(caller)
+    (caller / "checks").mkdir()
+    (caller / "checks/fixed.txt").write_bytes(b"trusted")
     calls = producer(monkeypatch)
     original = workspace.capture_workspace
 
     def changed(plan, directory):
-        (caller / "seed.txt").write_bytes(b"changed after preflight")
+        (caller / "checks/fixed.txt").write_bytes(b"changed after preflight")
         return original(plan, directory)
 
     monkeypatch.setattr(workspace, "capture_workspace", changed)
@@ -645,6 +655,7 @@ def test_git_tracked_sibling_and_future_outputs_are_never_baseline_inputs(
     assert {item["relative_path"] for item in data["artifacts"]["files"]} == {
         *graph_outputs,
         "seed.txt",
+        "unrelated.txt",
     }
 
 

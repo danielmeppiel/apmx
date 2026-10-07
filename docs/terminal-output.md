@@ -31,11 +31,18 @@ says where it **will be saved**, not that a record already exists.
 The local-access, package-installation and cost disclosure follows the work
 preview exactly once, immediately before `Run these 4 contracts with Copilot?
 [y/N]` (or `Run this contract with Copilot? [y/N]` for one contract). The default
-is no; declining starts no package, model or check work. Headings are cyan,
+is no; declining a local factory starts no package, model or check work. Headings are cyan,
 context and the prompt are neutral, and no success or warning color precedes
 execution. `--plan` shows the same work hierarchy and the selected handoff policy,
 without execution disclosure or a consent prompt. Explicit consent flags still
 disclose local execution before action.
+
+With `--from`, an interactive factory first asks `Prepare this package using host
+access? [y/N]` before acquisition. Accepting authorizes only package preparation;
+the resulting work preview still needs a separate execution confirmation. Decline
+the first prompt to prevent acquisition, or the second to prevent agents and checks
+from starting. Neither prompt grants policy exceptions. Noninteractive runs still
+require explicit consent flags; packaged single-contract runs are unchanged.
 
 | Indicator | Meaning |
 | --- | --- |
@@ -56,6 +63,10 @@ Default output still shows stderr and explicit diagnostics. A failed or
 incomplete check shows its normalized result and a bounded stdout excerpt;
 the saved transcript provides the retained detail. Check output is evidence
 from an external program, not the authority for a green or red status.
+Checker stdout retains sanitized logical lines up to the existing 16 KiB stream
+limit, independently of the 4 KiB terminal excerpt. This keeps bounded JSON
+subject reports usable for evidence delivery. The total transcript budget,
+redaction and refusal of missing or malformed reports remain unchanged.
 
 An interactive `NO_COLOR` terminal keeps hanging indentation without ANSI.
 Redirected output keeps logical lines, without animation or application-inserted

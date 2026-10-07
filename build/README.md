@@ -1,11 +1,9 @@
 # Standalone release engineering
 
-**Native distribution is on hold pending third-party notice remediation.**
-Historical v0.1/v0.2 Linux bundles omitted the required libffi MIT notice.
-This page describes build mechanics, not approval to publish or redistribute
-existing or newly built archives. Use the
-[pinned source preview](../docs/install.md#run-the-current-source-checkout);
-[native downloads are temporarily withheld](../docs/install.md#native-downloads-temporarily-withheld).
+Historical v0.1/v0.2 Linux bundles omitted the required libffi MIT notice and
+remain withheld. Later experimental releases use the native-notice gates below.
+This page describes build mechanics, not permission to skip fresh candidate
+verification or redistribute historical failed candidates.
 
 Select a reviewed build interpreter explicitly before using the commands below:
 set `APMX_BUILD_PYTHON` and `UV_PYTHON` to the same absolute Python executable
@@ -128,11 +126,11 @@ download it at runtime. The development override is not consulted by frozen apmx
 
 ## Acceptance boundary
 
-`python scripts/smoke.py --binary /absolute/extracted/apmx --version 0.3.1`
+`python scripts/smoke.py --binary /absolute/extracted/apmx --version VERSION`
 uses a temporary caller outside the checkout, isolated HOME/config directories,
 and no `PYTHONPATH` or `PYTHONHOME`. It does not import or install the application.
 It rejects source launchers and runs six mandatory frozen local/package cases:
-passing independent checks produce `UNPROVEN` (21), rejected output 20, and an
+passing independent checks produce `COMPLETE` (0), rejected output 20, and an
 operational producer failure 22. It verifies retained source/output identities,
 record completion, assessment bytes, transcript digest/size, process cleanup,
 and unchanged caller and package input. Each package contains one self-contained
@@ -187,12 +185,21 @@ must match the original sources. An unselected dependency's skill and an unsuppo
 must be absent from the prompt and the entire producer workspace; the supporting script must
 never execute. The original single-skill gates remain separate.
 
+Completed single-skill package cases must now deliver the standard evidence
+package and print its paths. The mixed-ASF fixture deliberately retains
+overlapping direct/transitive local references: pinned APM 0.30.0 exports
+duplicate component identities for them. That case requires explicit
+evidence-delivery refusal (command exit 23), no published package, and an
+unchanged canonical COMPLETE outcome (exit 0). It still checks every original
+import, consumer-lock, artifact, cleanup and non-activation assertion. Other
+delivery failures do not satisfy this expected refusal.
+
 An additional **factory** case previews a directory without creating execution
 state or invoking the producer, then executes two dependent contracts. The first
 delivers two files; the second consumes both and delivers a third. It checks
 complete records, both explicit consent flags, scalar and multiple-output record
 schemas, independent check and producer cleanup, immutable original inputs/checks,
-the final artifact view, and **UNPROVEN (21)**. This reuses the existing hermetic
+the final artifact view, and **COMPLETE (0)**. This reuses the existing hermetic
 actor and checker; it is not live model inference. The ten local/package cases
 remain unchanged in scope and run alongside this factory case before upload and
 again against the actual downloaded draft bytes.
@@ -258,6 +265,16 @@ One-file extraction is deliberately avoided because terminating a lingering
 descendant also terminates its extraction-cleanup process, leaving fixture-only
 temporary files. The strict app temporary-file cleanup check is not relaxed.
 `--report PATH` retains a JSON report containing the validated fixture records.
+
+## Read-only candidate CI
+
+`native-notice-ci.yml` runs on pull requests and pushes to `main`. It exercises
+the five native platforms, the source suite and frozen acceptance before
+retaining notice-verified candidate archives for one day and smoke reports for
+seven days. Windows protocol actors stay on their runners. This workflow has
+read-only repository permissions, no release token and no publication step.
+Candidate artifacts are not published releases, even when their version matches
+an existing release.
 
 ## Manual public experimental promotion
 
@@ -373,7 +390,7 @@ Infrastructure-only checks, before the source package exists:
 
 ```sh
 python3 -m unittest discover -s tests/release -v
-actionlint .github/workflows/ci.yml .github/workflows/release.yml
+actionlint .github/workflows/*.yml
 ```
 
 Those checks are not evidence of a functional frozen application build.

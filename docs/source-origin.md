@@ -107,10 +107,13 @@ and options before installation:
 
 `Running` names the operation, not a copyable command with invented arguments.
 The executable is the validated bundled/provisioned APM, not a PATH lookup;
-the request and `--root` are supplied to the actual temporary install. A separate
-consumer install is labeled `Installing project imports`; `Using locked versions`
+the request and `--root` are supplied to the actual temporary install. A local
+contract's consumer install is labeled `Installing project imports`. A packaged
+contract or factory shares its one prepared dependency inventory across all
+stages; it does not install the consumer graph again. `Using locked versions`
 and the verbose `--frozen` option appear only when that invocation replays a
-consumer lock. Each actual install has its own scoped start/completion; logging
+consumer lock without adding a new package request. Existing pins still must
+remain unchanged when a new package is added. Each actual install has its own scoped start/completion; logging
 does not install again. `Packages ready` requires observed backend success and
 unchanged backend identity. It does not claim that later context validation,
 Copilot execution or checks have passed. `Using` lists only the packages selected
@@ -172,6 +175,34 @@ The consumer's manifest and lock govern even a packaged contract. Without a
 consumer environment, execution can resolve an ephemeral one; a package-owned
 lock is provenance, not a competing consumer lock. Read-only planning never
 installs, fetches, repairs or migrates missing dependencies.
+If a selected import matches both an explicitly declared top-level package and
+a factory's transitive default, the top-level declaration wins and is still
+validated against its native lock. Multiple top-level matches, or multiple
+transitive matches without a top-level choice, remain an ambiguity error.
+
+## Package factory entry selection
+
+`apmx --from PACKAGE_REF factory --on copilot` selects every contract below the
+package-relative `factory` directory using the same dependency graph as a local
+factory. `.` explicitly selects the package root. The calling directory remains
+the application/input/policy/evidence root; package fixtures never substitute
+for consumer input. Offline previews show the consumer's `.apm/` evidence
+destination separately from the selected factory location. Automation still
+requires both `--allow-host-access` and `--allow-unproven-inputs`. A focused
+`.contract.md` entry remains a single stage.
+
+Package checker resources come from the unique `checks/` directory alongside
+the selected entry or one of its package ancestors. For a focused leaf, the
+search begins at its containing directory. Multiple ancestor checker roots are
+rejected rather than selecting different checks for whole-factory and focused
+runs. The complete package identity is verified separately from the resource
+subdirectory. Checks are captured at `checks/` in private workspaces, never
+copied into or taken from an overlapping consumer resource directory.
+
+These development source routes do not establish archive distribution.
+The pinned APM 0.30.0 backend does not preserve the approved independent
+contract/check trees through its archive routes. Source support must not be
+advertised as a released, archive-installable factory.
 
 APM 0.30 adds cache-pin metadata after recording remote package hashes. For
 overlapping virtual packages, a child's `.apm-pin` can consequently change its
@@ -184,10 +215,12 @@ are rewritten, and unlisted markers or changed package content remain failures.
 Records expose any omitted metadata paths as `managed_metadata`; observed source
 hashes still describe the actual installed tree.
 
-Selected skills enter `.agents/skills/<skill-name>/` in the actual Copilot
+Selected skills enter `.agents/skills/<skill-name>/` in the actual
 producer workspace, with their original `SKILL.md` bytes and supporting files.
 Copilot discovers and loads them natively; their bodies are not embedded in the
-contract prompt. Instruction-type imports remain passive context beneath
+contract prompt. The development [OpenCode profile](opencode.md) supplies that
+same captured tree through native `skills.paths`, permitting only selected
+skill names. Instruction-type imports remain passive context beneath
 `_apmx_context/import-N/`. The destination/name authority is
 `contracts/context_layout.py`; package aliases are not native skill names.
 Supported sources are global `.apm/instructions/**/*.instructions.md`, root

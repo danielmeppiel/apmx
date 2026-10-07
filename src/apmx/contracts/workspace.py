@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import stat
+import tempfile
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
@@ -26,11 +27,33 @@ from .models import (
     ContractLimits,
     FileEntry,
     LeafPlan,
+    ProjectSnapshot,
+    RepairContext,
     RetainedInput,
     RunResult,
     artifact_files,
 )
 from .process import local_git
+
+SELECTION_SCHEMA = "apmx-project-selection/1"
+EXCLUDED_DIRECTORIES = frozenset(
+    {
+        ".git",
+        ".apm",
+        "apm_modules",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".tox",
+        ".nox",
+        "_apmx_source",
+        "_apmx_context",
+    }
+)
 
 
 def _path(root: Path, name: str) -> Path:
@@ -104,7 +127,78 @@ def _git_marker(root: Path) -> Path | None:
     )
 
 
-def _selected_names(plan: LeafPlan) -> tuple[str, ...]:
+def _resource_name(name: str) -> bool:
+    folded = name.casefold()
+    return (
+        folded.startswith("checks/")
+        or folded.endswith(".contract.md")
+        or folded in {"apm.yml", "apm.lock", "apm.lock.yaml"}
+    )
+
+
+def _application_name(name: str) -> bool:
+    return (
+        not _resource_name(name)
+        and not is_native_skill_path(name)
+        and not any(part.casefold() in EXCLUDED_DIRECTORIES for part in PurePosixPath(name).parts)
+    )
+
+
+def project_inventory(plan: LeafPlan, entries: tuple[FileEntry, ...]) -> tuple[FileEntry, ...]:
+    supplied = {binding.artifact.relative_path for binding in plan.input_bindings}
+    return tuple(
+        entry
+        for entry in entries
+        if _application_name(entry.relative_path) and entry.relative_path not in supplied
+    )
+
+
+def validate_project(snapshot: ProjectSnapshot, root: Path, limits: ContractLimits) -> None:
+    names = [entry.relative_path for entry in snapshot.files]
+    if (
+        snapshot.schema != SELECTION_SCHEMA
+        or snapshot.root.name != "project"
+        or snapshot.root.parent.parent
+        not in (root / ".apm/chains", root / ".apm/runs", root / ".apm/controllers")
+        or len(snapshot.files) > limits.baseline_files
+        or sum(entry.size for entry in snapshot.files) > limits.baseline_bytes
+        or any(not _application_name(entry.relative_path) for entry in snapshot.files)
+        or names != sorted(names)
+        or len({name.casefold() for name in names}) != len(names)
+    ):
+        raise ContractError("Invalid original project capture.", code="baseline_changed")
+    try:
+        inspect_artifact_view(ArtifactView(snapshot.root, snapshot.files, snapshot.digest, ()))
+    except (ContractError, OSError) as exc:
+        raise ContractError("Original project capture changed.", code="baseline_changed") from exc
+
+
+def capture_project(plan: LeafPlan, directory: Path) -> ProjectSnapshot:
+    """Freeze application bytes once; source/check/import identities remain separately admitted."""
+    captures = []
+    total = 0
+    for name in _project_names(plan):
+        _, entry = _read(plan.project_root, name, plan.limits.file_bytes)
+        captures.append(CapturedInput(plan.project_root, name, entry))
+        total += entry.size
+        if total > plan.limits.baseline_bytes:
+            raise ContractError("Baseline bytes exceed the limit.", code="baseline_limit")
+    files = tuple(item.entry for item in captures)
+    if len({entry.relative_path.casefold() for entry in files}) != len(files):
+        raise ContractError("Case-colliding snapshot paths are unsupported.")
+    root = directory / "project"
+    root.mkdir(mode=0o700)
+    _copy_captures(tuple(captures), root)
+    snapshot = ProjectSnapshot(root, files, _digest(files), _original_head(plan.project_root))
+    validate_project(snapshot, plan.project_root, plan.limits)
+    return snapshot
+
+
+def _project_names(plan: LeafPlan) -> tuple[str, ...]:
+    """Select working bytes with Git's project-local ignore parser, never a new glob DSL."""
+    if plan.project_snapshot is not None:
+        validate_project(plan.project_snapshot, plan.project_root, plan.limits)
+        return tuple(entry.relative_path for entry in plan.project_snapshot.files)
     root = plan.project_root
     from .imports import read_lock
 
@@ -121,38 +215,98 @@ def _selected_names(plan: LeafPlan) -> tuple[str, ...]:
                     excluded_roots.append(origin)
     if plan.source and plan.source.original_root:
         excluded_roots.append(plan.source.original_root)
-    names = set(plan.contract.needs)
-    if any(is_native_skill_path(name) for name in names):
-        raise ContractError(
-            "Inputs cannot activate project skills; declare skill packages in imports instead.",
-            code="source_collision",
-        )
-    if plan.source is None:
-        names.add(plan.contract.path.relative_to(root).as_posix())
-    if (root / "apm.yml").exists():
-        names.add("apm.yml")
-    for lock in ("apm.lock.yaml", "apm.lock"):
-        if (root / lock).exists():
-            names.add(lock)
+    produced = {name.casefold() for name in (*plan.chain_outputs, *plan.contract.outputs)}
+    names: set[str] = set()
+
+    def decode(encoded: bytes) -> str:
+        try:
+            return encoded.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ContractError(
+                "Project paths must be UTF-8.", code="unsafe_snapshot_path"
+            ) from exc
+
+    def select(name: str) -> None:
+        if (
+            any(part.casefold() in EXCLUDED_DIRECTORIES for part in PurePosixPath(name).parts)
+            or is_native_skill_path(name)
+            or name.casefold() in produced
+        ):
+            return
+        path = _path(root, name.rstrip("/"))
+        if any(path.is_relative_to(excluded) for excluded in excluded_roots):
+            return
+        if name.endswith("/") or path.is_dir():
+            raise ContractError(
+                f"Nested repositories and submodules are unsupported: {name}",
+                code="unsupported_project_entry",
+            )
+        if path.exists() and not _resource_name(name):
+            names.add(name)
+        if len(names) > plan.limits.baseline_files:
+            raise ContractError("Baseline file count exceeds the limit.", code="baseline_limit")
+
     if _git_marker(root) is not None:
-        for line in local_git(root, "ls-files", "--stage", "-z").split(b"\0"):
+        for line in local_git(root, "ls-files", "--stage", "-z", "--", ".").split(b"\0"):
             if not line:
                 continue
             metadata, encoded = line.split(b"\t", 1)
-            name = encoded.decode("utf-8")
+            name = decode(encoded)
             if metadata.split()[0] == b"160000":
                 raise ContractError("Git submodules are unsupported in captured baselines.")
-            if name.split("/")[0] in {".apm", "apm_modules"}:
-                continue
-            if is_native_skill_path(name):
-                continue
-            path = _path(root, name)
-            if any(path.is_relative_to(excluded) for excluded in excluded_roots):
-                continue
-            if path.exists():
-                names.add(name)
-            if len(names) > plan.limits.baseline_files:
-                raise ContractError("Baseline file count exceeds the limit.", code="baseline_limit")
+            select(name)
+    # A disposable index makes Git/non-Git consumers use the same local .gitignore
+    # semantics, without global excludes, parent-project rules or writes to the caller.
+    with tempfile.TemporaryDirectory(prefix="apmx-selection-") as temporary:
+        selection = Path(temporary)
+        template = selection / "template"
+        template.mkdir()
+        local_git(selection, "init", "--bare", "--quiet", f"--template={template}")
+        listing = local_git(
+            root,
+            f"--git-dir={selection}",
+            f"--work-tree={root}",
+            "ls-files",
+            "--others",
+            "-z",
+            "--exclude-per-directory=.gitignore",
+            *(f"--exclude={name}/" for name in sorted(EXCLUDED_DIRECTORIES)),
+            "--",
+            ".",
+        )
+        for encoded in listing.split(b"\0"):
+            if encoded:
+                select(decode(encoded))
+    return tuple(sorted(names))
+
+
+def _selected_names(plan: LeafPlan) -> tuple[str, ...]:
+    root = plan.project_root
+    names = set(_project_names(plan))
+    supplied = {
+        *plan.deferred_inputs,
+        *(item.artifact.relative_path for item in plan.input_bindings),
+    }
+    for name in plan.contract.needs:
+        if name in supplied:
+            continue
+        if is_native_skill_path(name):
+            raise ContractError(
+                "Inputs cannot activate project skills; declare skill packages in imports instead.",
+                code="source_collision",
+            )
+        if any(part.casefold() in EXCLUDED_DIRECTORIES for part in PurePosixPath(name).parts) or (
+            name not in names and not _resource_name(name)
+        ):
+            raise ContractError(
+                f"Required input is excluded from project capture: {name}", code="excluded_input"
+            )
+        names.add(name)
+    if plan.source is None:
+        names.add(plan.contract.path.relative_to(root).as_posix())
+    for name in ("apm.yml", "apm.lock.yaml", "apm.lock"):
+        if (root / name).exists():
+            names.add(name)
     names.update(_check_names(root, plan.limits))
     produced = {name.casefold() for name in (*plan.chain_outputs, *plan.contract.outputs)}
     names = {name for name in names if name.casefold() not in produced}
@@ -185,7 +339,16 @@ def _check_names(root: Path, limits: ContractLimits) -> tuple[str, ...]:
 
 def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
     """Own caller/package mapping and collision admission for inspection and copy."""
-    selected = [(plan.project_root, name, name) for name in _selected_names(plan)]
+    selected = [
+        (
+            plan.project_snapshot.root
+            if plan.project_snapshot is not None and _application_name(name)
+            else plan.project_root,
+            name,
+            name,
+        )
+        for name in _selected_names(plan)
+    ]
     from .records import validate_binding
 
     for binding in plan.input_bindings:
@@ -211,7 +374,7 @@ def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
                 for item in context.resources
             )
     if plan.source is not None:
-        from ..install.contract_source_validation import validate_source
+        from ..install.contract_source_validation import resource_root, validate_source
 
         validate_source(plan.source, plan.contract, limits=plan.limits)
         for child in plan.project_root.iterdir():
@@ -236,9 +399,8 @@ def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
                 "_apmx_source/contract.contract.md",
             )
         )
-        selected.extend(
-            (plan.source.root, name, name) for name in _check_names(plan.source.root, plan.limits)
-        )
+        resources = resource_root(plan.source)
+        selected.extend((resources, name, name) for name in _check_names(resources, plan.limits))
     destinations = {name.casefold() for _, _, name in selected}
     if len(destinations) != len(selected):
         raise ContractError(
@@ -297,7 +459,7 @@ def _capture_mapping(plan: LeafPlan) -> tuple[CapturedInput, ...]:
 
 
 def inspect_workspace(plan: LeafPlan) -> tuple[FileEntry, ...]:
-    """Read effective tracked bytes and explicit untracked resources without writes."""
+    """Read the implicit project and separately admitted resources without caller writes."""
     return tuple(captured.entry for captured in _capture_mapping(plan))
 
 
@@ -443,6 +605,13 @@ def _initialize_git(root: Path, template: Path) -> str:
     return local_git(root, "rev-parse", "HEAD").decode("ascii").strip()
 
 
+def _original_head(root: Path) -> str | None:
+    if _git_marker(root) is None:
+        return None
+    refs = local_git(root, "rev-parse", "--verify", "--quiet", "HEAD", accepted_codes=(0, 1))
+    return refs.decode("ascii").strip() or None
+
+
 def capture_workspace(plan: LeafPlan, run_directory: Path) -> BaselineSnapshot:
     """Materialize the admitted effective tree and a fresh producer workspace."""
     captures = _capture_mapping(plan)
@@ -459,12 +628,11 @@ def capture_workspace(plan: LeafPlan, run_directory: Path) -> BaselineSnapshot:
     _copy_entries(baseline, producer, entries)
     template = run_directory / "git-template"
     template.mkdir(mode=0o700)
-    original_head = None
-    if _git_marker(plan.project_root) is not None:
-        refs = local_git(
-            plan.project_root, "rev-parse", "--verify", "--quiet", "HEAD", accepted_codes=(0, 1)
-        )
-        original_head = refs.decode("ascii").strip() or None
+    original_head = (
+        plan.project_snapshot.original_head
+        if plan.project_snapshot is not None
+        else _original_head(plan.project_root)
+    )
     head = _initialize_git(baseline, template)
     shutil.copytree(baseline / ".git", producer / ".git")
     from .records import validate_binding
@@ -473,7 +641,15 @@ def capture_workspace(plan: LeafPlan, run_directory: Path) -> BaselineSnapshot:
         validate_binding(binding, plan.project_root, plan.limits)
     resources = tuple(entry for entry in entries if entry.relative_path.startswith("checks/"))
     return BaselineSnapshot(
-        baseline, producer, entries, _digest(entries), original_head, head, _digest(resources)
+        baseline,
+        producer,
+        entries,
+        _digest(entries),
+        original_head,
+        head,
+        _digest(resources),
+        SELECTION_SCHEMA,
+        _digest(project_inventory(plan, entries)),
     )
 
 
@@ -501,6 +677,26 @@ def inspect_artifact_view(view: ArtifactView) -> None:
         _, observed = _read(view.root, expected.relative_path, expected.size)
         if observed != expected:
             raise ContractError("Aggregate artifact bytes changed.", code="artifact_view_changed")
+
+
+def prepare_repair_context(
+    plan: LeafPlan, snapshot: BaselineSnapshot, context: RepairContext
+) -> BaselineSnapshot:
+    """Copy rejected references into protected state, never into the captured baseline."""
+    from .records import validate_binding
+
+    if context.previous:
+        target = snapshot.producer / ".apm" / "repair"
+        target.mkdir(parents=True, mode=0o700)
+        for binding in context.previous:
+            validate_binding(binding, plan.project_root, plan.limits)
+            artifact = binding.artifact
+            raw, entry = _read(artifact.path.parent, artifact.path.name, artifact.size)
+            if entry.sha256 != artifact.sha256 or entry.size != artifact.size:
+                raise ContractError("Repair reference changed.", code="artifact_changed")
+            _write(target, replace(entry, relative_path=artifact.relative_path, mode=0o400), raw)
+            validate_binding(binding, plan.project_root, plan.limits)
+    return replace(snapshot, repair=context)
 
 
 def capture_chain_view(
@@ -545,7 +741,14 @@ def capture_chain_view(
         roots = set(plan.contract.needs) - set(plan.chain_outputs)
         baseline = result.run_directory / "baseline"
         for entry in plan.input_inventory:
-            if entry.relative_path in roots or entry.relative_path.startswith("checks/"):
+            if (
+                entry.relative_path in roots
+                or entry.relative_path.startswith("checks/")
+                or (
+                    _application_name(entry.relative_path)
+                    and entry.relative_path not in plan.chain_outputs
+                )
+            ):
                 select(CapturedInput(baseline, entry.relative_path, entry))
         origin = result.run_directory / "artifacts"
         for artifact in artifact_files(result.artifact):

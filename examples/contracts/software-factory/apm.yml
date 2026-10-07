@@ -1,0 +1,7 @@
+name: checkout-factory
+version: 0.1.0-dev
+dependencies:
+  apm:
+    - git: wshobson/agents
+      path: plugins/python-development/skills/python-testing-patterns
+      ref: 46891e7e60da0e52baf1050b7b6391b64e84c6d9

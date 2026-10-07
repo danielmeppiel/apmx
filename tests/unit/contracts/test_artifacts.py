@@ -23,11 +23,11 @@ __all__ = ["caller"]
 pytestmark = pytest.mark.component
 
 
-def make_plan(root: Path, *, allow: bool = True):
+def make_plan(root: Path, *, allow: bool = True, harness: str = "copilot"):
     return resolution.preflight(
         resolution.resolve_factory(root),
         root,
-        harness="copilot",
+        harness=harness,
         allow_unproven_inputs=allow,
     )
 

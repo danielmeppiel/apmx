@@ -14,6 +14,12 @@ Preview also exits 0, but performs no execution and issues no completion
 record. Check labels are PASS, FAIL and INCOMPLETE; raw process observations
 remain in the record.
 
+Development source also uses command exit **23** when execution is COMPLETE
+but delivery of its eligible [standards Evidence Package](evidence.md) fails.
+This is not a new execution outcome: the canonical COMPLETE record and
+artifacts are not rewritten. Retry the read-only export, not the model run.
+Runs without retained official APM inventory keep their existing behavior.
+
 COMPLETE is not VERIFIED, trust, certification, correct software, a sandbox,
 or permission to merge/deploy. Native agents and checks use host files,
 network and available logins; model usage can cost money. Run only trusted
@@ -47,7 +53,46 @@ leaf headlines are not printed ahead of shared preparation cleanup, even in
 verbose mode. This is an in-process lifecycle check, not protection against
 arbitrary concurrent modification by the same user.
 
+## Read-only retained-evidence support
+
+Development tooling can use
+`apmx.contracts.records.load_completed_result(record_path)` to read a completed
+leaf, factory or repair-controller record after temporary package sources have
+been removed. It reuses the completion boundary and checker assessment rules,
+checks retained declarations and bytes, and preserves controller history.
+Missing checks, changed artifacts, inconsistent outcomes and references outside
+the caller's evidence storage are refused. It does not execute a model, resolve
+dependencies, rerun checks, admit a new handoff or rewrite the original result.
+An incomplete historical execution remains incomplete.
+
+`apmx.install.apm_backend.export_cyclonedx(manifest, lock, expected_backend=...)`
+exports a retained manifest/lock pair through the exact recorded official APM
+backend. It passes private copies to `apm lock export --format cyclonedx`,
+without an install or dependency-resolution step, and returns the exact
+CycloneDX 1.5 bytes. Changed inputs/backend identity, process errors and
+unconfirmed cleanup are explicit export failures, not revised execution
+outcomes. The BOM describes supplied inventory; it is not an input allegedly
+read by the model, nor proof that every installed capability was used.
+
+Current development source automatically exports a portable
+[Evidence Package](evidence.md) after eligible completed executions and all
+preparation cleanup. It adds no CLI command or flag. The package includes
+ordinary CycloneDX inventory, in-toto/SLSA producer statements and in-toto
+Test Result statements; records remain the sole execution authority.
+
+Raw transcripts and repair diagnostic excerpts are omitted from this projection,
+but retained project/source files may contain private information. It is not
+a secret scrubber. Neither reading nor exporting records authenticates their
+author or establishes isolation. An unsigned copied package with recomputed
+hashes is not a trusted attestation.
+
 ## Record versions
+
+Current development additionally records the versioned
+[implicit project selection](workspace.md): per-leaf `baseline.selection_schema`
+and `baseline.project_digest`, and a factory's retained `project_capture`.
+These fields distinguish application identity from stage handoffs and checker
+resources. Historical records without them retain their original meaning.
 
 New leaf records use `apm-contract-run/0.3` for both scalar and multiple
 outputs. Scalar artifact objects and multi-output `{files, sha256}` inventories

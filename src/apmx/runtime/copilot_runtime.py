@@ -7,8 +7,8 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
-from ..contracts.context_layout import context_directory
 from ..contracts.models import BaselineSnapshot, ContractLimits, LeafPlan, ProcessRequest
+from .contract_prompt import contract_prompt
 
 
 class CopilotRuntime:
@@ -37,43 +37,10 @@ class CopilotRuntime:
                 code="unsupported_output_location",
                 outcome=Outcome.UNPROVEN,
             )
-        sections = [
-            plan.contract.body,
-            (
-                "\nFixed file instructions:\n"
-                f"Read the supplied inputs: {json.dumps(plan.contract.needs)}.\n"
-                f"Deliver every declared artifact file: {json.dumps(plan.contract.outputs)}.\n"
-                "Send brief progress updates in plain ASCII before reading inputs and writing the output.\n"
-                "Use view to read; apply_patch can write declared artifacts. "
-                "Use portable workspace-relative paths (never absolute paths) with "
-                "apmx_artifacts.write_file({path, content}) for bounded private working-file edits, "
-                "and apmx_artifacts.delete_file({path}) for a regular-file deletion. "
-                "When the task requests a code-change artifact, edit actual source files and explicitly call "
-                "apmx_artifacts.export_changes({output}) with its declared artifact path. "
-                "Never hand-compose patch hunks. Export once after all source edits; do not modify its artifact afterward. "
-                "Export supports regular UTF-8 text changes, not binary Git transformations or mode changes. "
-                "Private edits are not published; only declared artifacts advance. "
-                "Do not edit checks, imported context or runner state. Do not run checks or shell commands. "
-                "If an artifact tool fails, stop and report the failure; do not retry or use a fallback tool. "
-                "Use only the tools permitted for this run."
-            ),
-        ]
-        for index, skill in enumerate(plan.imported_skills, start=1):
-            if skill.kind == "skill":
-                continue
-            sections.append(
-                f"\nImported context {json.dumps(skill.name)} "
-                f"({skill.kind} {json.dumps(skill.context_name or skill.name)}, "
-                f"version {json.dumps(skill.version)}, source sha256 {skill.source_digest}):\n"
-                f"{skill.content}\n"
-                f"Read-only context files: {context_directory(skill, index)}/ "
-                f"(resources: {json.dumps([item.relative_path for item in skill.resources])}).\n"
-                "End imported context."
-            )
         argv = [
             str(plan.executable),
             "-p",
-            "\n".join(sections),
+            contract_prompt(plan, snapshot),
             "--output-format",
             "json",
             "--stream",

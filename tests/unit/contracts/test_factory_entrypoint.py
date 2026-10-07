@@ -364,7 +364,7 @@ def test_explicit_leaf_does_not_run_siblings_or_prompt(caller, monkeypatch):
     can_confirm.assert_not_called()
 
 
-def test_rejected_chain_option_and_package_factory_have_no_fallback(caller):
+def test_rejected_chain_option_and_invalid_package_have_no_fallback(caller):
     two_nodes(caller)
     help_result = CliRunner().invoke(main, ["--help"])
     assert "--chain" not in help_result.output and "FACTORY_OR_CONTRACT" in help_result.output
@@ -372,7 +372,7 @@ def test_rejected_chain_option_and_package_factory_have_no_fallback(caller):
     assert rejected.exit_code == 2
     assert "No such option" in rejected.output and "--chain" in rejected.output
     packaged = CliRunner().invoke(main, [".", "--from", str(caller), "--on", "copilot", "--plan"])
-    assert packaged.exit_code == 2 and "leaf contracts only" in packaged.output
+    assert packaged.exit_code == 22 and "apm.yml" in packaged.output
     assert not (caller / ".apm").exists()
 
 
