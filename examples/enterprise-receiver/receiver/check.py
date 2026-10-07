@@ -1084,7 +1084,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    def _emit_rejection(failure: "ReceiverFailure") -> int:
+    def _emit_rejection(failure: ReceiverFailure) -> int:
         print(
             json.dumps({"status": "rejected", "policy": failure.policy, "detail": failure.detail})
         )

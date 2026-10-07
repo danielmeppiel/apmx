@@ -41,8 +41,8 @@ from pathlib import Path
 _RECEIVER_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_RECEIVER_DIR))
 
-import check as receiver_check  # noqa: E402
-import gate  # noqa: E402
+import check as receiver_check
+import gate
 
 _APP_RELATIVE = "examples/enterprise-receiver/app/greeting.py"
 
@@ -116,7 +116,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
         print(f"::group::execute scenario: {name}")
         results = receiver_check.run_execution_bundle(bundle_root / name)
         (results_root / f"{name}.json").write_text(json.dumps(results))
-        print(f"::endgroup::")
+        print("::endgroup::")
     print(f"execute: ran {len(_scenario_names(bundle_root))} scenario(s)")
     return 0
 
@@ -170,8 +170,10 @@ def cmd_assess(args: argparse.Namespace) -> int:
             "receipt whose case set does not match the expected (accepted-only) set"
         )
     else:
-        print(f"receipt-tampering check: gate correctly rejected forged receipt "
-              f"({forged_outcome.reason})")
+        print(
+            f"receipt-tampering check: gate correctly rejected forged receipt "
+            f"({forged_outcome.reason})"
+        )
 
     # gate.py's receipt contract mirrors production: every NAMED case must
     # itself be accepted, and the name set must exactly match
@@ -189,11 +191,15 @@ def cmd_assess(args: argparse.Namespace) -> int:
     (args.receipt).write_text(json.dumps(real_receipt, indent=2))
 
     if mismatches:
-        print(f"::error::assess: {len(mismatches)} scenario(s) did not match expectations",
-              file=sys.stderr)
+        print(
+            f"::error::assess: {len(mismatches)} scenario(s) did not match expectations",
+            file=sys.stderr,
+        )
         return 1
-    print("assess: all scenarios matched expected accept/reject outcomes; "
-          "receipt-tampering check passed")
+    print(
+        "assess: all scenarios matched expected accept/reject outcomes; "
+        "receipt-tampering check passed"
+    )
     return 0
 
 

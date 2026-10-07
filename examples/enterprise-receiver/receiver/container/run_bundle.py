@@ -73,7 +73,7 @@ from pathlib import Path
 # makes the sibling ``bounded_io.py`` importable in every one of those
 # cases, not just the ones where Python would have added it automatically.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bounded_io import BoundedReadResult, run_process_bounded  # noqa: E402
+from bounded_io import BoundedReadResult, run_process_bounded
 
 # Bounds enforced WHILE reading the execution container's own stdout (not
 # only after a full, unbounded capture) -- see bounded_io.read_process_bounded.
@@ -167,10 +167,7 @@ def _cleanup_container(container_name: str) -> str | None:
         # won the race) -- an explicit, verified-absent outcome, not a
         # failure.
         return None
-    return (
-        f"docker rm --force {container_name} exited {proc.returncode}: "
-        f"{stderr_text.strip()}"
-    )
+    return f"docker rm --force {container_name} exited {proc.returncode}: {stderr_text.strip()}"
 
 
 def run_execution_bundle(bundle_dir: Path) -> list[dict]:
@@ -305,9 +302,7 @@ def run_execution_bundle(bundle_dir: Path) -> list[dict]:
                 cleanup_diagnostic = _cleanup_container(container_name)
                 if cleanup_diagnostic is not None:
                     diagnostic = (
-                        diagnostic + "; " + cleanup_diagnostic
-                        if diagnostic
-                        else cleanup_diagnostic
+                        diagnostic + "; " + cleanup_diagnostic if diagnostic else cleanup_diagnostic
                     )
 
         case_results = []

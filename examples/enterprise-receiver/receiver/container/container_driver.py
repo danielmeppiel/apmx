@@ -42,7 +42,7 @@ from pathlib import Path
 # bundle (which also holds ``manifest.json``'s ``expectedOutput`` and other
 # checks' candidate bytes).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bounded_io import BoundedReadResult, run_process_bounded  # noqa: E402
+from bounded_io import BoundedReadResult, run_process_bounded
 
 _EXECUTOR_PATH = Path(__file__).resolve().parent / "executor.py"
 
