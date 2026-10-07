@@ -6,32 +6,49 @@ This is a FIXTURE generator, not a live demonstration transcript. It drives the
 tiny public application, so the resulting package is a genuine, reproducible
 product of APMX's own code paths rather than a hand-authored JSON sample.
 
-Two things are deliberately stood in, and BOTH are disclosed here (an earlier
-draft of this docstring named only the first, which understated what is
-mocked):
+Exactly ONE thing is deliberately stood in, and it is disclosed here (an
+earlier revision of this docstring also named the capability inventory as
+mocked; that is no longer true -- see below):
 
 1. The model backend. apmx normally drives a live Copilot/OpenCode runtime,
    which needs network/model credentials that are not available (and should
    not be committed) in this public repository. In its place we substitute a
    small, fully deterministic child process -- the exact technique apmx's own
    unit tests use (see ``tests/unit/contracts/test_engine.py::_fake_adapter``)
-   -- that writes the fixed greeting and reports a normal completion.
+   -- that writes the fixed greeting and reports a normal completion. This is
+   the "hermetic producer": a test double for the one component that cannot
+   run here without live credentials. Nothing else about the capability
+   inventory, binding, or check execution is substituted.
 
-2. The capability inventory (CycloneDX BOM). ``evidence._inventory`` is
-   monkeypatched to return a fixed, EMPTY BOM (``_FIXED_BOM`` below) with no
-   components, rather than a real scan of an actual capability/tooling
-   inventory. This means the capability-revocation check exercised by this
-   fixture's evidence package proves only that the receiver's revocation
-   POLICY MECHANISM works end to end against *some* recorded lockIdentity --
-   it is NOT a real APMX capability inventory and does NOT, by itself,
-   demonstrate revocation of any actual, currently-deployed capability. Any
-   public claim about this fixture must say "capability-revocation policy
-   mechanism, exercised against a synthetic empty inventory", never "real
-   APMX capability inventory" or "live capability-revocation demo".
+2. The capability inventory (CycloneDX BOM) is now REAL, not mocked. The
+   fixture project genuinely declares a dependency (``dependencies.apm`` in
+   its generated ``apm.yml``) on ``full-salutation-style``, a real public
+   skill committed in this repository at
+   ``examples/enterprise-receiver/app/skills/full-salutation-style``. That
+   dependency is installed with the real, pinned ``apm`` backend binary
+   (``apmx.install.apm_backend.install``, the exact production code path
+   production contracts use -- no network access, since it is a local-path
+   dependency resolved on disk), producing a genuine ``apm.lock.yaml`` and an
+   installed copy under ``apm_modules/``. The contract's ``imports:``
+   frontmatter names that real dependency, so ``apmx.contracts.imports
+   .resolve_installed_skills`` -- again, real production code, not a stub --
+   binds it to a genuine ``ImportedSkill`` identity (its real lock identity
+   and real SKILL.md content hash). ``apmx.contracts.evidence._inventory`` and
+   ``apm_backend.export_cyclonedx`` then run completely unmocked, producing a
+   real, nonempty CycloneDX document and a real ``capability-bindings.json``
+   entry for this capability's actual lock identity. This is genuine harness
+   execution of the official APM inventory path, not a hermetic stand-in: the
+   capability-revocation check this fixture exercises is tested against a
+   real, publicly-inspectable capability and its real recorded identity, and
+   a public claim that this fixture's capability-revocation check runs
+   against a real APM capability inventory is accurate. What remains out of
+   scope for this fixture alone is a genuine, currently-deployed *production*
+   capability incident (see ``receiver/test_capability_revocation.py`` for
+   the accept/reject proof using this exact real identity).
 
-Everything downstream of these two substitutions (baseline capture, checker
-execution, in-toto/SLSA statements, CycloneDX export, package assembly) is
-real apmx code running for real against real files on disk.
+Everything downstream of the model-backend substitution (baseline capture,
+checker execution, in-toto/SLSA statements, CycloneDX export, package
+assembly) is real apmx code running for real against real files on disk.
 
 No private evidence, transcript, or credential is read or published by this
 script. Output is written only under the path given on the command line.
@@ -52,6 +69,7 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 import pytest
 
 from apmx.contracts import engine, evidence
+from apmx.contracts.imports import read_project_manifest, resolve_installed_skills
 from apmx.contracts.models import (
     CheckSpec,
     ContractLimits,
@@ -59,10 +77,16 @@ from apmx.contracts.models import (
     LeafPlan,
 )
 from apmx.core.contract_logger import ContractLogger
-
-_FIXED_BOM = b'{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[]}\n'
+from apmx.install import apm_backend
 
 _APP_DIR = Path(__file__).resolve().parent.parent / "app"
+
+# The real, public capability this fixture's project genuinely depends on and
+# imports (see point 2 of the module docstring). Resolved as a local-path APM
+# dependency: no network access, but a real install/lock/content-hash cycle
+# through production apm_backend/resolve_installed_skills code.
+_CAPABILITY_SKILL_NAME = "full-salutation-style"
+_CAPABILITY_SKILL_DIR = _APP_DIR / "skills" / _CAPABILITY_SKILL_NAME
 
 _PATCHED_GREETING = '''"""Toy greeting used by the enterprise-receiver demo. Fixture app, not production code."""
 
@@ -90,6 +114,7 @@ def _contract_body(variant: str) -> str:
     return (
         "---\nneeds: greeting.py\nproduces: "
         + _CANDIDATE_RELATIVE_PATH
+        + f"\nimports: [{_CAPABILITY_SKILL_NAME}]"
         + "\nverify:\n  acceptance: "
         + json.dumps(
             f"{shlex.quote(sys.executable)} checks/run_check.py {_CANDIDATE_RELATIVE_PATH}"
@@ -103,7 +128,9 @@ def _contract_body(variant: str) -> str:
 def _build_plan(project_root: Path, variant: str) -> LeafPlan:
     contract_body = _contract_body(variant)
     (project_root / "apm.yml").write_text(
-        "name: enterprise-receiver-fixture\nversion: 0.0.0\n", encoding="utf-8"
+        "name: enterprise-receiver-fixture\nversion: 0.0.0\n"
+        "dependencies:\n  apm:\n    - path: " + str(_CAPABILITY_SKILL_DIR) + "\n",
+        encoding="utf-8",
     )
     (project_root / "greeting.py").write_bytes((_APP_DIR / "greeting.py").read_bytes())
     checks_dir = project_root / "checks"
@@ -125,24 +152,49 @@ def _build_plan(project_root: Path, variant: str) -> LeafPlan:
     )
     source = project_root / "job.contract.md"
     source.write_text(contract_body, encoding="utf-8")
-    return LeafPlan(
-        contract=LeafContract(
-            path=source,
-            source_digest=hashlib.sha256(source.read_bytes()).hexdigest(),
-            body=contract_body,
-            needs=("greeting.py",),
-            produces=_CANDIDATE_RELATIVE_PATH,
-            checks=(
-                CheckSpec(
-                    "acceptance",
-                    f"{shlex.quote(sys.executable)} checks/run_check.py {_CANDIDATE_RELATIVE_PATH}",
-                ),
+
+    limits = ContractLimits()
+    # Real install: clones nothing (local-path dependency), but runs the
+    # actual pinned apm backend binary end to end -- real lock, real
+    # apm_modules/ copy, real content hashes. See module docstring point 2.
+    backend_identity = apm_backend.install(project_root, limits=limits)
+    manifest_digest = hashlib.sha256((project_root / "apm.yml").read_bytes()).hexdigest()
+    lock_digest = hashlib.sha256((project_root / "apm.lock.yaml").read_bytes()).hexdigest()
+
+    contract = LeafContract(
+        path=source,
+        source_digest=hashlib.sha256(source.read_bytes()).hexdigest(),
+        body=contract_body,
+        needs=("greeting.py",),
+        produces=_CANDIDATE_RELATIVE_PATH,
+        checks=(
+            CheckSpec(
+                "acceptance",
+                f"{shlex.quote(sys.executable)} checks/run_check.py {_CANDIDATE_RELATIVE_PATH}",
             ),
         ),
+        imports=(_CAPABILITY_SKILL_NAME,),
+    )
+    # Real resolution: binds the contract's declared import to the real
+    # installed skill via its real lock entry -- production code, no stub.
+    package, _, _ = read_project_manifest(project_root, limits)
+    imported_skills, _ = resolve_installed_skills(contract, project_root, package)
+    if not imported_skills:
+        raise SystemExit(
+            f"Fixture capability import {_CAPABILITY_SKILL_NAME!r} did not resolve to an "
+            "installed skill; the real apm install/lock step must have failed silently."
+        )
+
+    return LeafPlan(
+        contract=contract,
         project_root=project_root,
         executable=Path(sys.executable),
         model="gpt-6-astra",
-        limits=ContractLimits(),
+        limits=limits,
+        imported_skills=imported_skills,
+        manifest_digest=manifest_digest,
+        lock_digest=lock_digest,
+        apm_backend=backend_identity,
     )
 
 
@@ -195,7 +247,6 @@ def make_fixture(destination: Path, variant: str = "approved") -> dict:
         plan = _build_plan(project_root, variant)
         with pytest.MonkeyPatch.context() as monkeypatch:
             _install_fake_adapter(monkeypatch, plan)
-            monkeypatch.setattr(evidence, "_inventory", lambda *_: (_FIXED_BOM, [], []))
             logger = ContractLogger()
             result = engine.run_contract(plan, logger=logger, allow_advisory=True)
             if result.outcome.name != "COMPLETE":

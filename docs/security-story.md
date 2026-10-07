@@ -84,6 +84,22 @@ Before activation, enforce these distinctions in code and regression tests:
 - Label all mocked fixture surfaces, including model events and ABOM inventory.
   Empty synthetic inventory is not a real dependency incident-response demo.
 
+### Workflow activation prerequisite
+
+GitHub changed `pull_request_target` on 2025-12-08: workflow source,
+`GITHUB_REF` and `GITHUB_SHA` now use the repository's default branch, even
+when a PR targets the isolated receiver branch. The workflow must therefore
+reach the default branch through approved normal integration; publishing only
+the receiver branch does not register its PR gate. Do not bypass this with a
+direct push, a default-branch change or an automatic merge.
+
+Workflow context SHA is not proof of the check's PR association. GitHub lists
+`pull_request_target` as eligible for required workflow checks, but activation
+must still inspect the actual check run, PR head and required-check result.
+Do not add a manual check publisher or extra write permissions merely by
+assuming that `GITHUB_SHA` is also the check's head SHA. A passing push smoke
+run establishes neither PR enforcement nor signer authentication.
+
 ## Public examples
 
 Create an isolated receiver/demo base branch in the existing public repository,
@@ -166,3 +182,5 @@ blocker, never permission to replace real enforcement with a simulated success.
 - https://slsa.dev/provenance/v1
 - https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md
 - https://cyclonedx.org/capabilities/
+- https://github.blog/changelog/2025-11-07-actions-pull_request_target-and-environment-branch-protections-changes/
+- https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks
