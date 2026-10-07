@@ -76,17 +76,20 @@ class CardSelected(Message):
 
 
 class ContractCard(Static, can_focus=True):
-    """One selectable contract card: human label, explicit status word, and
-    its real upstream dependencies -- never just a symbol/color pair."""
+    """One selectable contract card: human label and explicit status word.
+    Real upstream dependencies are never invented here -- they are named on
+    the connector line above the card's level and in full in the detail
+    pane once selected, so the card itself stays compact enough for a wide,
+    short DAG overview rather than a tall column of verbose text."""
 
     DEFAULT_CSS = """
     ContractCard {
         border: round $panel-lighten-2;
         padding: 0 1;
         width: auto;
-        min-width: 26;
+        min-width: 22;
         height: auto;
-        min-height: 5;
+        min-height: 4;
         content-align: left top;
     }
     ContractCard:focus {
@@ -119,13 +122,7 @@ class ContractCard(Static, can_focus=True):
         symbol = _STATUS_SYMBOL[self.status]
         label = _STATUS_LABEL[self.status]
         name = _display_name(self.node.identity)
-        if self._dependencies:
-            needs = ", ".join(
-                f"{edge.name} \u2190 {_display_name(edge.producer)}" for edge in self._dependencies
-            )
-        else:
-            needs = "entry point (no upstream dependency)"
-        self.update(f"{symbol} {name}\n{label}\nNeeds: {needs}")
+        self.update(f"{symbol} {name}\n{label}")
 
 
 class GraphView(VerticalScroll):
@@ -311,6 +308,10 @@ class _FilterableLogPane(Vertical):
 
     PANE_TITLE: ClassVar[str] = "Pane"
     LOG_ID: ClassVar[str] = "log"
+    # Explicit empty-state text, never a bare heading. This is never claimed
+    # as a pass/fail outcome -- an empty pane means nothing has been
+    # observed yet, which stays distinct from an observed-and-passed state.
+    EMPTY_TEXT: ClassVar[str] = "No observations yet."
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
@@ -321,7 +322,12 @@ class _FilterableLogPane(Vertical):
         yield Static(self.PANE_TITLE, classes="pane-title")
         yield Log(id=self.LOG_ID, max_lines=2000, auto_scroll=True)
 
+    def on_mount(self) -> None:
+        self.query_one(f"#{self.LOG_ID}", Log).write_line(self.EMPTY_TEXT)
+
     def append(self, line: str) -> None:
+        if not self._history:
+            self.query_one(f"#{self.LOG_ID}", Log).clear()
         self._history.append(line)
         if not self._query or self._query in line.lower():
             self.query_one(f"#{self.LOG_ID}", Log).write_line(line)
@@ -330,6 +336,9 @@ class _FilterableLogPane(Vertical):
         self._query = query.lower()
         log = self.query_one(f"#{self.LOG_ID}", Log)
         log.clear()
+        if not self._history:
+            log.write_line(self.EMPTY_TEXT)
+            return
         for line in self._history:
             if not self._query or self._query in line.lower():
                 log.write_line(line)
@@ -358,6 +367,7 @@ class ChecksPane(_FilterableLogPane):
 
     PANE_TITLE = "Checks"
     LOG_ID = "checks-log"
+    EMPTY_TEXT = "No checks observed yet."
 
 
 class EvidencePane(_FilterableLogPane):
@@ -366,6 +376,7 @@ class EvidencePane(_FilterableLogPane):
 
     PANE_TITLE = "Evidence"
     LOG_ID = "evidence-log"
+    EMPTY_TEXT = "No evidence captured yet -- status remains unknown, not verified."
 
 
 class DetailPane(Vertical):
@@ -464,19 +475,27 @@ class FactoryApp(App[None]):
         text-style: bold;
     }
     GraphView {
-        height: 2fr;
-        min-height: 5;
+        width: 2fr;
+        min-width: 28;
+        height: 1fr;
+    }
+    #graph-row {
+        height: 1fr;
+        min-height: 9;
     }
     #detail-pane {
+        width: 1fr;
+        min-width: 22;
         border-top: solid $panel;
+        border-left: solid $panel;
         height: 1fr;
-        min-height: 5;
+        min-height: 9;
         padding: 0 1;
     }
     #lower-tabs {
         border-top: solid $panel;
-        height: 1fr;
-        min-height: 5;
+        height: 2fr;
+        min-height: 10;
     }
     #activity-pane, #checks-pane, #evidence-pane {
         height: 1fr;
@@ -524,7 +543,14 @@ class FactoryApp(App[None]):
         self._model_name: str | None = None
         self._elapsed: float = 0.0
         self._auto_follow = True
-        self._following = False
+        # Identity of a card `_follow()` is programmatically focusing. `Widget.focus()`
+        # defers the actual focus change via `app.call_later`, so the resulting
+        # `CardSelected` message always arrives on a *later* message-pump tick --
+        # comparing identities here (rather than a boolean reset synchronously
+        # around `card.focus()`) is what correctly distinguishes our own
+        # auto-follow focus change from a real manual one, regardless of that
+        # deferral.
+        self._programmatic_focus: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -535,8 +561,9 @@ class FactoryApp(App[None]):
         if self._fixture_label:
             banner.add_class("-visible")
         yield banner
-        yield GraphView(self._graph)
-        yield DetailPane(id="detail-pane", dependencies=self._dependencies)
+        with Horizontal(id="graph-row"):
+            yield GraphView(self._graph)
+            yield DetailPane(id="detail-pane", dependencies=self._dependencies)
         with TabbedContent(initial="activity-tab", id="lower-tabs"):
             with TabPane("Activity", id="activity-tab"):
                 yield ActivityPane(id="activity-pane")
@@ -544,9 +571,18 @@ class FactoryApp(App[None]):
                 yield ChecksPane(id="checks-pane")
             with TabPane("Evidence", id="evidence-tab"):
                 yield EvidencePane(id="evidence-pane")
-        yield Input(
-            placeholder="Search current view (type to filter, Esc to clear)", id="search-input"
+        # ``can_focus=False`` while hidden: Textual's initial-auto-focus picks
+        # the first focusable descendant in DOM order regardless of
+        # ``display: none``, so an unconditionally-focusable hidden search
+        # box can silently steal focus (and swallow every subsequent key as
+        # text) before the user ever opens it -- exactly what toggling it
+        # focusable in lockstep with "-visible" here prevents.
+        search_input = Input(
+            placeholder="Search current view (type to filter, Esc to clear)",
+            id="search-input",
         )
+        search_input.can_focus = False
+        yield search_input
         yield DiagnosticsPane(id="diagnostics-pane")
         yield Footer()
 
@@ -554,11 +590,20 @@ class FactoryApp(App[None]):
         nodes = build_nodes(self._graph)
         if nodes:
             self.query_one(DetailPane).selected = nodes[0]
+            # Explicit initial focus rather than relying on Textual's
+            # first-focusable-descendant heuristic, whose candidate can
+            # change with unrelated layout/DOM-nesting edits -- a real
+            # bug this surfaced once already (see commit history).
+            card = self.query_one(GraphView).card(nodes[0].identity)
+            if card is not None:
+                card.focus()
         self._refresh_header()
 
     def on_card_selected(self, message: CardSelected) -> None:
         self.query_one(DetailPane).selected = self._by_identity.get(message.identity)
-        if not self._following:
+        if self._programmatic_focus == message.identity:
+            self._programmatic_focus = None
+        else:
             self._auto_follow = False
 
     def action_toggle_diagnostics(self) -> None:
@@ -570,7 +615,9 @@ class FactoryApp(App[None]):
     def action_toggle_search(self) -> None:
         search = self.query_one("#search-input", Input)
         search.toggle_class("-visible")
-        if search.has_class("-visible"):
+        visible = search.has_class("-visible")
+        search.can_focus = visible
+        if visible:
             search.focus()
         else:
             search.value = ""
@@ -580,6 +627,7 @@ class FactoryApp(App[None]):
         search = self.query_one("#search-input", Input)
         if search.has_class("-visible"):
             search.remove_class("-visible")
+            search.can_focus = False
             search.value = ""
             self._apply_search("")
 
@@ -607,9 +655,8 @@ class FactoryApp(App[None]):
         card = self.query_one(GraphView).card(identity)
         if card is None or card.has_focus:
             return
-        self._following = True
+        self._programmatic_focus = identity
         card.focus()
-        self._following = False
 
     def _refresh_header(self) -> None:
         harness = self._harness_name or "engine"
