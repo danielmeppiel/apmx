@@ -196,8 +196,28 @@ def run_execution_bundle(bundle_dir: Path) -> list[dict]:
         # candidate's own code has ever run anywhere -- immune to any
         # self-mutation attempt during container execution.
         candidate_sha256 = hashlib.sha256(candidate_bytes).hexdigest()
+        try:
+            # STRICT decode: the source text handed to the container must be
+            # the exact text that hashes to candidate_sha256. A lossy
+            # ``errors="replace"`` decode here would silently repair invalid
+            # UTF-8 into different, executable bytes than the ones that were
+            # actually hashed and bound into the result -- recorded digest
+            # and executed content must never diverge. Non-UTF-8 candidate
+            # source is refused, not "fixed", before Docker ever runs.
+            candidate_source = candidate_bytes.decode("utf-8")
+        except UnicodeDecodeError as error:
+            results.append(
+                {
+                    "name": name,
+                    "candidateSha256": candidate_sha256,
+                    "imageDigestUsed": image,
+                    "cases": [],
+                    "error": f"candidate source is not valid UTF-8, refusing to execute: {error}",
+                }
+            )
+            continue
         payload = {
-            "candidateSource": candidate_bytes.decode("utf-8", errors="replace"),
+            "candidateSource": candidate_source,
             "entrypoint": entry["entrypoint"],
             "cases": [{"input": case["input"]} for case in entry["cases"]],
             "timeoutSeconds": _EXECUTION_TIMEOUT_SECONDS,

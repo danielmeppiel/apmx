@@ -36,15 +36,24 @@ mocked; that is no longer true -- see below):
    and real SKILL.md content hash). ``apmx.contracts.evidence._inventory`` and
    ``apm_backend.export_cyclonedx`` then run completely unmocked, producing a
    real, nonempty CycloneDX document and a real ``capability-bindings.json``
-   entry for this capability's actual lock identity. This is genuine harness
-   execution of the official APM inventory path, not a hermetic stand-in: the
-   capability-revocation check this fixture exercises is tested against a
-   real, publicly-inspectable capability and its real recorded identity, and
-   a public claim that this fixture's capability-revocation check runs
-   against a real APM capability inventory is accurate. What remains out of
-   scope for this fixture alone is a genuine, currently-deployed *production*
-   capability incident (see ``receiver/test_capability_revocation.py`` for
-   the accept/reject proof using this exact real identity).
+   entry with this capability's actual ``purl`` and content ``bodySha256``.
+   This runs the real engine against the real official APM inventory path,
+   but it is still produced by this fixture's HERMETIC PRODUCER -- a local,
+   offline project built for this generator, not a live Copilot/OpenCode
+   harness execution against an arbitrary real-world repository. The
+   recorded ``lockIdentity`` for a local-path dependency is the dependency's
+   own DECLARED source path string (apmx's local-dependency unique key), not
+   a stable public identity -- the same real skill content installed via a
+   different declared path (e.g. a different checkout location) gets a
+   different ``lockIdentity`` even though it is byte-identical; the
+   receiver's capability-revocation policy therefore matches on the portable
+   ``(purl, bodySha256)`` pair, not on ``lockIdentity`` alone. A public
+   claim that this fixture's capability-revocation check runs against a
+   real APM capability inventory is accurate. What remains out of scope
+   for this fixture alone is a genuine, currently-deployed *production*
+   capability incident (see ``receiver/test_check.py``'s
+   ``test_capability_revocation_*`` tests for the accept/reject proof
+   using this exact real purl/bodySha256 pair).
 
 Everything downstream of the model-backend substitution (baseline capture,
 checker execution, in-toto/SLSA statements, CycloneDX export, package
@@ -125,11 +134,25 @@ def _contract_body(variant: str) -> str:
     )
 
 
-def _build_plan(project_root: Path, variant: str) -> LeafPlan:
+def _build_plan(project_root: Path, variant: str, skill_source_dir: Path | None = None) -> LeafPlan:
     contract_body = _contract_body(variant)
+    # lockIdentity is apmx's local-path dependency unique key, which is the
+    # DECLARED path string itself (see
+    # apmx.models.dependency.reference.DependencyReference.get_unique_key):
+    # it is not derived from the project_root or install destination. Two
+    # calls that both declare the same fixed `_CAPABILITY_SKILL_DIR` path
+    # therefore always produce the same lockIdentity, even though each call
+    # gets a fresh temporary project_root. To genuinely exercise "same real
+    # skill content installed from a different checkout/path still matches
+    # the receiver's capability-revocation pair", callers must pass a
+    # distinct `skill_source_dir` (a copy of the real skill's content at a
+    # different filesystem location) so the declared path -- and hence
+    # lockIdentity -- actually differs, while the skill's own name/content
+    # (and therefore its real purl/bodySha256) stay identical.
+    dependency_path = skill_source_dir if skill_source_dir is not None else _CAPABILITY_SKILL_DIR
     (project_root / "apm.yml").write_text(
         "name: enterprise-receiver-fixture\nversion: 0.0.0\n"
-        "dependencies:\n  apm:\n    - path: " + str(_CAPABILITY_SKILL_DIR) + "\n",
+        "dependencies:\n  apm:\n    - path: " + str(dependency_path) + "\n",
         encoding="utf-8",
     )
     (project_root / "greeting.py").write_bytes((_APP_DIR / "greeting.py").read_bytes())
@@ -240,11 +263,11 @@ def _install_fake_adapter(monkeypatch: pytest.MonkeyPatch, plan: LeafPlan) -> No
     )
 
 
-def make_fixture(destination: Path, variant: str = "approved") -> dict:
+def make_fixture(destination: Path, variant: str = "approved", skill_source_dir: Path | None = None) -> dict:
     with TemporaryDirectory(prefix="apmx-enterprise-receiver-fixture-") as temporary:
         project_root = Path(temporary) / "project"
         project_root.mkdir()
-        plan = _build_plan(project_root, variant)
+        plan = _build_plan(project_root, variant, skill_source_dir=skill_source_dir)
         with pytest.MonkeyPatch.context() as monkeypatch:
             _install_fake_adapter(monkeypatch, plan)
             logger = ContractLogger()

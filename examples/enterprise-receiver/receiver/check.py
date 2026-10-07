@@ -393,17 +393,38 @@ def check_capability_revocation(evidence_dir: Path, base_sha: str) -> None:
     bindings = json.loads(bindings_path.read_bytes()) if bindings_path.is_file() else []
     if not bindings:
         return
-    revoked = set(
-        trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/revoked-capabilities.json").get(
-            "lockIdentity", []
-        )
-    )
+    policy = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/revoked-capabilities.json")
+    # Legacy whole-identity revocation, kept for a coarse-grained incident
+    # response that distrusts an entire recorded lockIdentity outright
+    # (e.g. a known-compromised install root).
+    revoked_identities = set(policy.get("lockIdentity", []))
+    # Structured selector revocation: an immutable (package identity, exact
+    # content digest) pair. lockIdentity alone is not a stable public
+    # identity for a local-path dependency -- it is an absolute install
+    # path that differs between checkouts even for byte-identical content.
+    # purl + bodySha256 are the fields that stay constant across
+    # reinstalls/relocations of the same real capability, so this is the
+    # selector a genuine public incident-response rule must use.
+    revoked_pairs = {
+        (entry.get("purl"), entry.get("bodySha256"))
+        for entry in policy.get("capabilities", [])
+        if entry.get("purl") and entry.get("bodySha256")
+    }
     for binding in bindings:
-        if binding.get("lockIdentity") in revoked:
+        lock_identity = binding.get("lockIdentity")
+        purl = binding.get("purl")
+        body_sha256 = binding.get("bodySha256")
+        if lock_identity in revoked_identities:
             raise ReceiverFailure(
                 "capability-revoked",
                 f"Capability {binding.get('capability')} (lockIdentity="
-                f"{binding.get('lockIdentity')}) has been revoked by receiver incident response.",
+                f"{lock_identity}) has been revoked by receiver incident response.",
+            )
+        if purl and body_sha256 and (purl, body_sha256) in revoked_pairs:
+            raise ReceiverFailure(
+                "capability-revoked",
+                f"Capability {binding.get('capability')} (purl={purl}, "
+                f"bodySha256={body_sha256}) has been revoked by receiver incident response.",
             )
 
 
@@ -663,9 +684,10 @@ def check_signer(evidence_dir: Path, base_sha: str, definition_sha256: str) -> N
       * the source ref is pinned via ``--source-ref`` so only runs triggered
         from the receiver's own trusted branch count;
       * the signer's own COMMIT DIGEST (``signature.certificate
-        .sourceRepositoryDigest`` -- a Fulcio/sigstore certificate SAN field
-        populated directly from the OIDC token at signing time, which the
-        signed predicate's own content cannot forge) is checked against an
+        .sourceRepositoryDigest`` -- a Fulcio/sigstore certificate extension
+        identity claim, not the SAN itself, populated directly from the
+        OIDC token at signing time, which the signed predicate's own
+        content cannot forge) is checked against an
         explicit allowlist in policy, so an older or weaker revision of the
         signer workflow on the SAME ref cannot sign the same accepted
         predicate. A workflow-path-plus-mutable-ref pin alone is NOT
