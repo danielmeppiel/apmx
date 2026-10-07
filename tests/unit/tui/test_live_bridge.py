@@ -340,4 +340,3 @@ def test_launch_live_disables_terminal_echo_before_the_real_chain_runs(
     assert logger._display.enabled is False
     assert result.outcome is Outcome.COMPLETE
     assert result.runs[-1].artifact.path.read_bytes() == b"seed"
-

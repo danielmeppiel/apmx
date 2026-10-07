@@ -341,10 +341,14 @@ once this gap was flagged:
    (`CSI ?1049l`), and the authoritative plain-text `apmx factory: COMPLETE
    (4/4 contracts passed)` summary with a real evidence-record path
    surviving after exit — all emitted by the frozen executable itself, not
-   source. Interestingly, the frozen run's own evidence record reports
-   `assurance.profile: "native-advisory"` rather than the source profile,
-   confirming the native/source distinction is itself tracked in the
-   authoritative record, not just asserted.
+   source. Correction: the frozen run's evidence record reports
+   `assurance.profile: "native-advisory"`, but this field does **not**
+   distinguish frozen from source execution — the genuine source-launched
+   runs in milestone 5 (via `.venv/bin/python -m apmx`, separate from this
+   frozen proof) report the identical `native-advisory` profile. The
+   frozen/source distinction here rests only on the launch mechanism
+   actually used (direct frozen-executable `pty.fork()` vs. `python -m
+   apmx`), not on anything the evidence record itself asserts.
 4. **Scope note for the remaining four native targets**: this proof is
    necessarily macOS-arm64-only (no local cross-build). The other four
    targets' CI builds are real (they build+notice+smoke-check the actual
