@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -408,122 +407,228 @@ def check_capability_revocation(evidence_dir: Path, base_sha: str) -> None:
             )
 
 
-_EXECUTION_TIMEOUT_SECONDS = 60
+_CONTAINER_RELATIVE = "examples/enterprise-receiver/receiver/container"
+_CONTAINER_DRIVER_RELATIVE = f"{_CONTAINER_RELATIVE}/container_driver.py"
+_CONTAINER_EXECUTOR_RELATIVE = f"{_CONTAINER_RELATIVE}/executor.py"
+_RUN_BUNDLE_RELATIVE = f"{_CONTAINER_RELATIVE}/run_bundle.py"
 
 
 def _required_checks(base_sha: str) -> list[dict]:
     return trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/required-checks.json").get("checks", [])
 
 
-def execute_receiver_checks(
-    base_sha: str, candidate_bytes_by_real_path: dict[str, bytes]
-) -> list[dict]:
-    """Independently RE-RUN the receiver's own required checks against the
-    candidate's ACTUAL bytes, with no signing credentials and no trust in
-    the evidence's own self-reported results.
+def _trusted_execution_image(base_sha: str) -> str:
+    policy = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/required-checks.json")
+    image = policy.get("executionImage")
+    if not image or "@sha256:" not in image:
+        raise ReceiverFailure(
+            "execution",
+            "required-checks.json must pin executionImage by digest (name@sha256:...); "
+            "a floating tag would let the base image this receiver executes candidate "
+            "code in silently change underneath this check.",
+        )
+    return image
 
-    This is the missing unprivileged execution boundary: ``verify_evidence
-    .verify()``'s ``"status": "passed"`` only certifies that the Evidence
-    Package's recorded claims are internally CONSISTENT (its own
-    ``_check_statement`` explicitly accepts a recorded "FAILED" or "WARNED"
-    checker result as a valid, consistent claim) -- it never independently
-    re-executes anything, so it cannot by itself prove the candidate really
-    satisfies any requirement. Likewise ``check_case``/``assess_canonical``'s
-    other checks (integrity, factory, binding, capability-revocation) only
-    bind *identity and provenance*, never *behavior*. This function is the
-    one place that actually proves behavior, by running the RECEIVER's own
-    trusted test (read only from the base ref, never the untrusted evidence
-    or PR tree) against the real candidate bytes in a throwaway scratch
-    directory.
 
-    Deliberately does NOT execute the untrusted evidence's own embedded
-    ``checks/run_check.py`` -- that script is PR/evidence-controlled content
-    with no real-repo binding, so a malicious or buggy PR could ship a
-    rigged script that always reports success. The only code this function
-    executes is: (a) the candidate's own bytes, which are inert data until
-    imported by (b) the receiver's own pinned test module.
+def write_execution_bundle(
+    base_sha: str, candidate_bytes_by_real_path: dict[str, bytes], bundle_dir: Path
+) -> dict:
+    """The trusted, zero-execution "prepare" stage (job A). Computes every
+    digest this execution boundary will ever hold job B's self-reported
+    claims against -- the candidate bytes' own hash, and the two small
+    TRUSTED container scripts' own hash -- entirely from independent git
+    reads, before any candidate code has ever run anywhere. Writes a
+    self-contained bundle (candidate bytes + the pinned container driver/
+    executor scripts + a manifest naming the exact declarative
+    input/expectedOutput cases from policy) that job B can execute with NO
+    repository checkout and NO permissions beyond reading this one
+    artifact, and that job C can hold every one of job B's self-reported
+    claims against.
 
-    Must be invoked from a zero-permission context with no attestation
-    signing credentials and no policy write access; the candidate bytes
-    given here must never be trusted beyond "this looks like the right path
-    to test", since this function's entire purpose is to find out whether
-    they are actually acceptable.
+    The declarative cases (input -> expectedOutput) are never evaluated by
+    anything that also executes candidate code: the in-container driver
+    only ever reports a raw, untrusted ``observed`` value (see
+    container_driver.py/executor.py); the actual pass/fail comparison
+    against ``expectedOutput`` happens entirely outside the sandbox, in
+    ``run_execution_bundle`` (job B's own host-side logic, as a fail-fast
+    courtesy) and, authoritatively and independently, in
+    ``verify_execution_results`` (job C).
     """
-    results = []
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    driver_bytes = trusted_bytes(base_sha, _CONTAINER_DRIVER_RELATIVE)
+    executor_bytes = trusted_bytes(base_sha, _CONTAINER_EXECUTOR_RELATIVE)
+    # run_bundle.py is the ENTIRE execution job's own code: the real "execute"
+    # job in the GitHub Actions workflows runs this exact trusted copy
+    # standalone (no repository checkout, no permissions, no import of
+    # check.py) -- see run_bundle.py's module docstring.
+    run_bundle_bytes = trusted_bytes(base_sha, _RUN_BUNDLE_RELATIVE)
+    (bundle_dir / "container_driver.py").write_bytes(driver_bytes)
+    (bundle_dir / "executor.py").write_bytes(executor_bytes)
+    (bundle_dir / "run_bundle.py").write_bytes(run_bundle_bytes)
+    manifest_checks = []
     for entry in _required_checks(base_sha):
         name = entry["name"]
         candidate_bytes = candidate_bytes_by_real_path.get(entry["candidatePath"])
-        if candidate_bytes is None:
-            results.append(
-                {
-                    "name": name,
-                    "passed": False,
-                    "detail": f"No candidate bytes supplied for {entry['candidatePath']!r}.",
-                }
-            )
-            continue
-        test_bytes = trusted_bytes(base_sha, entry["testPath"])
-        with tempfile.TemporaryDirectory(prefix="receiver-execute-") as scratch:
-            scratch_root = Path(scratch)
-            candidate_dest = scratch_root / entry["candidateScratchRelative"]
-            candidate_dest.parent.mkdir(parents=True, exist_ok=True)
-            candidate_dest.write_bytes(candidate_bytes)
-            test_dest = scratch_root / entry["testScratchRelative"]
-            test_dest.parent.mkdir(parents=True, exist_ok=True)
-            test_dest.write_bytes(test_bytes)
-            node_id = f"{entry['testScratchRelative']}::{entry['testFunction']}"
-            # Prefer an independently-pinned execution interpreter
-            # (scripts/execution-requirements.txt, installed into its own
-            # venv by the "execute" step of receiver-candidate-check.yml)
-            # over the evidence-verification interpreter, so the untrusted
-            # candidate's test run never shares a dependency set with the
-            # CycloneDX/in-toto verification code. Falls back to the
-            # current interpreter for local/unit-test runs.
-            execution_python = os.environ.get("APMX_EXECUTION_PYTHON", sys.executable)
-            try:
-                completed = subprocess.run(
-                    [execution_python, "-m", "pytest", "-q", node_id],
-                    cwd=scratch_root,
-                    capture_output=True,
-                    timeout=_EXECUTION_TIMEOUT_SECONDS,
-                    check=False,
-                    env={"PATH": os.environ.get("PATH", "")},
-                )
-                passed = completed.returncode == 0
-                detail = completed.stdout.decode(errors="replace")[-4000:]
-            except subprocess.TimeoutExpired:
-                passed = False
-                detail = (
-                    f"Execution of {node_id} exceeded the "
-                    f"{_EXECUTION_TIMEOUT_SECONDS}s receiver timeout."
-                )
-        results.append({"name": name, "passed": passed, "detail": detail})
-    return results
+        check_dir = bundle_dir / name
+        check_dir.mkdir(parents=True, exist_ok=True)
+        candidate_missing = candidate_bytes is None
+        expected_candidate_sha256 = None
+        if not candidate_missing:
+            (check_dir / "candidate.bin").write_bytes(candidate_bytes)
+            expected_candidate_sha256 = hashlib.sha256(candidate_bytes).hexdigest()
+        manifest_checks.append(
+            {
+                "name": name,
+                "candidateMissing": candidate_missing,
+                "candidateScratchRelative": entry["candidateScratchRelative"],
+                "entrypoint": entry["entrypoint"],
+                "cases": entry["cases"],
+                "expectedCandidateSha256": expected_candidate_sha256,
+            }
+        )
+    manifest = {
+        "executionImage": _trusted_execution_image(base_sha),
+        "containerDriverSha256": hashlib.sha256(driver_bytes).hexdigest(),
+        "executorSha256": hashlib.sha256(executor_bytes).hexdigest(),
+        "runBundleSha256": hashlib.sha256(run_bundle_bytes).hexdigest(),
+        "checks": manifest_checks,
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    return manifest
 
 
-def check_execution_boundary(base_sha: str, results: list[dict]) -> None:
-    required = {entry["name"] for entry in _required_checks(base_sha)}
+def _run_bundle_module():
+    """Import ``container/run_bundle.py`` as a module (not a textual copy)
+    so there is exactly ONE implementation of the host-side execution
+    logic. Job B in the actual GitHub Actions workflows never imports
+    ``check.py`` at all -- it runs the bundle's own trusted copy of
+    ``run_bundle.py`` directly, with zero repository checkout and zero
+    permissions (see ``write_execution_bundle``, which ships that same
+    file's trusted bytes into every bundle). This import path exists only
+    for local/test convenience (``check_case``) and is never itself part
+    of the privileged attestor's trust boundary."""
+    import importlib.util
+
+    module_path = Path(__file__).resolve().parent / "container" / "run_bundle.py"
+    spec = importlib.util.spec_from_file_location("_receiver_run_bundle", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_execution_bundle(bundle_dir: Path) -> list[dict]:
+    """The zero-permission, no-checkout "execute" stage (job B). Reads ONLY
+    the bundle job A produced -- no git access, no repository, no
+    credentials -- and runs each check's candidate inside a disposable,
+    digest-pinned, network-isolated, read-only, non-root container whose
+    only job is to report a raw, untrusted ``observed`` value per declared
+    case; it never sees the expected answer and never decides pass/fail
+    (see container_driver.py/executor.py docstrings for the full in-
+    container isolation argument -- fresh exec'd subprocesses, fd
+    redirection, bounded output). This function performs its own host-side
+    (never candidate-reachable) comparison purely so a clearly broken
+    candidate fails fast in this job's own logs; it never authenticates
+    anything by virtue of the container emitting a well-formed response --
+    job C repeats the comparison independently from the raw ``observed``
+    values recorded here and never trusts this function's verdicts.
+
+    No mount or payload ever exposes expectedOutput, the host workspace,
+    the receiver's own receipt/result files, a Docker socket, or runner
+    credentials to the container: the bind mount is read-only and contains
+    only the two trusted scripts plus the untrusted candidate bytes, and
+    the container has no network.
+
+    This delegates to ``container/run_bundle.py`` (see ``_run_bundle_module``)
+    rather than reimplementing the docker-invocation/bounded-read logic:
+    the real "execute" job in the GitHub Actions workflows runs that exact
+    file standalone (no checkout, no import of this module), so keeping a
+    single source of truth here only matters for local/test parity.
+    """
+    return _run_bundle_module().run_execution_bundle(bundle_dir)
+
+
+def verify_execution_results(base_sha: str, manifest: dict, results: list[dict]) -> None:
+    """The privileged "assess" stage's execution gate (job C). Never
+    executes, imports, or evals anything from either job's artifact --
+    strictly ``json.loads`` -- and never trusts a boolean any earlier job
+    reported. For every required check, independently RE-DERIVES whether it
+    actually passed from the raw ``observed`` value job B recorded,
+    compared against the SAME ``expectedOutput`` this function (not the
+    sandbox, and not job B's own verdict) reads from the manifest, and
+    independently re-verifies the candidate bytes' identity and the pinned
+    execution image used.
+
+    This is validation of a BOUNDED OBSERVATION job B already made, not a
+    second independent execution of the candidate: the container's
+    ``RESULT``/``CASES`` output is, and remains, untrusted black-box
+    behavioral data produced under isolation (network-none, read-only,
+    non-root, no shared workspace with this trusted job) -- it is data to
+    be judged, never a claim to be authenticated merely because it arrived
+    in a well-formed envelope.
+    """
+    trusted_image = _trusted_execution_image(base_sha)
+    if manifest.get("executionImage") != trusted_image:
+        raise ReceiverFailure(
+            "execution",
+            "Bundle manifest's executionImage does not match the receiver's pinned "
+            f"policy image ({trusted_image!r}); refusing to judge observations "
+            "produced against an unpinned or substituted execution environment.",
+        )
+    required = {entry["name"]: entry for entry in manifest.get("checks", [])}
     observed = {result["name"]: result for result in results}
-    missing = required - observed.keys()
+    missing = required.keys() - observed.keys()
     if missing:
         raise ReceiverFailure(
             "execution",
-            f"No independent execution result was recorded for required check(s): "
+            f"No execution observation was recorded for required check(s): "
             f"{sorted(missing)}. The receiver-required behavioral check(s) were never "
-            "actually re-run against the candidate's real bytes.",
+            "actually exercised against the candidate's real bytes.",
         )
-    failed = {
-        name: result.get("detail", "")
-        for name, result in observed.items()
-        if name in required and not result.get("passed")
-    }
+    failed: dict[str, str] = {}
+    for name, entry in required.items():
+        result = observed[name]
+        if entry["candidateMissing"]:
+            failed[name] = "no candidate bytes supplied"
+            continue
+        if result.get("candidateSha256") != entry["expectedCandidateSha256"]:
+            failed[name] = (
+                "execution result's candidateSha256 does not match the independently "
+                "computed expected digest -- the execution job may not have "
+                "exercised the actual candidate bytes"
+            )
+            continue
+        if result.get("imageDigestUsed") != trusted_image:
+            failed[name] = "execution result used a different image digest than policy pins"
+            continue
+        expected_cases = entry["cases"]
+        observed_cases = result.get("cases", [])
+        if len(observed_cases) != len(expected_cases):
+            failed[name] = "execution result's case count does not match policy (incomplete set)"
+            continue
+        all_matched = True
+        for expected_case, observed_case in zip(expected_cases, observed_cases):
+            # Re-derive match status ourselves from the raw observed value;
+            # never trust job B's own "matched"/"ok" verdict.
+            really_matched = (
+                observed_case.get("ok") is True
+                and observed_case.get("observed") == expected_case["expectedOutput"]
+            )
+            if not really_matched:
+                all_matched = False
+                break
+        if not all_matched:
+            failed[name] = (
+                "candidate's actual observed output did not match the receiver's "
+                "required behavior for at least one case"
+            )
     if failed:
         raise ReceiverFailure(
             "execution",
-            "Independent re-execution of receiver-required check(s) against the "
-            f"candidate's actual bytes failed: {sorted(failed)}. A signed assessment "
-            "or structurally-valid evidence package never overrides this: the "
-            "candidate must actually pass the receiver's own test.",
+            "Independent re-verification of receiver-required check(s) against the "
+            f"candidate's actual observed behavior failed: {failed}. A signed "
+            "assessment, a structurally-valid evidence package, or the execution "
+            "job's own self-reported verdict never overrides this.",
         )
 
 
@@ -640,15 +745,55 @@ def check_signer(evidence_dir: Path, base_sha: str, definition_sha256: str) -> N
     )
 
 
-def check_case(
+def _case_candidate_bytes(base_sha: str, head_sha: str) -> dict[str, bytes]:
+    binding_map = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/binding-map.json")
+    return {
+        real_path: git_blob_bytes(head_sha, real_path)
+        for real_path in binding_map.get("candidate", {}).values()
+    }
+
+
+def prepare_case(
+    *, case_dir_relative: str, base_sha: str, head_sha: str, schemas_dir: Path, bundle_dir: Path
+) -> dict:
+    """Job A for a PR-introduced case: trusted, zero-execution identity
+    checks (integrity/factory/binding/capability-revocation) followed by
+    writing the execution bundle job B will run with no checkout and no
+    permissions. Binding already proves the evidence's recorded candidate
+    hash matches the PR head's actual tree before any candidate byte is
+    ever placed in the bundle, so it is safe to let a disposable, zero-
+    permission job execute them next.
+    """
+    with materialized_case_evidence(head_sha, case_dir_relative) as evidence_dir:
+        summary = check_integrity(evidence_dir, schemas_dir)
+        index = _evidence_index(evidence_dir)
+        check_factory_policy(summary["definitionSha256"], base_sha)
+        check_binding(evidence_dir, index, base_sha, head_sha, case_dir_relative)
+        check_capability_revocation(evidence_dir, base_sha)
+        candidate_bytes_by_real_path = _case_candidate_bytes(base_sha, head_sha)
+        manifest = write_execution_bundle(base_sha, candidate_bytes_by_real_path, bundle_dir)
+        manifest["definitionSha256"] = summary["definitionSha256"]
+        (bundle_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        return manifest
+
+
+def assess_case(
     *,
     case: str,
     case_dir_relative: str,
     base_sha: str,
     head_sha: str,
     schemas_dir: Path,
+    bundle_dir: Path,
+    execution_results: list[dict],
     skip_signer: bool = False,
 ) -> CaseResult:
+    """Job C for a PR-introduced case: fully, independently RE-DOES the
+    deterministic identity checks (integrity/factory/binding/capability-
+    revocation -- cheap, no execution involved, so job A's verdict on them
+    is never trusted blindly either), then holds job B's execution
+    observations to account via ``verify_execution_results``, then signer.
+    """
     with materialized_case_evidence(head_sha, case_dir_relative) as evidence_dir:
         summary = check_integrity(evidence_dir, schemas_dir)
         index = _evidence_index(evidence_dir)
@@ -656,18 +801,15 @@ def check_case(
         check_binding(evidence_dir, index, base_sha, head_sha, case_dir_relative)
         check_capability_revocation(evidence_dir, base_sha)
         checks = ["integrity", "factory", "binding", "capability-revocation"]
-        # Independent unprivileged re-execution: binding already proved the
-        # evidence's recorded candidate hash matches the PR head's actual
-        # tree, so it is now safe to read the real candidate bytes at
-        # head_sha and re-prove behavior, not merely recorded/self-reported
-        # claims (see execute_receiver_checks' docstring).
-        binding_map = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/binding-map.json")
-        candidate_bytes_by_real_path = {
-            real_path: git_blob_bytes(head_sha, real_path)
-            for real_path in binding_map.get("candidate", {}).values()
-        }
-        execution_results = execute_receiver_checks(base_sha, candidate_bytes_by_real_path)
-        check_execution_boundary(base_sha, execution_results)
+        manifest = json.loads((bundle_dir / "manifest.json").read_bytes())
+        if manifest.get("definitionSha256") != summary["definitionSha256"]:
+            raise ReceiverFailure(
+                "execution",
+                "The execution bundle was prepared for a different evidence "
+                "definition than this job independently re-verified; refusing to "
+                "accept execution observations for the wrong candidate/evidence.",
+            )
+        verify_execution_results(base_sha, manifest, execution_results)
         checks.append("execution")
         if not skip_signer:
             check_signer(evidence_dir, base_sha, summary["definitionSha256"])
@@ -677,22 +819,52 @@ def check_case(
         )
 
 
-def assess_canonical(evidence_dir: Path, base_sha: str, schemas_dir: Path) -> dict:
-    """The privileged, pre-signing assessment run only on the receiver's own
-    trusted branch (never against an untrusted PR), reused unmodified by
-    ``receiver-attest.yml`` so the signed predicate's "accepted" claim is
-    actually backed by the same factory-allowlist and capability-revocation
-    policy this module enforces for every candidate -- not merely a
-    structural/schema check.
+def check_case(
+    *,
+    case: str,
+    case_dir_relative: str,
+    base_sha: str,
+    head_sha: str,
+    schemas_dir: Path,
+    skip_signer: bool = False,
+) -> CaseResult:
+    """Convenience wrapper combining prepare/execute/assess in a single
+    process, for local/unit-test use. Real CI (``receiver-candidate-
+    check.yml``) instead runs ``prepare-case``, ``execute-bundle``, and
+    ``assess-case`` as three separate jobs, connected only by
+    ``actions/upload-artifact``/``actions/download-artifact``, so the
+    execution stage never shares a runner, permissions, or a mutable
+    workspace with anything privileged or with the trusted control plane.
+    """
+    with tempfile.TemporaryDirectory(prefix="receiver-bundle-") as bundle:
+        bundle_dir = Path(bundle)
+        prepare_case(
+            case_dir_relative=case_dir_relative,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            schemas_dir=schemas_dir,
+            bundle_dir=bundle_dir,
+        )
+        execution_results = run_execution_bundle(bundle_dir)
+        return assess_case(
+            case=case,
+            case_dir_relative=case_dir_relative,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            schemas_dir=schemas_dir,
+            bundle_dir=bundle_dir,
+            execution_results=execution_results,
+            skip_signer=skip_signer,
+        )
 
-    Binding and signer checks are deliberately not run here: binding is
-    specific to a PR candidate (there is none at sign time) and signer
-    verification would be circular before the signature exists. The
-    independent execution boundary IS run here (sourcing candidate bytes
-    directly from the canonical evidence package's own recorded artifacts,
-    since there is no PR head to read from), so the signed predicate's
-    "accepted" claim also proves the behavioral check actually passed, not
-    merely that the evidence's own self-report was internally consistent.
+
+def prepare_canonical(
+    evidence_dir: Path, base_sha: str, schemas_dir: Path, bundle_dir: Path
+) -> dict:
+    """Job A for the canonical (pre-signing) evidence package: identical
+    trust story to ``prepare_case``, but sourcing candidate bytes from the
+    canonical evidence package's own recorded artifacts (there is no PR
+    head to read from at sign time).
     """
     summary = check_integrity(evidence_dir, schemas_dir)
     check_factory_policy(summary["definitionSha256"], base_sha)
@@ -706,8 +878,62 @@ def assess_canonical(evidence_dir: Path, base_sha: str, schemas_dir: Path) -> di
         ).read_bytes()
         for evidence_relative, real_path in binding_map.get("candidate", {}).items()
     }
-    execution_results = execute_receiver_checks(base_sha, candidate_bytes_by_real_path)
-    check_execution_boundary(base_sha, execution_results)
+    manifest = write_execution_bundle(base_sha, candidate_bytes_by_real_path, bundle_dir)
+    manifest["definitionSha256"] = summary["definitionSha256"]
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    return manifest
+
+
+def assess_canonical(
+    evidence_dir: Path,
+    base_sha: str,
+    schemas_dir: Path,
+    *,
+    bundle_dir: Path | None = None,
+    execution_results: list[dict] | None = None,
+) -> dict:
+    """The privileged, pre-signing assessment run only on the receiver's own
+    trusted branch (never against an untrusted PR), reused unmodified by
+    ``receiver-attest.yml`` so the signed predicate's "accepted" claim is
+    actually backed by the same factory-allowlist and capability-revocation
+    policy this module enforces for every candidate -- not merely a
+    structural/schema check.
+
+    Binding and signer checks are deliberately not run here: binding is
+    specific to a PR candidate (there is none at sign time) and signer
+    verification would be circular before the signature exists. The
+    execution observations ARE verified here (independently, from job B's
+    artifact), so the signed predicate's "accepted" claim also proves the
+    behavioral check's raw observed output actually matched policy, not
+    merely that the evidence's own self-report was internally consistent.
+
+    When ``bundle_dir``/``execution_results`` are omitted, this function
+    prepares and executes the bundle itself in-process (local/unit-test
+    convenience, same caveat as ``check_case``); ``receiver-attest.yml``
+    instead always supplies both, produced by its own separate, zero-
+    permission execution job.
+    """
+    summary = check_integrity(evidence_dir, schemas_dir)
+    check_factory_policy(summary["definitionSha256"], base_sha)
+    check_capability_revocation(evidence_dir, base_sha)
+    if bundle_dir is None:
+        with tempfile.TemporaryDirectory(prefix="receiver-bundle-") as bundle:
+            bundle_dir = Path(bundle)
+            manifest = prepare_canonical(evidence_dir, base_sha, schemas_dir, bundle_dir)
+            if execution_results is None:
+                execution_results = run_execution_bundle(bundle_dir)
+            verify_execution_results(base_sha, manifest, execution_results)
+    else:
+        manifest = json.loads((bundle_dir / "manifest.json").read_bytes())
+        if manifest.get("definitionSha256") != summary["definitionSha256"]:
+            raise ReceiverFailure(
+                "execution",
+                "The execution bundle was prepared for a different evidence "
+                "definition than this job independently re-verified.",
+            )
+        if execution_results is None:
+            execution_results = run_execution_bundle(bundle_dir)
+        verify_execution_results(base_sha, manifest, execution_results)
     return summary
 
 
@@ -718,7 +944,8 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
     check_case_parser = subparsers.add_parser(
-        "check-case", help="Unprivileged candidate check for one PR-introduced case."
+        "check-case",
+        help="Combined prepare+execute+assess for one PR-introduced case (local/manual use).",
     )
     check_case_parser.add_argument("--case", required=True)
     check_case_parser.add_argument("--case-dir", required=True, help="Repo-relative case directory")
@@ -727,6 +954,44 @@ def main() -> int:
     check_case_parser.add_argument("--schemas", type=Path, required=True)
     check_case_parser.add_argument("--skip-signer", action="store_true")
 
+    prepare_case_parser = subparsers.add_parser(
+        "prepare-case",
+        help="Job A: trusted identity checks + write the execution bundle for job B.",
+    )
+    prepare_case_parser.add_argument("--case-dir", required=True)
+    prepare_case_parser.add_argument("--base-sha", required=True)
+    prepare_case_parser.add_argument("--head-sha", required=True)
+    prepare_case_parser.add_argument("--schemas", type=Path, required=True)
+    prepare_case_parser.add_argument("--bundle-dir", type=Path, required=True)
+
+    execute_bundle_parser = subparsers.add_parser(
+        "execute-bundle",
+        help="Job B: zero-permission, no-checkout execution of a prepared bundle.",
+    )
+    execute_bundle_parser.add_argument("--bundle-dir", type=Path, required=True)
+    execute_bundle_parser.add_argument("--results", type=Path, required=True)
+
+    assess_case_parser = subparsers.add_parser(
+        "assess-case",
+        help="Job C: re-does identity checks, verifies job B's observations, then signer.",
+    )
+    assess_case_parser.add_argument("--case", required=True)
+    assess_case_parser.add_argument("--case-dir", required=True)
+    assess_case_parser.add_argument("--base-sha", required=True)
+    assess_case_parser.add_argument("--head-sha", required=True)
+    assess_case_parser.add_argument("--schemas", type=Path, required=True)
+    assess_case_parser.add_argument("--bundle-dir", type=Path, required=True)
+    assess_case_parser.add_argument("--results", type=Path, required=True)
+    assess_case_parser.add_argument("--skip-signer", action="store_true")
+
+    prepare_canonical_parser = subparsers.add_parser(
+        "prepare-canonical", help="Job A for the canonical pre-signing evidence package."
+    )
+    prepare_canonical_parser.add_argument("--evidence-dir", type=Path, required=True)
+    prepare_canonical_parser.add_argument("--base-sha", required=True)
+    prepare_canonical_parser.add_argument("--schemas", type=Path, required=True)
+    prepare_canonical_parser.add_argument("--bundle-dir", type=Path, required=True)
+
     assess_parser = subparsers.add_parser(
         "assess-canonical",
         help="Privileged pre-signing assessment of the canonical evidence package.",
@@ -734,20 +999,85 @@ def main() -> int:
     assess_parser.add_argument("--evidence-dir", type=Path, required=True)
     assess_parser.add_argument("--base-sha", required=True)
     assess_parser.add_argument("--schemas", type=Path, required=True)
+    assess_parser.add_argument("--bundle-dir", type=Path, required=True)
+    assess_parser.add_argument("--results", type=Path, required=True)
 
     args = parser.parse_args()
 
-    if args.mode == "assess-canonical":
+    def _emit_rejection(failure: "ReceiverFailure") -> int:
+        print(
+            json.dumps({"status": "rejected", "policy": failure.policy, "detail": failure.detail})
+        )
+        return 1
+
+    if args.mode == "prepare-case":
         try:
-            summary = assess_canonical(args.evidence_dir, args.base_sha, args.schemas)
-        except ReceiverFailure as failure:
-            print(
-                json.dumps(
-                    {"status": "rejected", "policy": failure.policy, "detail": failure.detail}
-                )
+            prepare_case(
+                case_dir_relative=args.case_dir,
+                base_sha=args.base_sha,
+                head_sha=args.head_sha,
+                schemas_dir=args.schemas,
+                bundle_dir=args.bundle_dir,
             )
-            return 1
+        except ReceiverFailure as failure:
+            return _emit_rejection(failure)
+        print(json.dumps({"status": "prepared"}))
+        return 0
+
+    if args.mode == "execute-bundle":
+        results = run_execution_bundle(args.bundle_dir)
+        args.results.write_text(json.dumps(results, indent=2))
+        print(json.dumps({"status": "executed"}))
+        return 0
+
+    if args.mode == "prepare-canonical":
+        try:
+            prepare_canonical(args.evidence_dir, args.base_sha, args.schemas, args.bundle_dir)
+        except ReceiverFailure as failure:
+            return _emit_rejection(failure)
+        print(json.dumps({"status": "prepared"}))
+        return 0
+
+    if args.mode == "assess-canonical":
+        execution_results = json.loads(args.results.read_bytes())
+        try:
+            summary = assess_canonical(
+                args.evidence_dir,
+                args.base_sha,
+                args.schemas,
+                bundle_dir=args.bundle_dir,
+                execution_results=execution_results,
+            )
+        except ReceiverFailure as failure:
+            return _emit_rejection(failure)
         print(json.dumps({"status": "accepted", "definitionSha256": summary["definitionSha256"]}))
+        return 0
+
+    if args.mode == "assess-case":
+        execution_results = json.loads(args.results.read_bytes())
+        try:
+            result = assess_case(
+                case=args.case,
+                case_dir_relative=args.case_dir,
+                base_sha=args.base_sha,
+                head_sha=args.head_sha,
+                schemas_dir=args.schemas,
+                bundle_dir=args.bundle_dir,
+                execution_results=execution_results,
+                skip_signer=args.skip_signer,
+            )
+        except ReceiverFailure as failure:
+            return _emit_rejection(failure)
+        print(
+            json.dumps(
+                {
+                    "status": "accepted",
+                    "case": result.case,
+                    "definitionSha256": result.definition_sha256,
+                    "checks": list(result.checks),
+                }
+            )
+        )
         return 0
 
     try:
@@ -760,10 +1090,7 @@ def main() -> int:
             skip_signer=args.skip_signer,
         )
     except ReceiverFailure as failure:
-        print(
-            json.dumps({"status": "rejected", "policy": failure.policy, "detail": failure.detail})
-        )
-        return 1
+        return _emit_rejection(failure)
     print(
         json.dumps(
             {

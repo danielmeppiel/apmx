@@ -1,13 +1,21 @@
 {
-  "$comment": "Trusted receiver policy, read from the PR base ref only (git show <base_sha>:<path>), never from the PR's own tree. Each entry names a behavioral check this receiver independently RE-RUNS against the candidate's real bytes (see execute_receiver_checks in receiver/check.py) -- never the untrusted evidence package's own self-reported checks/run_check.py result. candidateScratchRelative/testScratchRelative describe an explicit throwaway scratch-directory layout (not guessed from the real repo's own paths) that mirrors the sibling-file layout the trusted test itself expects.",
+  "$comment": "Trusted receiver policy, read from the PR base ref only (git show <base_sha>:<path>), never from the PR's own tree. Each entry declares a behavioral check this receiver independently re-derives from the candidate's actual bytes -- never the untrusted evidence package's own self-reported checks/run_check.py result. Candidate code is executed only inside a disposable, network-isolated container pinned by image digest (see executionImage); it never sees expectedOutput and never decides pass/fail -- the receiver's own job compares the container's raw observed output against expectedOutput out-of-band (see run_execution_bundle/verify_execution_results in receiver/check.py). candidateScratchRelative mirrors an explicit throwaway scratch-directory layout, not a path guessed from the real repo.",
+  "executionImage": "python:3.12-slim@sha256:2b4f19dae3a777dfc3b76730bda1e82e1f66ab2a2686fa93ca78edbfb4f04ffe",
   "checks": [
     {
       "name": "greeting-salutation",
       "candidatePath": "examples/enterprise-receiver/app/greeting.py",
-      "candidateScratchRelative": "greeting.py",
-      "testPath": "examples/enterprise-receiver/app/checks/test_greeting.py",
-      "testScratchRelative": "checks/test_greeting.py",
-      "testFunction": "test_greet_uses_full_salutation"
+      "candidateScratchRelative": "candidate_module",
+      "entrypoint": {
+        "module": "candidate_module",
+        "function": "greet"
+      },
+      "cases": [
+        {
+          "input": "World",
+          "expectedOutput": "Hello, World!"
+        }
+      ]
     }
   ]
 }
