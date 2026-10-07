@@ -152,6 +152,21 @@ def _process_alive(pid: int) -> bool:
     return True
 
 
+async def _assert_reaped(pid: int, *, timeout: float = 2.0, interval: float = 0.05) -> None:
+    """Assert a signalled process is gone, tolerating the brief window where
+    a just-killed descendant is a not-yet-waited zombie: ``kill(pid, 0)``
+    still succeeds for a zombie (no ESRCH) until whatever process adopts it
+    after its real parent exits calls ``waitpid`` -- which is asynchronous
+    and outside this test's control, not evidence the kill failed. Polls
+    for a bounded, short window rather than either asserting instantaneously
+    (racy) or waiting unboundedly (would hide an actual leak)."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while _process_alive(pid):
+        if asyncio.get_event_loop().time() >= deadline:
+            raise AssertionError(f"pid {pid} still alive (or an unreaped zombie) after {timeout}s")
+        await asyncio.sleep(interval)
+
+
 @POSIX_ONLY
 def test_cancel_terminates_and_reaps_a_real_child_process():
     async def scenario():
@@ -221,7 +236,7 @@ def test_cancel_also_reaps_a_real_descendant_in_the_same_process_group():
         await _cancel_process_group(proc, escalate_after=2.0)
 
         assert not _process_alive(proc.pid)
-        assert not _process_alive(grandchild_pid)
+        await _assert_reaped(grandchild_pid)
 
     _run(scenario())
 
