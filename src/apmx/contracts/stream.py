@@ -171,14 +171,12 @@ class ContractStreamDecoder:
         source: Literal["harness", "checker"] = "harness",
         label: str | None = None,
         json_stdout: bool = True,
-        native_debug_stderr: bool = False,
     ) -> None:
         self.events = events
         self.limits = limits or ContractLimits()
         self.source = source
         self.label = label
         self.json_stdout = json_stdout
-        self.native_debug_stderr = native_debug_stderr
         self.protocol_error: str | None = None
         self.completion_seen = False
         self._native_exit_code: int | None = None
@@ -248,13 +246,6 @@ class ContractStreamDecoder:
         prose_group: int | None = None,
     ) -> None:
         if text:
-            if (
-                self.native_debug_stderr
-                and stream == "stderr"
-                and text.startswith(("DEBUG ", "INFO "))
-            ):
-                self._emit("native_diagnostic", text=text)
-                return
             # Both consumers use safe_text; keep raw bounded text in the
             # transient event only, avoiding a second escape of literal paths.
             self._emit(

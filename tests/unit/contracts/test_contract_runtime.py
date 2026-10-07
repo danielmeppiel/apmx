@@ -166,10 +166,7 @@ def test_native_request_exact_permissions_and_model(
         "--disallow-temp-dir",
     ):
         assert flag in tail
-    assert tail[tail.index("--log-level") + 1] == "all"
-    assert request.log_directory == tmp_path / "run" / "native-tools" / "copilot-logs"
-    assert request.log_directory.is_dir()
-    assert tail[tail.index("--log-dir") + 1] == str(request.log_directory)
+    assert tail[tail.index("--log-level") + 1] == "none"
     assert not any("allow-all" in item or "add-dir" in item for item in tail)
     assert request.env["KEEP_ORDINARY_ENV"] == "retained"
     assert not any(name.startswith("COPILOT_ALLOW_") for name in request.env)

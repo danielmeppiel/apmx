@@ -105,19 +105,11 @@ def test_native_profile_reuses_tools_and_does_not_choose_a_model_or_provider(
     plan = replace(plan, model=model, imported_skills=(skill,))
     request = OpenCodeRuntime().build_contract_request(plan, snapshot, run, timeout_seconds=30)
     assert get_runtime_descriptor("opencode").supports_contracts
-    assert request.argv[:7] == (
-        str(plan.executable),
-        "--print-logs",
-        "--log-level",
-        "DEBUG",
-        "run",
-        "--format",
-        "json",
-    )
-    assert request.argv[7].startswith(plan.contract.body + "\n\nFixed file instructions:")
-    assert "Use read to read" in request.argv[7]
-    assert "apmx_artifacts_write_file" in request.argv[7]
-    assert request.argv[8:10] == ("--agent", "build")
+    assert request.argv[:4] == (str(plan.executable), "run", "--format", "json")
+    assert request.argv[4].startswith(plan.contract.body + "\n\nFixed file instructions:")
+    assert "Use read to read" in request.argv[4]
+    assert "apmx_artifacts_write_file" in request.argv[4]
+    assert request.argv[5:7] == ("--agent", "build")
     assert ("--model" in request.argv) is (model is not None)
     if model:
         assert request.argv[-2:] == ("--model", model)
@@ -154,7 +146,7 @@ def test_unselected_global_agents_are_not_invoked_or_copied(tmp_path, monkeypatc
         config={"agent": {"code-reviewer": {"prompt": "PRIVATE_UNSELECTED_PROMPT"}}},
     )
     request = OpenCodeRuntime().build_contract_request(plan, snapshot, run, timeout_seconds=30)
-    assert request.argv[8:10] == ("--agent", "build")
+    assert request.argv[5:7] == ("--agent", "build")
     assert "PRIVATE" not in str(request.control_observations)
     assert "PRIVATE" not in request.env["OPENCODE_CONFIG_CONTENT"]
     assert json.loads(request.env["OPENCODE_CONFIG_CONTENT"])["permission"]["*"] == "deny"

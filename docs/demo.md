@@ -33,69 +33,21 @@ before asking for execution consent.
 **"Let Copilot operate this factory."**
 
 ```sh
-apmx --from ../factory --verbose
+apmx --from ../factory
 ```
 
-First approve loading the factory and installing its dependencies with APM in a
-temporary workspace. Inspect the displayed inputs, outputs and checks, then
-approve execution. Both prompts default to **No**. Loading approval alone never
+First confirm package preparation, then inspect the displayed factory and confirm
+execution. Both prompts default to **No**. Preparation approval alone never
 starts an agent. Native agents and checkers can
 access host files, network and available logins; this is not a sandbox. Model
 usage can cost money. Copilot keeps its configured model. The helper supplies
 neither model overrides nor permission flags.
 
-Public agent activity and checker stdout/stderr stream by default. `--verbose`
-also mirrors full native debug diagnostics, with safety bounds; omit it for a
-more readable presentation without hiding the actual work. Inspect debug output
-before projecting it: native metadata can be sensitive. `Found input` means a
-file was actually captured, not merely declared. Narrate the check command,
-its output and then its authoritative result, in that order.
-
-After successful execution and automatic evidence delivery, show the printed
-code patch and separate documentation patch. Required checks assess their stated
-scope; advisory review is not certification. The factory retains changes rather
-than applying them to the original application. Never treat exit 21 or
-evidence-delivery exit 23 as a successful demo.
-
-**"The patch is only half the delivery. Now show me what it is bound to."**
-
-```sh
-demo proof
-```
-
-Show the actual factory-definition SHA-256 and the same reference inside the
-SLSA v1 predicate, wrapped in an in-toto Statement v1. Then show the output
-subjects and their SHA-256 digests, the official APM CycloneDX 1.5 ABOM and the
-per-producer/per-check statement counts. The ABOM is an inventory byproduct,
-not a claim that the model read the inventory. Open `provenance.intoto.json`,
-`abom.cdx.json` and one `checks/*.intoto.json` in the printed evidence directory
-when you want to show the real standard documents, not a slide about them.
-
-**"Do not take APMX's word for it. Use a separate consumer."**
-
-```sh
-demo verify
-demo verify --controls
-```
-
-The first command uses the existing independent Python consumer and cached
-upstream schemas: no APMX import, model call or network fetch. It validates the
-formats, actual file bytes, definition bindings, output subjects and checker
-relationships. The second relocates the package and tests corruptions on
-disposable copies, including semantic errors with refreshed index hashes.
-The original evidence stays unchanged.
-
-**"These bytes are bound to this recorded factory, these inputs and these checks.
-Change an artifact or break a relationship, and independent verification rejects it.
-This is unsigned local evidence: it does not authenticate who operated the factory
-or establish a SLSA security level."**
-
-The helper always prints the selected run ID. By default it selects the newest
-recorded factory attempt in this active application, never an older success
-behind a newer incomplete run and never archived history. A command that fails
-before creating a run has no new record; do not misrepresent an older record
-as that command's result. Use `--run ID` for deliberate historical selection.
-From the kit root, use `./demo proof copilot` or `./demo verify copilot`.
+After successful execution and automatic evidence delivery, open the printed
+Artifacts and Summary paths in your editor. Show the real code patch, separate
+documentation patch and generated summary. Required checks assess their stated
+scope; advisory review is not certification. The original application remains
+unchanged. Never treat exit 21 or evidence-delivery exit 23 as a successful demo.
 
 **"Change the harness, not the factory."**
 
@@ -108,17 +60,14 @@ Open a second terminal in the kit directory:
 Then run:
 
 ```sh
-apmx --from ../factory --on opencode --model github-copilot/gpt-5.6-sol --verbose
-demo proof
-demo verify
+apmx --from ../factory --on opencode --model github-copilot/gpt-5.6-sol
 ```
 
 This is the explicitly tested OpenCode provider/model selection. It requires
 your own model access; the helper does not change global OpenCode configuration.
 Both applications start from the same seed and use the same factory.
 
-Show the second run's code/docs outputs, actual standard documents and independent
-verification. Compare the two printed factory-definition hashes. Matching definition
+Show the second run's code/docs outputs and evidence summary. Matching definition
 fingerprints establish the same contracts/checks/capabilities/budget, not identical
 generated code. Evidence is unsigned, not authenticated attestation.
 
@@ -180,9 +129,7 @@ Prepared applications and run data belong outside Git and must not be committed.
 
 Requirements: Git, authenticated Copilot/OpenCode CLIs, Bash, a checker Python
 3.12+ environment containing the exact `factory` extra from `pyproject.toml`,
-an independent verifier environment and pinned schema cache prepared as described
-in [Evidence Package verification](evidence.md#independent-offline-verification), and
-a trusted native APMX archive plus its checksum sidecar. Python is the
+and a trusted native APMX archive plus its checksum sidecar. Python is the
 checker's runtime; the PyInstaller binary has its own embedded APMX runtime.
 Use a candidate built from this checkout's committed source, including the
 package-root shorthand and two-step packaged-factory consent flow. Older
@@ -205,9 +152,7 @@ From the source checkout, supply the trusted archive hash and checker interprete
 python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
   --archive /absolute/path/to/apmx-0.4.2-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
-  --python /absolute/path/to/checker-environment/bin/python \
-  --verifier-python /absolute/path/to/independent-verifier/bin/python \
-  --schemas /absolute/path/to/pinned-schema-cache
+  --python /absolute/path/to/checker-environment/bin/python
 ```
 
 Use the archive/hash for your native platform. The helper checks the checksum,
@@ -219,12 +164,7 @@ The helper creates a minimal consumer `apm.yml` declaring `../factory` when abse
 official APM resolves and locks its dependencies. Application source and the
 original seed are not edited.
 
-The checker and verifier environments must stay available. The kit copies and
-inventories the maintained independent verification scripts; it does not clone
-their logic into the demo helper or install their dependencies. Setup asks that
-consumer to check its dependencies and pinned schema cache before creating the kit. Verification
-setup is optional for running agents but required for `demo verify`.
-No dependencies, credentials or
+The checker environment must stay available. No dependencies, credentials or
 shell-profile changes are installed silently. Authenticate through `copilot`
 and `opencode auth login` before the session; a version response is not login.
 The kit is currently a POSIX terminal helper, not a Windows setup promise.

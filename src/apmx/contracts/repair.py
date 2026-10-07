@@ -94,7 +94,7 @@ def run_repair(
             result = store.finish_controller(plan, result, reason)
             if announce_result:
                 EventEmitter(result.run_id, attempt_logger.on_event).emit("finished", result=result)
-                logger.repair_finished(reason=reason, record=store.record_path, attempts=index)
+                logger.repair_finished(reason=reason, record=store.record_path)
             return result
         raise ContractError("Repair budget contained no attempts.", code="invalid_budget")
     except (ContractError, OSError, KeyboardInterrupt) as exc:

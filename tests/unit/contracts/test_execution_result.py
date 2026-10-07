@@ -259,7 +259,7 @@ def test_actual_completed_cli_has_one_disclosure_and_evidence_hierarchy(
     assert "Artifacts: 1 file retained" in text
     assert "Directory: .apm/runs/" in text
     assert "Record: .apm/runs/" in text
-    assert "Copilot > Done" in text
+    assert ("Copilot > Done" in text) is verbose
     assert "\n\n\n" not in text and text.isascii()
     assert "UNPROVEN" not in text and "production certification" not in text
     assert "stopped" not in text and "Resolve the reported error" not in text

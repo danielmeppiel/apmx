@@ -68,11 +68,10 @@ def test_checker_report_survives_native_line_framing(
     transcript = (tmp_path / "transcript.log").read_text(encoding="utf-8")
     assert check_subjects.read_report(transcript, "exact") == report
     displayed = capsys.readouterr().out
-    assert len(displayed) < TEXT_LINE_BYTES + 1024
-    assert json.dumps(report) in displayed
-    assert "[text truncated]" not in displayed
+    assert len(displayed) < 6000
     if reference_count:
         assert len(wire) > 4096
+        assert "[text truncated]" in displayed
 
 
 def test_checker_report_over_stream_limit_remains_explicitly_omitted(tmp_path: Path) -> None:

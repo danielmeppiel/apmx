@@ -51,7 +51,7 @@ class CopilotRuntime:
             "--no-ask-user",
             "--no-bash-env",
             "--log-level",
-            "all",
+            "none",
             "--available-tools",
             "view",
             "apply_patch",
@@ -88,9 +88,6 @@ class CopilotRuntime:
                 code="native_tool_collision",
             )
         plugin = configure(plan, snapshot, run_directory)
-        log_directory = run_directory / "native-tools" / "copilot-logs"
-        log_directory.mkdir(mode=0o700)
-        argv.extend(("--log-dir", str(log_directory)))
         argv.extend(("--plugin-dir", str(plugin)))
         for output in outputs:
             argv.extend(("--allow-tool", f"write({output})"))
@@ -110,7 +107,6 @@ class CopilotRuntime:
             cwd=snapshot.producer,
             timeout_seconds=remaining,
             env=env,
-            log_directory=log_directory,
             control_observations={
                 "artifact_tools": {
                     "server": SERVER,

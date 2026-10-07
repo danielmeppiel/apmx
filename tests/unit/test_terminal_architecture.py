@@ -21,17 +21,6 @@ TERMINAL_FUNCTIONS = {
 }
 
 
-@pytest.mark.parametrize("relative", ["contracts/process.py", "contracts/process_windows.py"])
-def test_process_supervisors_share_the_bounded_native_log_owner(relative):
-    tree = ast.parse((ROOT / relative).read_text())
-    names = _bindings(tree, relative)
-    assert any(
-        isinstance(node, ast.Call)
-        and _qualified(node.func, names) == "apmx.contracts.native_logs.NativeLogStream"
-        for node in ast.walk(tree)
-    )
-
-
 def _import_module(node: ast.ImportFrom, relative: str) -> str:
     if not node.level:
         return node.module or ""

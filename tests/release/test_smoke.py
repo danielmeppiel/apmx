@@ -22,7 +22,7 @@ class SmokeFixtureTests(unittest.TestCase):
     def test_completed_package_requires_automatic_standard_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
-            stdout = "Evidence package: evidence\nSummary: evidence/summary.md"
+            stdout = "Standard package: evidence\nSummary: evidence/summary.md"
             with self.assertRaisesRegex(AssertionError, "missing index.json"):
                 smoke.require_standard_delivery(run, stdout, ambiguous_inventory=False)
             package = run / "evidence"

@@ -46,7 +46,7 @@ def test_short_package_invocation_keeps_both_real_consent_gates(
     result = CliRunner().invoke(main, ["--from", str(root)], input=answers)
     assert result.exit_code == (0 if executions else 21), result.output
     assert len(calls) == executions
-    assert "Load this factory and install its dependencies? [y/N]" in result.output
+    assert "Prepare this package using host access? [y/N]" in result.output
     if executions:
         assert all(plan.harness == "copilot" and plan.model is None for plan, *_ in calls)
         assert (caller / ".apm/chains").is_dir()

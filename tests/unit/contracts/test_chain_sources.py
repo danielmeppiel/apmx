@@ -125,9 +125,9 @@ def test_package_factory_separates_preparation_and_execution_consent(
     assert prepare.call_count == preparations
     assert len(calls) == executions
     if interactive:
-        assert "Load this factory and install its dependencies? [y/N]" in result.output
+        assert "Prepare this package using host access? [y/N]" in result.output
     if preparations:
-        assert result.output.index("Load this factory") < result.output.index("Factory:")
+        assert result.output.index("Prepare this package") < result.output.index("Factory:")
         assert "Run these 2 contracts with Copilot? [y/N]" in result.output
     if executions:
         record = json.loads(next((caller / ".apm/chains").glob("*/record.json")).read_bytes())

@@ -303,7 +303,6 @@ class ProcessRequest:
     timeout_seconds: float
     env: Mapping[str, str] | None = field(default=None, repr=False)
     control_observations: Mapping[str, object] = field(default_factory=dict)
-    log_directory: Path | None = None
 
 
 @dataclass(frozen=True)
