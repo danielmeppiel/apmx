@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -388,6 +389,42 @@ def check_binding(
         )
 
 
+_SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _validated_revoked_pairs(entries: list) -> set[tuple[str, str]]:
+    """Validate every structured capability-revocation selector explicitly,
+    never silently drop a malformed one. A typo'd or missing digest in an
+    intended deny rule must fail closed (reject the whole policy) rather
+    than quietly narrowing the revocation set and turning an intended deny
+    into an accidental allow. An absent/empty ``capabilities`` list remains
+    valid (legacy lockIdentity-only policies stay supported)."""
+    validated: set[tuple[str, str]] = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ReceiverFailure(
+                "capability-revoked",
+                f"revoked-capabilities.json capabilities[{index}] is not an object: {entry!r}",
+            )
+        purl = entry.get("purl")
+        body_sha256 = entry.get("bodySha256")
+        if not isinstance(purl, str) or not purl:
+            raise ReceiverFailure(
+                "capability-revoked",
+                f"revoked-capabilities.json capabilities[{index}] has a missing or "
+                f"non-string 'purl' selector field: {entry!r}",
+            )
+        if not isinstance(body_sha256, str) or not _SHA256_HEX_PATTERN.match(body_sha256):
+            raise ReceiverFailure(
+                "capability-revoked",
+                f"revoked-capabilities.json capabilities[{index}] has a missing, "
+                "non-string, or malformed (not 64 lowercase hex characters) "
+                f"'bodySha256' selector field: {entry!r}",
+            )
+        validated.add((purl, body_sha256))
+    return validated
+
+
 def check_capability_revocation(evidence_dir: Path, base_sha: str) -> None:
     bindings_path = evidence_dir / "capability-bindings.json"
     bindings = json.loads(bindings_path.read_bytes()) if bindings_path.is_file() else []
@@ -404,12 +441,11 @@ def check_capability_revocation(evidence_dir: Path, base_sha: str) -> None:
     # path that differs between checkouts even for byte-identical content.
     # purl + bodySha256 are the fields that stay constant across
     # reinstalls/relocations of the same real capability, so this is the
-    # selector a genuine public incident-response rule must use.
-    revoked_pairs = {
-        (entry.get("purl"), entry.get("bodySha256"))
-        for entry in policy.get("capabilities", [])
-        if entry.get("purl") and entry.get("bodySha256")
-    }
+    # selector a genuine public incident-response rule must use. Every
+    # entry is explicitly validated (see _validated_revoked_pairs) rather
+    # than silently filtered, so a malformed policy entry fails closed
+    # instead of quietly becoming an accidental allow.
+    revoked_pairs = _validated_revoked_pairs(policy.get("capabilities", []))
     for binding in bindings:
         lock_identity = binding.get("lockIdentity")
         purl = binding.get("purl")

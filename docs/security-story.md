@@ -100,6 +100,21 @@ Do not add a manual check publisher or extra write permissions merely by
 assuming that `GITHUB_SHA` is also the check's head SHA. A passing push smoke
 run establishes neither PR enforcement nor signer authentication.
 
+After activation is authorized, prepare the public evidence in a signing
+commit S and record approval of that exact revision before publishing it.
+An explicit push of S to `refs/heads/examples/enterprise-receiver` supplies
+an immutable push-event SHA; a later branch update does not rewrite that
+run's `GITHUB_SHA`. Confirm the signing run's head SHA, certificate source
+digest and source ref match the preapproved values. Then add the already
+approved S to the receiving allowlist in a separate policy commit. The
+observed certificate must never select the value being approved.
+
+Do not document `gh workflow run --ref <commit SHA>` as supported without
+proof: its documented interface accepts a branch or tag. Retained attestations
+from approved S can remain valid after unrelated commits, but a new signing
+run at any different source SHA needs approval of that new revision, even
+when the workflow text is unchanged.
+
 ## Public examples
 
 Create an isolated receiver/demo base branch in the existing public repository,
