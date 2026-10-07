@@ -241,6 +241,139 @@ handoff scenario (not implemented until live engine wiring exists), in-app
 search, native packaging, and cross-harness/cross-platform validation. No
 certification of "world-class" or accessibility compliance is claimed.
 
+### Milestone 2 kickoff: real backend wiring and genuine headless-browser capture
+
+1. **Backend-dependent test gap closed.** The full-suite failures seen during
+   milestone 1 (82 failed / 38 errors) were re-investigated after a backend
+   binary was located, not left as "out of scope." A provisioned, official
+   APM 0.30.0 binary already exists read-only inside the installed demo kits
+   (`apmx-demo`/`apmx-demo-next`, under `.demo/native/apmx-macos-arm64/libexec/apm/apm`,
+   verified via `apm --version` → `0.30.0 (8c2e0d9)`). Setting
+   `APMX_APM_BACKEND` to that absolute path (no copy, no reinstall, demo kits
+   untouched) and rerunning the full suite dropped the failure count from
+   82 failed/38 errors to **1 failed, 2092 passed, 57 skipped**. The one
+   remaining failure
+   (`tests/release/test_demo.py::test_python_command_preserves_virtual_environment_identity`)
+   was isolated and confirmed unrelated to the APM backend or this track: the
+   shared read-only `.venv`'s uv-managed CPython 3.12 interpreter copies (not
+   symlinks) `python3` into child venvs without its paired
+   `libpython3.12.dylib`, so the child venv's own `python3 -I` aborts
+   (`SIGABRT`, `dyld: Library not loaded: @executable_path/../lib/libpython3.12.dylib`)
+   — reproduced directly outside pytest's capture to confirm. This is a
+   pre-existing toolchain defect in a component this track must treat as
+   read-only; it is not fixed here, only diagnosed and reported.
+2. **Genuine headless-browser screenshot capture achieved.** The app's
+   `browser` canvas tool cannot self-capture (no `open_browser_page`/`page_id`
+   support), but that only blocks the canvas *wrapper* — a local, scoped
+   Playwright (installed as a devDependency of the scratch `termviz/`
+   harness only, Chromium cached under that same directory via
+   `PLAYWRIGHT_BROWSERS_PATH=0`, nothing global) was pointed directly at the
+   already-running xterm.js/PTY-bridge localhost page
+   (`http://127.0.0.1:8080/index.html`) and captured real PNG screenshots,
+   inspected with `view`. This is honestly labeled **headless-browser
+   terminal-emulator capture** — a real browser rendering real terminal
+   output over a real PTY — not a substitute for human-interactive visual
+   review, and not the app's own browser-canvas tool.
+3. **Two real scratch-harness bugs found and fixed via this capture loop**
+   (both in `termviz/` scratch tooling, not shipped code): (a) `pty_bridge.py`
+   read the `cmd`/`cols`/`rows` query-string params without URL-decoding
+   them, so the percent-encoded JSON command never parsed
+   (`json.decoder.JSONDecodeError: Expecting value`) — fixed with
+   `urllib.parse.unquote`; (b) `devrun.py`'s fixture-replay driver called
+   `app.workers.wait_for_idle()`, which does not exist on this Textual
+   version's `WorkerManager` (`AttributeError`) — fixed to
+   `app.workers.wait_for_complete()`. Both bugs were only visible once a
+   genuine browser captured the real rendered/crashed output; headless
+   Pilot+SVG snapshots from milestone 1 could not have caught the
+   query-string decoding bug since Pilot never goes through the websocket
+   query string at all.
+4. After both fixes, a genuine capture of the `branch+replay` fixture at
+   1040x700 shows the fork/join DAG with live status coloring (green=passed
+   border on `plan.contract.md`, orange=running on `design.contract.md`/
+   `spec.contract.md`, default on untouched pending cards), the activity
+   stream narration lines, and the footer bindings — matching the intended
+   design. Scratch PTY/websocket/HTTP servers and the Playwright browser
+   process are stopped after each capture session; no process or dependency
+   from this is left running or installed outside the scratch `termviz/`
+   directory.
+5. **Native packaging feasibility: one target genuinely proven, not
+   estimated.** The repo already declares `pyinstaller==6.16.0` under the
+   `build` extra (`pyproject.toml`) and ships `build/apmx.spec` +
+   `build/entrypoint.py`; `collect_submodules("apmx")` in the spec already
+   picks up `apmx.tui` with no spec changes needed. Installed the declared
+   extra into this track's own venv and ran
+   `python -m PyInstaller --clean --noconfirm build/apmx.spec` for the
+   current host target (`macos-arm64`, matching `scripts/release.py`'s
+   `TARGETS`): build completed in **14.3s**, producing a **29 MB** `COLLECT`
+   bundle (8.2 MB main executable). Measured cold-start (`apmx --version`,
+   5 runs): **~0.09s real** each. Critically, launched the frozen binary's
+   `--tui --plan` path inside a genuine `pty.fork()` child (not a plain
+   pipe — `tui_eligible()` requires `sys.stdin.isatty()` and
+   `sys.stdout.isatty()`, which a plain subprocess pipe fails) with a real
+   `TERM=xterm-256color` set: the frozen executable emitted genuine Textual
+   alternate-screen ANSI output (mouse-tracking enables, the "APMX factory
+   (preview)" header, the real card DAG) — proof the Textual prototype runs
+   correctly from a frozen interpreter, not just from source. (First attempt
+   without a real `TERM` correctly hit the same `tui_unavailable` conservative
+   refusal real terminals get over `TERM=dumb`/CI — confirms the guard
+   works identically frozen or not.)
+6. **Remaining four native targets (`linux-x86_64`, `linux-arm64`,
+   `macos-x86_64`, `windows-x86_64`) were not built in this session —
+   reported as a genuine blocker, not an assumed restriction.** PyInstaller
+   does not cross-compile across OS/arch; the other 4 targets need either a
+   matching OS/arch runner or a container. `docker` CLI is present
+   (`docker --version` → 29.0.1), but `docker ps`/`docker info` fail with
+   `failed to connect to the docker API ... no such file or directory`
+   — the Docker Desktop daemon is not running on this host. Starting it was
+   judged out of scope: it is a heavyweight shared-machine system service,
+   not an isolated per-session dependency, and the task's constraints bar
+   system-level changes. The project's own CI
+   (`.github/workflows/native-notice-build.yml`, matrix from
+   `scripts/release.py::TARGETS`) already builds all five targets on
+   dedicated runners; this track did not duplicate that infrastructure
+   locally. Net: 1 of 5 targets (`macos-arm64`) has genuine local build +
+   measured-size/startup + genuine frozen-TUI-launch evidence from this
+   session; the remaining 4 are deferred to that existing CI matrix, not
+   silently assumed to work.
+7. **Genuine stdin consent + real child-process cancellation: mechanism
+   proven, not yet wired to live execution.** Added `apmx/tui/consent.py`
+   (`ConsentScreen`, `CancellableChild`) plus 8 new tests
+   (`tests/unit/tui/test_consent.py`), all passing against real behaviour:
+   - `ConsentScreen` is a modal that focuses "No (default)" on mount; a bare
+     Enter at mount, or Escape, declines (`False`) without ever touching the
+     "Yes" path. Only an explicit Tab-to-accept-then-Enter (or a direct
+     click on "Yes") returns `True`. Matches the existing CLI's default-No
+     `--allow-host-access` gate — this module does not invent a second
+     consent model, it is a front end a caller can wire to the one the
+     engine/`ContractLogger` already own (`_admit()`,
+     `advisory_consent_required`, `logger.confirm_factory()`); it does not
+     import `apmx.contracts.chain`/`engine`/`process`/`records` itself
+     (enforced by the existing `tests/unit/tui/test_architecture.py`
+     import-boundary guard, which still passes against this new module).
+   - `CancellableChild` spawns one real OS process in its own process group
+     (`start_new_session=True`) and its `cancel()` sends a real `SIGTERM`
+     to the group, awaits genuine reaping, and escalates to `SIGKILL` only
+     if the child is still alive after a timeout. Proven against three real
+     child processes, not mocks: a plain sleeping child (confirmed gone via
+     `os.kill(pid, 0)` raising `ProcessLookupError` after cancel), a child
+     that traps and ignores `SIGTERM` (confirmed the `SIGKILL` escalation
+     path actually reaps it), and an already-exited child (confirmed
+     `cancel()` is a safe no-op, not a hang or an error).
+   - **Not yet done, and intentionally deferred**: wiring either piece into
+     `FactoryApp`'s live rendering path. `--tui` today is reachable only
+     from the `--plan` (preview, no execution) branch of
+     `invoke_contract()` (`src/apmx/commands/contracts.py`); the real
+     consent gate and the real supervised-process execution
+     (`src/apmx/contracts/process.py::supervise_process`) only run in the
+     separate non-planning execution branch today, with no code path that
+     reaches both `--tui` and live execution at once. Making that
+     connection is an engine-facing architecture decision (does `--tui`
+     gain a live-execution mode, and if so how does it call
+     `logger.confirm_factory()`/the engine's existing admit/execute flow
+     instead of this module reimplementing it) — tracked as the opening
+     item for milestone 3, not resolved unilaterally here, per "Canonical
+     engine and ContractLogger own semantics."
+
 
 ## Milestones and acceptance
 
