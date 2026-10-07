@@ -68,7 +68,7 @@ class ContractCard(Static, can_focus=True):
 
     DEFAULT_CSS = """
     ContractCard {
-        border: round $panel;
+        border: round $panel-lighten-2;
         padding: 0 1;
         width: auto;
         min-width: 18;
@@ -123,6 +123,23 @@ class GraphView(VerticalScroll):
         return None
 
 
+def _check_finished_fields(event: RunEvent) -> tuple[object, str]:
+    """Read the check name/outcome from a ``check_finished`` event.
+
+    The real engine (``contracts/engine.py``) emits this event with an
+    ``observation`` ``CheckObservation`` (see ``core/contract_logger.py``'s
+    own ``_check_finished``), not flat ``name``/``status`` keys. Fixture
+    replay (``tui/fixtures.py``) still uses the flat shape, so both are
+    read here; the outcome is never recomputed, only unwrapped.
+    """
+    observation = event.data.get("observation")
+    if observation is not None:
+        name = getattr(observation, "name", None)
+        status = "pass" if getattr(observation, "normalized", None) == 0 else "fail"
+        return name, status
+    return event.data.get("name"), event.data.get("status")
+
+
 def _format_event(event: RunEvent) -> str:
     """Render one RunEvent as a single readable line. Formatting only: the
     event's kind/source/data are never reinterpreted into a new outcome."""
@@ -136,9 +153,9 @@ def _format_event(event: RunEvent) -> str:
     if kind == "check_started":
         return f"{STATUS_SYMBOLS['running']} check {event.data.get('name')} started"
     if kind == "check_finished":
-        status = event.data.get("status")
+        name, status = _check_finished_fields(event)
         symbol = STATUS_SYMBOLS["check"] if status == "pass" else STATUS_SYMBOLS["error"]
-        return f"{symbol} check {event.data.get('name')} {status}"
+        return f"{symbol} check {name} {status}"
     if kind == "diagnostic":
         return f"{STATUS_SYMBOLS['warning']} {event.data.get('message', '')}"
     if kind == "stop_requested":

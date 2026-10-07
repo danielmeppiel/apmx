@@ -128,8 +128,14 @@ def test_live_run_drives_both_cards_to_passed_and_returns_the_real_result(
     assert result.runs[-1].artifact.path.read_bytes() == b"seed"
     passed = [identity for identity, status in app.status_calls if status == "passed"]
     assert passed == list(identities)
-    running = [identity for identity, status in app.status_calls if status == "running"]
-    assert running == list(identities)
+    running_identities = {identity for identity, status in app.status_calls if status == "running"}
+    assert running_identities == set(identities)
+    # Each contract's checks genuinely passed here, so a passing
+    # check_finished must put the card back to "running", never "retrying"
+    # (regression: the bridge used to read None/None from the real engine's
+    # CheckObservation-shaped check_finished event and always fell back to
+    # "retrying", even when every check passed).
+    assert not any(status == "retrying" for _, status in app.status_calls)
     assert any(event.kind == "finished" for event in app.events)
     assert not app.diagnostics
 

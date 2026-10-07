@@ -20,7 +20,7 @@ from textual.binding import Binding
 
 from ..contracts.models import ChainResult, ContractError, Outcome, RunEvent
 from ..core.contract_logger import ContractLogger
-from ..tui.app import FactoryApp
+from ..tui.app import FactoryApp, _check_finished_fields
 from ..tui.graph import build_nodes
 
 if TYPE_CHECKING:
@@ -113,7 +113,7 @@ class LiveContractLogger(ContractLogger):
         if event.kind == "check_started":
             app.apply_card_status(identity, "checking")
         elif event.kind == "check_finished":
-            status = event.data.get("status")
+            _name, status = _check_finished_fields(event)
             app.apply_card_status(identity, "running" if status == "pass" else "retrying")
         elif event.kind == "finished":
             result = event.data.get("result")

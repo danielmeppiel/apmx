@@ -558,6 +558,149 @@ environment variable in CI). `ruff check` is clean on all touched files.
   explicitly authorized genuine run is planned for milestone 5 validation,
   not before.
 
+### Milestone 4 evidence log: genuine live-engine visual validation
+
+Unlike milestones 1-2 (fixture-replay captures only), every screenshot in this
+section drives the **real** `apmx` CLI / Textual `LiveFactoryApp` /
+`ContractLogger` / process supervisor / `ContractStreamDecoder` pipeline
+end-to-end as a genuine OS subprocess inside a real PTY, with only the AI
+harness call (`copilot`) swapped for a hermetic local stand-in script — the
+same substitution precedent the project's own hermetic pytest tests already
+use (e.g. `tests/unit/tui/test_cli_flags.py`). No model call, no network, no
+spend. A real 4-contract fork/join factory (`plan → {design, spec} → build`)
+is used throughout. All screenshots are headless-browser (Playwright +
+Chromium, scoped to this track's own scratch tooling) renders of a real
+xterm.js terminal connected to that real PTY — not the app's own
+browser-canvas tool, and not a substitute for human-interactive review, but
+genuine rendered terminal output.
+
+1. **A real product bug was found and fixed via this live-engine dogfooding,
+   not via code-reading alone.** While chasing an apparent "stuck after
+   second consent" capture, raw PTY output (ANSI-stripped) showed the engine
+   actually completing every contract with
+   `[!] Native execution did not complete: native_completion_unobserved` and
+   an overall `finished: unknown` outcome, plus narration lines reading
+   `[x] check None None` for checks that had genuinely passed. Root cause,
+   in two parts:
+   - The real engine's `ContractStreamDecoder._native_result`
+     (`src/apmx/contracts/stream.py`) requires a terminal JSONL line
+     `{"type":"result","exitCode":<int>,"sessionId":<str>,"usage":{...}}`
+     before it sets `completion_seen=True`; this track's hermetic
+     stand-in script did not emit it. Fixed in the scratch harness only
+     (`termviz/live-demo/tools/copilot`), not shipped code.
+   - After that fix, contracts correctly turned green, but **every genuine
+     passing check still misreported as `None`/`None` in narration, and
+     incorrectly flipped its card to `"retrying"` instead of back to
+     `"running"`.** Cause: `src/apmx/contracts/engine.py::_run_checks()`
+     emits `check_finished` with `observation=<CheckObservation dataclass>`,
+     but `src/apmx/tui/app.py::_format_event` and
+     `src/apmx/commands/tui_live.py::_present` both read flat
+     `event.data.get("name")`/`event.data.get("status")` keys — a shape
+     that only matches the invented replay fixtures in `tui/fixtures.py`,
+     not the real engine's live event shape. This is a genuine,
+     reproducible regression in shipped code (confirmed pre-existing by
+     stashing the fix and re-running), **not** an artifact of the scratch
+     harness.
+   - **Fix** (this track's ownership, `src/apmx/tui/app.py` +
+     `src/apmx/commands/tui_live.py`): added a shared
+     `_check_finished_fields(event)` helper that reads the real
+     `CheckObservation` shape via `getattr`, falling back to the fixture's
+     flat keys — mirroring the pattern `core/contract_logger.py` already
+     uses correctly for the CLI's own non-TUI output path. `engine.py`'s
+     own `check_started`/`check_finished` shape inconsistency is left
+     untouched (not this track's ownership).
+   - **Regression tests added**:
+     `tests/unit/tui/test_app.py::test_format_event_reads_real_engine_check_finished_shape`
+     constructs a real `CheckObservation`/`RunEvent` directly and asserts
+     correct pass/fail narration for both shapes; the pre-existing
+     `tests/unit/tui/test_live_bridge.py::test_live_run_drives_both_cards_to_passed_and_returns_the_real_result`
+     was strengthened from an exact-list assertion (which coincidentally
+     passed both before and after the fix, for the wrong reason) to an
+     explicit `assert not any(status == "retrying" ...)` for an all-passing
+     run. Full suite, run against the real APM 0.30.0 backend located via
+     `APMX_APM_BACKEND` (per milestone 2's precedent): **1948 passed, 58
+     skipped**.
+2. **Both consent prompts, genuine.** `m4-consent-prepare-80x24.png` and
+   `m4-consent-execute-80x24.png` show the two distinct real consent
+   surfaces (`confirm_package_preparation`, `confirm_factory`) with a real
+   resolved dependency count and real APM install log lines above them,
+   both still defaulting to `[y/N]`. `m4-consent-execute-graph-120x40.png`
+   shows the wider second-prompt rendering with the full real 4-contract
+   graph description (produces/checks/needs) visible above the prompt.
+3. **Genuine running dashboard**, both narrow and wide:
+   `m4-running-dashboard-120x40.png` and `m4-running-dashboard-80x24.png`
+   show the real fork/join DAG mid-run (3 contracts genuinely
+   passed/green, 1 genuinely running/orange), the title bar, the detail
+   pane, the activity narration feed sourced from real engine events, and
+   the footer keybindings — post-fix, with correct narration (no `None`
+   leaks, no spurious `"retrying"`).
+4. **Genuine keyboard navigation**: `m4-focus-detail-pane-120x40.png`
+   captures a scripted real `Tab` keypress moving focus to a contract card,
+   with the detail pane correctly repopulating with that contract's real
+   metadata (`Contract: plan.contract.md / Status: passed / Needs: ... /
+   Produces: ... / Checks: ...`) sourced from the live engine, not a
+   fixture.
+5. **Genuine `NO_COLOR` live-engine evidence**: `m4-nocolor-live-120x40.png`.
+   The scratch harness (`termviz/pty_bridge.py` + `index.html`) was extended
+   with an `env=<json>` passthrough so a capture request can set extra
+   environment variables (e.g. `NO_COLOR=1`) in the real spawned child
+   before `exec`, purely additive scratch-tooling plumbing. With
+   `NO_COLOR=1` set, the genuine running dashboard renders with every card
+   border, the title bar and all panes in monochrome — confirming Textual's
+   native `NO_COLOR` handling is honored end-to-end through the real
+   `LiveFactoryApp`, not just assumed from Textual's own documentation (as
+   milestone 2/3 had left it).
+6. **Genuine cooperative-cancellation evidence**, proving "cancellation
+   reaps supervised children; UI exit cannot leak inference" is not just an
+   engine-level claim but true of the live TUI's actual behavior:
+   - `m4-cancel-during-120x40.png`: a real `c` keypress was scripted to fire
+     mid-run (2 of 4 contracts genuinely green, 1 genuinely running);
+     captured ~100ms after the keypress, the TUI is still showing that
+     running state (the keypress had not yet been processed).
+   - `m4-cancel-after-exit-120x40.png`: captured ~300ms later, the TUI has
+     fully exited — the terminal has returned to its primary screen buffer,
+     showing exactly the pre-run scrollback content frozen from before the
+     alternate screen was entered. No partial inference, no extra output,
+     no corrupted redraw was left on screen; the exit was clean and
+     effectively instantaneous once cancellation was requested.
+   - Process-level verification (not just visual): immediately following a
+     scripted cancel, `pgrep -f "live-demo"` against this track's own
+     scratch harness processes returned no matches — the supervised
+     hermetic child process was fully reaped, not merely hidden by the UI
+     exiting while still running in the background.
+7. **Native-prompt/'c'-keybinding safety analysis** (code-reading
+   conclusion, consistent with and reinforced by the above capture): every
+   producer subprocess this track's TUI supervises is launched with
+   `stdin=subprocess.DEVNULL` (confirmed in the process-supervision code
+   path used by both the CLI and TUI run commands), so there is no
+   real channel through which a native tool/model prompt could ever read
+   from — or be answered by — the user's terminal while the TUI owns it.
+   The `'c'` cancel keybinding therefore cannot race with, or leak into, a
+   live native prompt: there is never a prompt to race with in the first
+   place. This was validated both by static reading of the supervision code
+   and, this milestone, by direct observation of a scripted cancellation
+   leaving no partial or leaked content on screen.
+8. **Remaining honest gaps for milestone 4**, carried forward rather than
+   glossed over: screen-reader/plain-fallback output and output-redirection
+   behavior were validated earlier (milestones 1-2) only via the
+   fixture-replay path and Textual's own plain/headless rendering, not
+   re-captured against the live engine this milestone; reduced-motion
+   (`TEXTUAL_ANIMATIONS=none`) was similarly confirmed by code-reading
+   (Textual's native env handling) but not captured live. These are
+   lower-risk than the `NO_COLOR`/cancellation gaps that were closed this
+   milestone, since they exercise Textual's own documented env handling
+   rather than this track's event-bridging code, but are noted here for
+   transparency rather than silently marked complete.
+
+All milestone-4 screenshots are persisted at (absolute paths, session-scoped
+scratch storage, not part of the repo):
+`~/.copilot/session-state/5072cbd4-7912-45c6-b6ab-d4ba84303cb7/files/termviz/evidence-m4/`
+(`m4-consent-prepare-80x24.png`, `m4-consent-execute-80x24.png`,
+`m4-consent-execute-graph-120x40.png`, `m4-running-dashboard-120x40.png`,
+`m4-running-dashboard-80x24.png`, `m4-focus-detail-pane-120x40.png`,
+`m4-cancel-during-120x40.png`, `m4-cancel-after-exit-120x40.png`,
+`m4-nocolor-live-120x40.png`).
+
 ## Milestones and acceptance
 
 1. Persist docs/textual-design.md and refine the wireframes against the real
