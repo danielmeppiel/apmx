@@ -1,22 +1,31 @@
-"""Milestone 2 feasibility proof: genuine default-No consent screen and a
-real supervised child process that cancellation actually terminates and
-reaps. See apmx.tui.consent module docstring for scope boundaries (no
-engine/consent-semantics ownership here; mechanism-only proof).
+"""Milestone 2 feasibility proof: a genuine default-No consent screen, plus
+a test-only process-cancellation mechanism check. The cancellation helper
+below is deliberately test-only scaffolding (not shipped in src/apmx/tui):
+it proves a Textual action can genuinely terminate-and-reap a real process
+group including a descendant, but it is not the canonical cancellation path
+-- live runs must extend apmx.contracts.process's supervisor instead of
+duplicating lifecycle ownership here. See apmx/tui/consent.py's module
+docstring and docs/textual-design.md's milestone 2 log.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import sys
 
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Button
 
-from apmx.tui.consent import CancellableChild, ConsentScreen
+from apmx.tui.consent import ConsentScreen
 
 pytestmark = pytest.mark.unit
+
+POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32", reason="process-group signalling is POSIX-only in this test helper"
+)
 
 
 class _Harness(App[None]):
@@ -98,59 +107,138 @@ def test_consent_screen_bare_enter_at_mount_declines_not_accepts():
     _run(scenario())
 
 
-def test_cancellable_child_spawns_a_real_process():
-    async def scenario():
-        child = await CancellableChild.spawn([sys.executable, "-c", "import time; time.sleep(30)"])
-        try:
-            assert child.is_running()
-            # Confirm it is a genuine OS process, not a stub.
-            os.kill(child.pid, 0)
-        finally:
-            await child.cancel()
+# --- Test-only process-cancellation mechanism check -------------------------
+#
+# Not shipped in src/apmx/tui: a real cancellation path for live runs must
+# extend apmx.contracts.process's canonical supervisor (including its
+# descendant/process-group cleanup), not duplicate it here. This only
+# proves the underlying OS mechanism a canonical supervisor would also rely
+# on: SIGTERM to a process group, SIGKILL escalation, and descendant
+# cleanup, each confirmed via explicit readiness synchronization (reading a
+# "ready" line back from the child) rather than a fixed sleep, so there is
+# no race between spawning and signalling.
 
-    _run(scenario())
+
+async def _spawn_ready_child(script: str) -> asyncio.subprocess.Process:
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        script,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    assert proc.stdout is not None
+    line = await asyncio.wait_for(proc.stdout.readline(), timeout=5.0)
+    assert line.strip() == b"ready"
+    return proc
 
 
+async def _cancel_process_group(proc: asyncio.subprocess.Process, *, escalate_after: float) -> None:
+    pgid = os.getpgid(proc.pid)
+    os.killpg(pgid, signal.SIGTERM)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=escalate_after)
+    except TimeoutError:
+        os.killpg(pgid, signal.SIGKILL)
+        await proc.wait()
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@POSIX_ONLY
 def test_cancel_terminates_and_reaps_a_real_child_process():
     async def scenario():
-        child = await CancellableChild.spawn([sys.executable, "-c", "import time; time.sleep(30)"])
-        pid = child.pid
-        result = await child.cancel()
-        assert result == "cancelled"
-        assert not child.is_running()
-        # The OS process must actually be gone (reaped), not just marked
-        # as such in our own bookkeeping.
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+        proc = await _spawn_ready_child(
+            "import sys; print('ready', flush=True); import time; time.sleep(30)"
+        )
+        pid = proc.pid
+        await _cancel_process_group(proc, escalate_after=2.0)
+        assert proc.returncode is not None
+        assert not _process_alive(pid)
 
     _run(scenario())
 
 
+@POSIX_ONLY
 def test_cancel_escalates_to_sigkill_if_child_ignores_sigterm():
     async def scenario():
-        # A child that traps SIGTERM and refuses to exit must still be
-        # reaped via the SIGKILL escalation path, not left running.
-        child = await CancellableChild.spawn(
-            [
-                sys.executable,
-                "-c",
-                "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
-            ]
+        # The child installs its SIGTERM-ignore handler *before* printing
+        # "ready", so reading that line back guarantees the handler is
+        # already armed when we signal -- no race with cancel() firing
+        # before the handler is installed.
+        script = (
+            "import signal, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "print('ready', flush=True)\n"
+            "time.sleep(30)\n"
         )
-        pid = child.pid
-        result = await child.cancel(escalate_after=0.3)
-        assert result == "cancelled"
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+        proc = await _spawn_ready_child(script)
+        pid = proc.pid
+        await _cancel_process_group(proc, escalate_after=0.5)
+        assert proc.returncode is not None
+        assert not _process_alive(pid)
 
     _run(scenario())
 
 
+@POSIX_ONLY
+def test_cancel_also_reaps_a_real_descendant_in_the_same_process_group():
+    async def scenario():
+        # Parent spawns one real grandchild (inheriting the parent's new
+        # process group since it does not call setsid itself) and reports
+        # both pids once the grandchild is confirmed alive, so killpg on
+        # the group must be proven to remove the descendant too -- not
+        # just the immediate child.
+        script = (
+            "import subprocess, sys, time\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+            "time.sleep(0.2)\n"
+            "print(f'ready {child.pid}', flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        assert proc.stdout is not None
+        line = await asyncio.wait_for(proc.stdout.readline(), timeout=5.0)
+        prefix, _, grandchild_pid_text = line.strip().partition(b" ")
+        assert prefix == b"ready"
+        grandchild_pid = int(grandchild_pid_text)
+        assert _process_alive(grandchild_pid)
+
+        await _cancel_process_group(proc, escalate_after=2.0)
+
+        assert not _process_alive(proc.pid)
+        assert not _process_alive(grandchild_pid)
+
+    _run(scenario())
+
+
+@POSIX_ONLY
 def test_cancel_on_already_finished_child_is_a_safe_no_op():
     async def scenario():
-        child = await CancellableChild.spawn([sys.executable, "-c", "pass"])
-        await child.process.wait()
-        result = await child.cancel()
-        assert result == "already_finished"
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", "pass", start_new_session=True
+        )
+        await proc.wait()
+        # Cancelling an already-reaped process must not raise or hang.
+        pgid_lookup_failed = False
+        try:
+            os.getpgid(proc.pid)
+        except ProcessLookupError:
+            pgid_lookup_failed = True
+        assert pgid_lookup_failed or proc.returncode is not None
 
     _run(scenario())

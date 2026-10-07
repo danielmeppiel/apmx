@@ -1,27 +1,27 @@
-"""Milestone 2 feasibility prototype: genuine stdin consent + real child-
-process cancellation, proven as an isolated mechanism inside Textual.
+"""Milestone 2 feasibility prototype: a genuine stdin consent widget.
 
-Scope: this module does not call into ``apmx.contracts.engine``/``chain`` and
-does not grant or compute any execution outcome itself — consent and outcome
-semantics stay owned by the canonical engine and ``ContractLogger`` (see
-docs/textual-design.md). What this proves, genuinely (not as an estimate):
+Scope: this module does not call into apmx.contracts.engine/chain/process
+and does not grant or compute any execution outcome itself; consent and
+outcome semantics stay owned by the canonical engine and ContractLogger
+(see docs/textual-design.md). What this proves, genuinely (not as an
+estimate): a real interactive consent prompt that defaults to declining and
+only proceeds on an explicit keypress selecting "Yes" -- never
+auto-accepted, matching the existing CLI's default-No --allow-host-access
+gate. Wiring this screen to the real admission flow
+(logger.confirm_factory()) is tracked separately as live-execution wiring,
+not done by this module.
 
-1. A real interactive consent prompt that defaults to declining and only
-   proceeds on an explicit keypress selecting "Yes" — never auto-accepted,
-   matching the existing CLI's default-No ``--allow-host-access`` gate.
-2. A real supervised child process (its own process group via
-   ``start_new_session=True``) that a cancel action can genuinely terminate
-   and reap — SIGTERM first, escalating to SIGKILL only if the child does
-   not exit, then awaiting it so no zombie/leaked process remains and no
-   partial output is presented as a completed/authenticated outcome.
+A real supervised-child cancellation mechanism was prototyped alongside
+this screen and deliberately removed from shipping source after review: it
+was POSIX-only with no Windows path, and duplicated lifecycle ownership
+that belongs to apmx.contracts.process's canonical supervisor (including
+descendant/process-group cleanup). Real cancellation for live runs must
+extend that canonical supervisor, not add a second one here. See
+docs/textual-design.md's milestone 2 log for the full note.
 """
 
 from __future__ import annotations
 
-import asyncio
-import os
-import signal
-from dataclasses import dataclass
 from typing import ClassVar
 
 from textual.app import ComposeResult
@@ -33,8 +33,8 @@ from textual.widgets import Button, Static
 
 class ConsentScreen(ModalScreen[bool]):
     """Default-No consent prompt. Declining (default focus, Escape, or 'n')
-    dismisses with ``False`` and never arms anything. Only an explicit "Yes"
-    selection dismisses with ``True``."""
+    dismisses with False and never arms anything. Only an explicit "Yes"
+    selection dismisses with True."""
 
     DEFAULT_CSS = """
     ConsentScreen {
@@ -80,47 +80,3 @@ class ConsentScreen(ModalScreen[bool]):
 
     def action_decline(self) -> None:
         self.dismiss(False)
-
-
-@dataclass
-class CancellableChild:
-    """Wraps one real supervised child process for genuine cancel+reap
-    proof. Not the canonical engine's ``process.supervise_process`` — a
-    standalone mechanism check for milestone 2 feasibility, swapped for the
-    real supervisor when live engine wiring (milestone 3) lands."""
-
-    process: asyncio.subprocess.Process
-    _cancelled: bool = False
-
-    @classmethod
-    async def spawn(cls, argv: list[str]) -> CancellableChild:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        return cls(process=proc)
-
-    @property
-    def pid(self) -> int:
-        return self.process.pid
-
-    def is_running(self) -> bool:
-        return self.process.returncode is None
-
-    async def cancel(self, *, escalate_after: float = 1.0) -> str:
-        """Terminate and reap the real child. Returns 'cancelled' once the
-        process is confirmed gone; never leaves it running or zombied, and
-        never reports a result as if the run had completed normally."""
-        self._cancelled = True
-        if self.process.returncode is not None:
-            return "already_finished"
-        pgid = os.getpgid(self.process.pid)
-        os.killpg(pgid, signal.SIGTERM)
-        try:
-            await asyncio.wait_for(self.process.wait(), timeout=escalate_after)
-        except TimeoutError:
-            os.killpg(pgid, signal.SIGKILL)
-            await self.process.wait()
-        return "cancelled"

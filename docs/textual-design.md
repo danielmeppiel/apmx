@@ -318,61 +318,147 @@ certification of "world-class" or accessibility compliance is claimed.
    refusal real terminals get over `TERM=dumb`/CI — confirms the guard
    works identically frozen or not.)
 6. **Remaining four native targets (`linux-x86_64`, `linux-arm64`,
-   `macos-x86_64`, `windows-x86_64`) were not built in this session —
-   reported as a genuine blocker, not an assumed restriction.** PyInstaller
-   does not cross-compile across OS/arch; the other 4 targets need either a
-   matching OS/arch runner or a container. `docker` CLI is present
-   (`docker --version` → 29.0.1), but `docker ps`/`docker info` fail with
-   `failed to connect to the docker API ... no such file or directory`
-   — the Docker Desktop daemon is not running on this host. Starting it was
-   judged out of scope: it is a heavyweight shared-machine system service,
-   not an isolated per-session dependency, and the task's constraints bar
-   system-level changes. The project's own CI
-   (`.github/workflows/native-notice-build.yml`, matrix from
-   `scripts/release.py::TARGETS`) already builds all five targets on
-   dedicated runners; this track did not duplicate that infrastructure
-   locally. Net: 1 of 5 targets (`macos-arm64`) has genuine local build +
-   measured-size/startup + genuine frozen-TUI-launch evidence from this
-   session; the remaining 4 are deferred to that existing CI matrix, not
-   silently assumed to work.
-7. **Genuine stdin consent + real child-process cancellation: mechanism
-   proven, not yet wired to live execution.** Added `apmx/tui/consent.py`
-   (`ConsentScreen`, `CancellableChild`) plus 8 new tests
-   (`tests/unit/tui/test_consent.py`), all passing against real behaviour:
+   `macos-x86_64`, `windows-x86_64`): not locally buildable on this
+   macOS-arm64 machine, and not a gap that needs closing here.**
+   PyInstaller does not cross-compile across OS/arch, so each of those 4
+   needs its own matching OS/arch runner. `docker` CLI is present
+   (`docker --version` -> 29.0.1) but its daemon is not running here
+   (`docker ps`/`docker info` -> `failed to connect to the docker API ...
+   no such file or directory`); per creator guidance, spinning up Docker
+   Desktop locally is unnecessary busywork, not a blocker to resolve --
+   the project's own CI (`.github/workflows/native-notice-build.yml`,
+   matrix from `scripts/release.py::TARGETS`) already builds and tests all
+   five targets once code is ready, and that is the intended path for the
+   other 4, not a local duplicate of it. Net: 1 of 5 targets
+   (`macos-arm64`) has genuine local build + measured-size/startup +
+   genuine frozen-TUI-launch evidence from this session; the remaining 4
+   ride the existing CI matrix once this branch's commits land there, by
+   design, not as an uncovered gap.
+7. **Resolved the one remaining backend-dependent test failure using an
+   available working interpreter, not by patching the shared toolchain.**
+   The earlier SIGABRT (`tests/release/test_demo.py::
+   test_python_command_preserves_virtual_environment_identity`) traced to
+   the shared read-only `.venv`'s uv-managed CPython 3.12 build: its
+   `venv`-created child binaries link their sibling dylib via a relative
+   `@executable_path/../lib/libpython3.12.dylib` path that is never copied
+   alongside the copied binary. The already-installed
+   `/opt/homebrew/opt/python@3.13/bin/python3.13` (a Framework build) does
+   not have this problem -- `otool -L` on a venv built from it shows the
+   child binary linking the shared library by its real, stable absolute
+   path (`/opt/homebrew/Cellar/python@3.13/.../Python`), so no sibling
+   dylib copy is ever needed. Built this track's own `.venv-py313` from
+   that interpreter (`pip install -e ".[dev,build,factory,tui]"`, the same
+   declared extras) and reran the exact failing selector: **passed**.
+   Reran the full `tests/unit tests/release` suite in that same env with
+   `APMX_APM_BACKEND` set: **2149 passed, 11 skipped, 0 failed** (445.6s) --
+   zero failures and zero skips attributable to this bug once a working
+   interpreter is used for this track's own environment. The shared
+   `.venv` is still left untouched (read-only), and this did not "fix" the
+   shared toolchain -- it worked around its one broken build by using a
+   different, already-available, already-working interpreter for this
+   track's own venv, per the instruction that the read-only constraint
+   does not mean leaving an available fix unused.
+8. **Genuine cross-size terminal screenshots and an honest visual critique,
+   not just a renderability check.** Parameterized the scratch `termviz/`
+   harness (`index.html` query params for `cols`/`rows`/`fontSize`;
+   `capture.js` to size the Playwright viewport to match) and captured two
+   new real PNGs via the same headless-Chromium-to-PTY path used earlier:
+   - `shot-80x24.png` (80x24, fontSize 16) -- absolute path:
+     `/Users/danielmeppiel/.copilot/session-state/5072cbd4-7912-45c6-b6ab-d4ba84303cb7/files/termviz/shot-80x24.png`
+   - `shot-120x40.png` (120x40, fontSize 13) -- absolute path:
+     `/Users/danielmeppiel/.copilot/session-state/5072cbd4-7912-45c6-b6ab-d4ba84303cb7/files/termviz/shot-120x40.png`
+
+   Visual findings from inspecting both (distinct from the earlier fixed
+   scratch-harness bugs):
+   - **Low-contrast pending-card borders (real finding, not yet fixed).**
+     `ContractCard`'s default (`pending`) border uses `$panel` on the
+     app's black background; in both captures the three pending cards
+     (`build.contract.md`, and in the wider 120x40 capture also
+     `docs.contract.md`/`tests.contract.md`/`review.contract.md`) have a
+     border that is barely distinguishable from the background at normal
+     viewing distance, while the `passed` (green) and `running` (orange)
+     borders are clearly legible. This is a genuine contrast gap worth
+     fixing before milestone 4 sign-off, not merely a theoretical fallback
+     concern.
+   - **No clipping or truncation observed at either size.** The fixture
+     banner text, every card label, the detail pane's "Select a contract
+     card to inspect it." prompt, the activity-log lines, and the footer
+     key bindings all render in full at both 80x24 and 120x40 -- the
+     narrower 80-column capture does not truncate the longest line (the
+     fixture banner).
+   - **GraphView's internal scrollbar appears even with vertical room to
+     spare.** A narrow teal scrollbar indicator is visible on the graph
+     pane's right edge in both captures, including the 120x40 one where
+     there is visibly blank space below the last DAG row -- suggests the
+     `GraphView { height: 2fr; }` sizing rule computes a slightly taller
+     content height than what is visually needed here; a minor layout
+     polish item, not a functional bug.
+   - **Explicit limitation: focus-ring contrast was not captured by this
+     pass.** Both screenshots are of the fixture-replay path, which never
+     focuses a card programmatically, so `ContractCard:focus`'s
+     `$accent`/`$boost` styling could not be visually verified here; that
+     check needs a capture driven by an actual focus/Tab interaction
+     (milestone 4 follow-up), not claimed as already covered by these two
+     images.
+
+   Visual acceptance for milestone 1/2 presentation remains **open**
+   pending a fix for the low-contrast pending-border finding and a
+   focus-driven capture; implementation continues in parallel per
+   instruction, this is not a blocking gate on milestone 3 starting.
+9. **Genuine stdin consent screen proven; cancellation kept test-only after
+   review, not shipped as a second supervisor.** Added `apmx/tui/consent.py`
+   (`ConsentScreen` only) plus 4 consent tests and 5 test-only process-
+   cancellation mechanism checks (`tests/unit/tui/test_consent.py`, 9 tests
+   total, all passing against real behaviour, ASCII-only):
    - `ConsentScreen` is a modal that focuses "No (default)" on mount; a bare
      Enter at mount, or Escape, declines (`False`) without ever touching the
      "Yes" path. Only an explicit Tab-to-accept-then-Enter (or a direct
      click on "Yes") returns `True`. Matches the existing CLI's default-No
-     `--allow-host-access` gate — this module does not invent a second
+     `--allow-host-access` gate -- this module does not invent a second
      consent model, it is a front end a caller can wire to the one the
      engine/`ContractLogger` already own (`_admit()`,
      `advisory_consent_required`, `logger.confirm_factory()`); it does not
      import `apmx.contracts.chain`/`engine`/`process`/`records` itself
      (enforced by the existing `tests/unit/tui/test_architecture.py`
-     import-boundary guard, which still passes against this new module).
-   - `CancellableChild` spawns one real OS process in its own process group
-     (`start_new_session=True`) and its `cancel()` sends a real `SIGTERM`
-     to the group, awaits genuine reaping, and escalates to `SIGKILL` only
-     if the child is still alive after a timeout. Proven against three real
-     child processes, not mocks: a plain sleeping child (confirmed gone via
-     `os.kill(pid, 0)` raising `ProcessLookupError` after cancel), a child
-     that traps and ignores `SIGTERM` (confirmed the `SIGKILL` escalation
-     path actually reaps it), and an already-exited child (confirmed
-     `cancel()` is a safe no-op, not a hang or an error).
-   - **Not yet done, and intentionally deferred**: wiring either piece into
-     `FactoryApp`'s live rendering path. `--tui` today is reachable only
-     from the `--plan` (preview, no execution) branch of
+     import-boundary guard, which still passes against this module). The
+     import-boundary guard proves only that this module does not import
+     those modules, not that it is actually wired to the real admission
+     flow yet -- that wiring is still open, tracked below.
+   - **A `CancellableChild` supervisor prototype was built, then removed
+     from `src/apmx/tui/` after review**, for three concrete reasons:
+     (a) it duplicated lifecycle ownership that belongs to
+     `apmx.contracts.process`'s canonical supervisor (including
+     descendant/process-group cleanup semantics), which must be extended
+     for real cancellation rather than shadowed by a second one; (b) it
+     was POSIX-only (`os.getpgid`/`killpg`, `SIGKILL`) with no Windows
+     path, which would not cover all five native targets; (c) its first
+     "ignores SIGTERM" test raced -- it signalled immediately after spawn
+     with no guarantee the child's signal handler was installed yet, so a
+     pass did not actually prove SIGKILL escalation. The mechanism check
+     now lives only in the test file, fixed and extended: each scenario
+     reads an explicit "ready" line back from the child (confirming its
+     signal handler, if any, is already armed) before signalling, removing
+     the race; a new scenario spawns a real grandchild process and
+     confirms `killpg` on the group reaps both the child and the
+     descendant, not just the immediate process (parent exit alone is not
+     descendant cleanup). All 5 are POSIX-gated (`skipif` on `win32`) since
+     they are not the cross-platform canonical path.
+   - **Not yet done, and intentionally deferred**: wiring `ConsentScreen`
+     into `FactoryApp`'s live rendering path, and building the real
+     cancellation path by extending `apmx.contracts.process::
+     supervise_process` (not a new supervisor). `--tui` today is reachable
+     only from the `--plan` (preview, no execution) branch of
      `invoke_contract()` (`src/apmx/commands/contracts.py`); the real
-     consent gate and the real supervised-process execution
-     (`src/apmx/contracts/process.py::supervise_process`) only run in the
-     separate non-planning execution branch today, with no code path that
-     reaches both `--tui` and live execution at once. Making that
-     connection is an engine-facing architecture decision (does `--tui`
-     gain a live-execution mode, and if so how does it call
-     `logger.confirm_factory()`/the engine's existing admit/execute flow
-     instead of this module reimplementing it) — tracked as the opening
-     item for milestone 3, not resolved unilaterally here, per "Canonical
-     engine and ContractLogger own semantics."
+     consent gate and the real supervised-process execution only run in
+     the separate non-planning execution branch today, with no code path
+     that reaches both `--tui` and live execution at once. This is
+     confirmed as the main, approved milestone 3 requirement (not a new
+     scope choice needing separate sign-off): `--tui` gains a live-
+     execution mode that calls the engine's existing admit/execute/
+     cancellation ownership, with the UI-to-runtime adapter kept outside
+     the presentation-only `tui/` module so the static import guard is not
+     forced into duplicating lifecycle semantics, per "Canonical engine
+     and ContractLogger own semantics."
 
 
 ## Milestones and acceptance
