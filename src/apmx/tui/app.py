@@ -596,6 +596,12 @@ class FactoryApp(App[None]):
             # bug this surfaced once already (see commit history).
             card = self.query_one(GraphView).card(nodes[0].identity)
             if card is not None:
+                # Must register as programmatic, exactly like `_follow()`,
+                # or the deferred `CardSelected` this schedules is
+                # indistinguishable from a real manual pick once it lands
+                # and incorrectly turns auto-follow off before the run ever
+                # starts moving.
+                self._programmatic_focus = nodes[0].identity
                 card.focus()
         self._refresh_header()
 
