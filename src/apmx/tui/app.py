@@ -379,10 +379,15 @@ class EvidencePane(_FilterableLogPane):
     EMPTY_TEXT = "No evidence captured yet -- status remains unknown, not verified."
 
 
-class DetailPane(Vertical):
+class DetailPane(VerticalScroll):
     """Declared needs/produces/checks and real dependencies for the selected
     card; status reflects whatever the card currently shows, never a second
-    computation of it."""
+    computation of it.
+
+    A narrow terminal (e.g. 80x24) can squeeze this pane below the height
+    the six detail lines need, especially once a dependency list wraps;
+    ``VerticalScroll`` (same base `GraphView` already uses) keeps every
+    field keyboard-reachable instead of silently clipping it."""
 
     selected: reactive[ContractNode | None] = reactive(None)
 

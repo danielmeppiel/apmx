@@ -26,7 +26,34 @@ from ..tui.graph import build_nodes
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from textual.app import App
+
     from ..contracts.resolution import ChainPlan, Graph
+
+
+def _fire_and_forget(app: App[object], callback: Callable[..., object], *args: object) -> None:
+    """Schedule *callback* on *app*'s event loop without waiting for it.
+
+    ``App.call_from_thread`` blocks the calling thread on ``Future.result()``
+    with no timeout. These call sites only drive UI side effects from the
+    background run thread (card status, event presentation, the final exit)
+    and never need the return value, but if the app is already mid-exit --
+    e.g. the user pressed ``q`` to quit while a run was still active, or the
+    run finished and is calling ``exit()`` itself -- the scheduled coroutine
+    may never get to run, and the blocking wait hangs forever. Scheduling
+    with ``call_soon_threadsafe`` instead is fire-and-forget: if the loop has
+    already stopped, the call is simply dropped, which is safe because there
+    is nothing left in the UI to update.
+    """
+    loop = getattr(app, "_loop", None)
+    if loop is None:
+        # Not a running Textual app (e.g. a test double standing in for one
+        # with no event loop of its own) -- fall back to a direct call, the
+        # same synchronous behaviour ``call_from_thread`` fakes already rely
+        # on in the unit tests.
+        callback(*args)
+        return
+    loop.call_soon_threadsafe(callback, *args)
 
 
 def _attach_live(
@@ -90,11 +117,11 @@ class LiveContractLogger(ContractLogger):
         if 1 <= index <= len(self._tui_identities):
             identity = self._tui_identities[index - 1]
             self._tui_state["current"] = identity
-            self._tui_app.call_from_thread(self._tui_app.apply_card_status, identity, "running")
+            _fire_and_forget(self._tui_app, self._tui_app.apply_card_status, identity, "running")
 
     def on_event(self, event: RunEvent) -> None:
         super().on_event(event)
-        self._tui_app.call_from_thread(self._present, event)
+        _fire_and_forget(self._tui_app, self._present, event)
 
     def _present(self, event: RunEvent) -> None:
         """Presentation only: every outcome word here already came from the
@@ -168,7 +195,7 @@ class LiveFactoryApp(FactoryApp):
         except BaseException as exc:  # noqa: BLE001 - surfaced to the caller, never swallowed
             self.run_failure = exc
         finally:
-            self.call_from_thread(self.exit)
+            _fire_and_forget(self, self.exit)
 
 
 def _print_final_summary(result: ChainResult) -> None:

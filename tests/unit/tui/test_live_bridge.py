@@ -14,6 +14,7 @@ import json
 import os
 import shlex
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -225,6 +226,12 @@ def test_live_factory_app_cancel_binding_sets_the_cooperative_flag(
     _producer(monkeypatch)
     closure = _closure(caller)
     ready = {"seen_cancel": False}
+    # Gates when the background runner is allowed to return (and the app to
+    # exit): without this, the runner can notice the first cancel press,
+    # return, and have the background thread start exiting the app *before*
+    # the test's own second (idempotency) press/pause lands, racing the
+    # in-flight pilot interaction against app teardown.
+    allow_finish = threading.Event()
 
     def runner(cancel_requested) -> ChainResult:
         for _ in range(200):
@@ -234,6 +241,7 @@ def test_live_factory_app_cancel_binding_sets_the_cooperative_flag(
             import time
 
             time.sleep(0.01)
+        allow_finish.wait(timeout=5)
         return ChainResult(
             chain_id="stub",
             record_path=caller / ".apm" / "stub",
@@ -255,6 +263,10 @@ def test_live_factory_app_cancel_binding_sets_the_cooperative_flag(
             # Pressing again must stay idempotent, not queue a second request.
             await pilot.press("c")
             await pilot.pause()
+            # Only now let the runner finish and the app exit: the
+            # idempotency check above is fully done against a definitely
+            # still-running app.
+            allow_finish.set()
 
     asyncio.run(scenario())
     assert ready["seen_cancel"] is True
