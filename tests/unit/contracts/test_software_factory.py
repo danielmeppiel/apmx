@@ -106,11 +106,20 @@ def test_only_build_declares_a_shared_repair_budget() -> None:
         )
 
 
-def test_build_discovers_files_without_relaxing_tool_error_stop() -> None:
-    body = load_frontmatter_document(EXAMPLE / "contracts/build.contract.md").body
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_build_discovers_files_without_relaxing_tool_error_stop(
+    tmp_path: Path, newline: str
+) -> None:
+    path = tmp_path / "build.contract.md"
+    path.write_text(
+        (EXAMPLE / "contracts/build.contract.md").read_text(encoding="ascii"),
+        encoding="ascii",
+        newline=newline,
+    )
+    body = load_frontmatter_document(path).body
     assert "inspect the relevant directories with" in body
     assert "Use the returned paths rather than guessing" in body
-    assert "If any tool reports an\nerror, stop" in body
+    assert f"If any tool reports an{newline}error, stop" in body
     assert "Do not run commands/checks, install packages or delegate." in body
 
 
