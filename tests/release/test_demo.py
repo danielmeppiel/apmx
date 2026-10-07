@@ -184,7 +184,7 @@ def test_install_uses_only_official_backend_and_scopes_no_scripts(
     def run(argv, **kwargs):
         manifest = json.loads((kit / "checkout-copilot/apm.yml").read_text())
         assert manifest["name"] == "checkout-demo"
-        assert manifest["dependencies"]["apm"] == [str(kit / "factory")]
+        assert manifest["dependencies"]["apm"] == ["../factory"]
         calls.append((argv, kwargs))
         return subprocess.CompletedProcess(argv, 0)
 
@@ -193,9 +193,9 @@ def test_install_uses_only_official_backend_and_scopes_no_scripts(
     argv, options = calls[0]
     assert argv[1:] == [
         "install",
-        str(kit / "factory"),
+        "../factory",
         "--root",
-        str(kit / "checkout-copilot"),
+        ".",
         "--only",
         "apm",
         "--target",
@@ -203,6 +203,7 @@ def test_install_uses_only_official_backend_and_scopes_no_scripts(
         "--no-trust-bin",
     ]
     assert Path(argv[0]) == kit / ".demo/native/apmx-test/libexec/apm/apm"
+    assert options["cwd"] == kit / "checkout-copilot"
     assert options["env"]["APM_NO_SCRIPTS"] == "1"
     assert options["timeout"] == 300
 
@@ -244,7 +245,7 @@ def test_real_backend_prepares_manifest_and_lock_together(kit: Path, monkeypatch
     REAL_INSTALL(kit, "copilot")
     manifest = load_yaml_str((kit / "checkout-copilot/apm.yml").read_text())
     assert manifest["name"] == "checkout-demo"
-    assert manifest["dependencies"]["apm"] == [str(kit / "factory")]
+    assert manifest["dependencies"]["apm"] == ["../factory"]
     assert (kit / "checkout-copilot/apm.lock.yaml").is_file()
 
 
@@ -298,11 +299,23 @@ def test_prepare_verifies_archive_before_creating_owned_kit(
     assert config["factory"] == demo.inventory(demo.ROOT / "examples/contracts/software-factory")
     assert (destination / "START-HERE.md").is_file()
     assert (destination / ".demo/bin/apmx").resolve() == destination / ".demo/native/apmx-test/apmx"
-    result = subprocess.run(
-        [str(destination / "demo"), "--help"], capture_output=True, text=True, check=False
-    )
-    assert result.returncode == 0
-    assert "copilot" in result.stdout and "reset" in result.stdout
+    assert (destination / ".demo/bin/apmx").readlink() == Path("../native/apmx-test/apmx")
+    assert (destination / ".demo/bin/demo").readlink() == Path("../../demo")
+    assert str(destination) not in (destination / "demo").read_text()
+    for executable, cwd in (
+        (str(destination / "demo"), kit.parent),
+        (str(destination / ".demo/bin/demo"), kit.parent),
+        ("./demo", destination),
+    ):
+        result = subprocess.run(
+            [executable, "--help"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "copilot" in result.stdout and "reset" in result.stdout
 
 
 def test_unknown_file_in_unregistered_workspace_is_never_overwritten(kit: Path) -> None:

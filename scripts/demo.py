@@ -232,14 +232,15 @@ def archive(root: Path, config: dict, names: list[str]) -> None:
 
 def install(root: Path, name: str) -> None:
     """Only official APM owns capability acquisition and materialization."""
-    manifest = root / f"checkout-{name}/apm.yml"
+    application = root / f"checkout-{name}"
+    manifest = application / "apm.yml"
     if not manifest.exists():
         with manifest.open("x", encoding="ascii") as stream:
             json.dump(
                 {
                     "name": "checkout-demo",
                     "version": "1.0.0",
-                    "dependencies": {"apm": [str(root / "factory")]},
+                    "dependencies": {"apm": ["../factory"]},
                 },
                 stream,
                 indent=2,
@@ -254,16 +255,16 @@ def install(root: Path, name: str) -> None:
             [
                 str(bundle(root) / "libexec/apm/apm"),
                 "install",
-                str(root / "factory"),
+                "../factory",
                 "--root",
-                str(root / f"checkout-{name}"),
+                ".",
                 "--only",
                 "apm",
                 "--target",
                 "agent-skills",
                 "--no-trust-bin",
             ],
-            cwd=root,
+            cwd=application,
             env=env,
             stdout=stream,
             stderr=subprocess.STDOUT,
@@ -401,20 +402,24 @@ def prepare(root: Path, archive_path: Path, expected: str, python: Path) -> None
     (private / "logs").mkdir(mode=0o700)
     (private / "lock").touch(mode=0o600)
     (private / "bin").mkdir()
-    (private / "bin/apmx").symlink_to(native / "apmx")
+    (private / "bin/apmx").symlink_to(Path("../native") / native.name / "apmx")
     shutil.copy2(Path(__file__), private / "demo.py")
+    entrypoint = (
+        "from pathlib import Path; import runpy,sys; "
+        "root=Path(sys.argv[1]).resolve().parent; "
+        "sys.argv=[str(root/'.demo/demo.py'),'--root',str(root),*sys.argv[2:]]; "
+        "runpy.run_path(sys.argv[0],run_name='__main__')"
+    )
     launcher = (
         "#!/bin/sh\nexec "
         + shlex.quote(str(python))
-        + " -I "
-        + shlex.quote(str(private / "demo.py"))
-        + " --root "
-        + shlex.quote(str(root))
-        + ' "$@"\n'
+        + " -I -c "
+        + shlex.quote(entrypoint)
+        + ' "$0" "$@"\n'
     )
     (root / "demo").write_text(launcher, encoding="utf-8")
     (root / "demo").chmod(0o755)
-    (private / "bin/demo").symlink_to(root / "demo")
+    (private / "bin/demo").symlink_to("../../demo")
     shutil.copy2(ROOT / "docs/demo.md", root / "START-HERE.md")
     config = {
         "schema": SCHEMA,

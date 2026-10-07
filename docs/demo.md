@@ -112,6 +112,13 @@ under `.demo/logs/`, preserves previous runs, and blocks entry until reset succe
 Do not move the kit, replace its factory, edit its original seed or substitute
 executables; prepare a new kit for another definition or binary.
 
+Kit-local links, launcher discovery and the consumer's `../factory` dependency
+are relative. The checker Python is an external machine prerequisite, not a
+relocatable virtual environment. Ownership metadata and historical canonical
+records deliberately retain their original absolute locations. To relocate,
+prepare a fresh destination and preserve the old kit as an archived generation;
+do not rewrite recorded evidence or reuse stale installed dependency state.
+
 ## Prepare once, backstage
 
 Keep the tooling here in the APMX repository, beside the existing factory and
@@ -139,7 +146,7 @@ native bundle; do not copy just the executable.
 From the source checkout, supply the trusted archive hash and checker interpreter:
 
 ```sh
-python scripts/demo.py prepare "$HOME/apmx-demo" \
+python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
   --archive /absolute/path/to/apmx-0.4.2-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --python /absolute/path/to/checker-environment/bin/python
@@ -150,7 +157,7 @@ uses the release owner's safe extraction and notice/provenance checks, and
 refuses existing destinations or destinations inside Git. It copies the current
 factory/seed with content inventories, retains the bundle, and installs the real
 pinned capability separately into each consumer through bundled APM.
-The helper creates a minimal consumer `apm.yml` declaring the factory when absent;
+The helper creates a minimal consumer `apm.yml` declaring `../factory` when absent;
 official APM resolves and locks its dependencies. Application source and the
 original seed are not edited.
 
