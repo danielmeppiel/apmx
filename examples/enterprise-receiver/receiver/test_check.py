@@ -905,7 +905,7 @@ def test_run_bundle_module_imports_cleanly_via_spec_from_file_location():
     as ``python3 run_bundle.py``."""
     module = receiver_check._run_bundle_module()
     assert hasattr(module, "run_execution_bundle")
-    assert hasattr(module, "read_process_bounded")
+    assert hasattr(module, "run_process_bounded")
 
 
 import importlib.util as _importlib_util  # noqa: E402
@@ -1002,6 +1002,210 @@ def test_bounded_io_rejects_valid_line_then_hang_past_deadline():
     assert result.trustworthy is False
 
 
+def test_bounded_io_rejects_process_that_closes_pipes_then_outlives_deadline():
+    """The exact reproduced regression: a process that closes BOTH its
+    stdout and stderr immediately (producing a clean EOF, ending the
+    select-and-read loop) but then keeps running past the original
+    deadline before exiting must still be reported ``timed_out`` -- a
+    post-EOF ``proc.wait()`` that used a fresh, deadline-independent
+    ``wait_grace_seconds`` budget instead of the ORIGINAL deadline would
+    let this process accumulate unaccounted-for extra runtime and then be
+    wrongly reported ``trustworthy``."""
+    proc = _spawn(
+        "import os, sys, time\n"
+        "os.close(1)\n"
+        "os.close(2)\n"
+        "time.sleep(0.3)\n"
+    )
+    started = time.monotonic()
+    try:
+        result = bounded_io.read_process_bounded(
+            proc, timeout_seconds=0.1, max_stdout_bytes=4096
+        )
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+    elapsed = time.monotonic() - started
+    assert elapsed < 5.0, "must be bounded by the original deadline, not the sleep duration"
+    assert result.timed_out is True
+    assert result.trustworthy is False
+
+
+def test_bounded_io_accepts_process_that_closes_pipes_then_exits_within_deadline():
+    """The non-regression counterpart: a process that closes its output
+    early but exits well within the original deadline must still be
+    accepted (so the fix above is a genuine deadline-preservation fix, not
+    an overcorrection that now rejects every early-EOF process)."""
+    proc = _spawn(
+        "import os, sys, time\n"
+        "os.close(1)\n"
+        "os.close(2)\n"
+        "time.sleep(0.05)\n"
+    )
+    result = bounded_io.read_process_bounded(proc, timeout_seconds=5.0, max_stdout_bytes=4096)
+    assert result.timed_out is False
+    assert result.returncode == 0
+    assert result.trustworthy is True
+
+
+def test_bounded_io_treats_unexpected_os_read_error_as_untrustworthy_not_eof():
+    """An unexpected ``OSError`` from the underlying ``os.read`` syscall
+    (anything other than the expected, transient ``InterruptedError``) is
+    a genuine read failure, not a success-shaped EOF. It must be recorded
+    distinctly (``read_error``) and must always make the result
+    untrustworthy, even when the process itself exits zero."""
+    proc = _spawn(
+        "import sys\n"
+        "sys.stdout.buffer.write(b'RESULT:{\"ok\": true}\\n')\n"
+        "sys.stdout.buffer.flush()\n"
+    )
+
+    real_os_read = bounded_io.os_read
+    call_count = {"n": 0}
+
+    def flaky_os_read(fd, n):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise OSError("simulated unexpected read failure")
+        return real_os_read(fd, n)
+
+    original = bounded_io.os_read
+    try:
+        bounded_io.os_read = flaky_os_read
+        result = bounded_io.read_process_bounded(proc, timeout_seconds=5.0, max_stdout_bytes=4096)
+    finally:
+        bounded_io.os_read = original
+        proc.kill()
+        proc.wait(timeout=5)
+
+    assert result.read_error is True
+    assert result.trustworthy is False
+
+
+def test_bounded_io_retries_on_interrupted_error_without_recording_a_failure():
+    """The expected, transient EINTR case must be silently retried --
+    never conflated with the genuine-failure case above."""
+    proc = _spawn(
+        "import sys\n"
+        "sys.stdout.buffer.write(b'RESULT:{\"ok\": true}\\n')\n"
+        "sys.stdout.buffer.flush()\n"
+    )
+
+    real_os_read = bounded_io.os_read
+    call_count = {"n": 0}
+
+    def flaky_os_read(fd, n):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise InterruptedError()
+        return real_os_read(fd, n)
+
+    original = bounded_io.os_read
+    try:
+        bounded_io.os_read = flaky_os_read
+        result = bounded_io.read_process_bounded(proc, timeout_seconds=5.0, max_stdout_bytes=4096)
+    finally:
+        bounded_io.os_read = original
+        proc.kill()
+        proc.wait(timeout=5)
+
+    assert result.read_error is False
+    assert result.stdout == b'RESULT:{"ok": true}\n'
+    assert result.trustworthy is True
+
+
+def test_write_stdin_bounded_does_not_block_past_deadline_on_non_reading_child():
+    """The exact "host and container_driver still BLOCK" regression: a
+    child that never reads its stdin at all (e.g. stalled before it ever
+    gets there) must not be able to hang this call past the deadline, even
+    with a payload comfortably larger than a typical pipe buffer (commonly
+    64KiB on Linux)."""
+    proc = subprocess.Popen(
+        [sys.executable, "-I", "-S", "-c", "import time\ntime.sleep(60)\n"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    payload = b"x" * (256 * 1024)
+    deadline = time.monotonic() + 0.5
+    started = time.monotonic()
+    try:
+        wrote_all = bounded_io.write_stdin_bounded(proc, payload, deadline)
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+    elapsed = time.monotonic() - started
+    assert elapsed < 5.0, "a non-reading child must never block the write past its deadline"
+    assert wrote_all is False
+
+
+def test_write_stdin_bounded_succeeds_for_a_reading_child():
+    """The non-regression counterpart: a child that actually reads and
+    closes stdin promptly must have its full payload delivered and be
+    reported as such."""
+    proc = subprocess.Popen(
+        [sys.executable, "-I", "-S", "-c", "import sys\nsys.stdin.buffer.read()\n"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    payload = b"hello"
+    deadline = time.monotonic() + 5.0
+    try:
+        wrote_all = bounded_io.write_stdin_bounded(proc, payload, deadline)
+    finally:
+        proc.wait(timeout=5)
+    assert wrote_all is True
+
+
+def test_run_process_bounded_reports_timed_out_when_stdin_write_cannot_complete():
+    """``run_process_bounded`` -- the single call both ``container_driver.py``
+    and ``run_bundle.py`` now use -- must report a non-reading child as
+    ``timed_out`` (never silently proceed to read as though a complete,
+    trustworthy payload had been delivered)."""
+    proc = subprocess.Popen(
+        [sys.executable, "-I", "-S", "-c", "import time\ntime.sleep(60)\n"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    payload = b"x" * (256 * 1024)
+    started = time.monotonic()
+    result = bounded_io.run_process_bounded(
+        proc, timeout_seconds=0.5, max_stdout_bytes=4096, stdin_payload=payload
+    )
+    elapsed = time.monotonic() - started
+    assert elapsed < 5.0
+    assert result.timed_out is True
+    assert result.trustworthy is False
+
+
+def test_run_process_bounded_round_trips_payload_for_a_well_behaved_child():
+    """The end-to-end non-regression counterpart: a child that reads its
+    stdin payload and echoes a derived response must be accepted."""
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            "import sys\n"
+            "data = sys.stdin.buffer.read()\n"
+            "sys.stdout.buffer.write(b'RESULT:' + data)\n"
+            "sys.stdout.buffer.flush()\n",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    result = bounded_io.run_process_bounded(
+        proc, timeout_seconds=5.0, max_stdout_bytes=4096, stdin_payload=b'{"ok": true}'
+    )
+    assert result.stdout == b'RESULT:{"ok": true}'
+    assert result.returncode == 0
+    assert result.trustworthy is True
+
+
 _run_bundle_spec = _importlib_util.spec_from_file_location(
     "_test_run_bundle", _CONTAINER_DIR / "run_bundle.py"
 )
@@ -1091,7 +1295,7 @@ def test_run_bundle_uses_explicit_bind_mount_not_named_volume(tmp_path, monkeypa
     monkeypatch.setattr(run_bundle.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(
         run_bundle,
-        "read_process_bounded",
+        "run_process_bounded",
         lambda *a, **k: bounded_io.BoundedReadResult(
             stdout=b'CASES:[{"ok": true, "observed": "Hello, World!"}]',
             stderr=b"",
@@ -1175,7 +1379,7 @@ def test_run_bundle_cleans_up_container_even_on_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(run_bundle.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(
         run_bundle,
-        "read_process_bounded",
+        "run_process_bounded",
         lambda *a, **k: bounded_io.BoundedReadResult(
             stdout=b"", stderr=b"", overflowed=False, timed_out=True, returncode=None
         ),
