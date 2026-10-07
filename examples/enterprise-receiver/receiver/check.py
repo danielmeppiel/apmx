@@ -38,7 +38,7 @@ _REPO_ROOT = _RECEIVER_ROOT.parent.parent
 _POLICY_DIR_RELATIVE = "examples/enterprise-receiver/policy"
 
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
-import verify_evidence  # noqa: E402  (pinned, apmx-independent verifier; reused, not duplicated)
+import verify_evidence
 
 
 class ReceiverFailure(Exception):
@@ -70,7 +70,8 @@ def trusted_bytes(ref: str, relative_path: str) -> bytes:
     completed = _run_git(["show", f"{ref}:{relative_path}"])
     if completed.returncode != 0:
         raise ReceiverFailure(
-            "policy-missing", f"Trusted ref {ref} has no {relative_path}: {completed.stderr.decode()}"
+            "policy-missing",
+            f"Trusted ref {ref} has no {relative_path}: {completed.stderr.decode()}",
         )
     return completed.stdout
 
@@ -225,6 +226,8 @@ def check_signer(evidence_dir: Path, base_sha: str) -> None:
         signers["repo"],
         "--signer-workflow",
         signers["signerWorkflow"],
+        "--predicate-type",
+        signers["predicateType"],
         "--format",
         "json",
     ]
@@ -256,7 +259,9 @@ def check_case(
     if not skip_signer:
         check_signer(evidence_dir, base_sha)
         checks.append("signer")
-    return CaseResult(case=case, definition_sha256=summary["definitionSha256"], checks=tuple(checks))
+    return CaseResult(
+        case=case, definition_sha256=summary["definitionSha256"], checks=tuple(checks)
+    )
 
 
 def main() -> int:
@@ -280,7 +285,9 @@ def main() -> int:
             skip_signer=args.skip_signer,
         )
     except ReceiverFailure as failure:
-        print(json.dumps({"status": "rejected", "policy": failure.policy, "detail": failure.detail}))
+        print(
+            json.dumps({"status": "rejected", "policy": failure.policy, "detail": failure.detail})
+        )
         return 1
     print(
         json.dumps(

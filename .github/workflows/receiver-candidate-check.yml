@@ -1,0 +1,102 @@
+name: Receiver Candidate Check
+
+# Unprivileged gate for the enterprise-receiver demo. Runs on the untrusted
+# pull_request head with no access to secrets or write permissions; policy is
+# always read from the trusted BASE ref, never the candidate's own tree. This
+# is the candidate side of the split described in docs/security-story.md: no
+# attestation signing happens here, and no privileged token is exposed to
+# code from the PR head.
+
+on:
+  pull_request:
+    branches:
+      - "examples/enterprise-receiver"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: receiver-candidate-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Receiver Candidate Check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Full history so check.py can read both the trusted base policy
+          # and the candidate head via `git show <sha>:<path>` regardless of
+          # how many commits separate them on examples/enterprise-receiver.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install independent evidence verifier
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv-evidence
+          .venv-evidence/bin/python -m pip install --quiet --upgrade pip
+          .venv-evidence/bin/python -m pip install --quiet -r scripts/evidence-requirements.txt
+
+      - name: Fetch pinned evidence schemas (offline afterwards)
+        run: |
+          set -euo pipefail
+          .venv-evidence/bin/python - "$PWD/.schema-cache" <<'PY'
+          import hashlib
+          import sys
+          from pathlib import Path
+          from urllib.request import urlopen
+
+          sys.path.insert(0, "scripts")
+          import verify_evidence as ve
+
+          cache = Path(sys.argv[1])
+          cache.mkdir(parents=True, exist_ok=True)
+          for name, expected in ve.SCHEMAS.items():
+              url = f"https://raw.githubusercontent.com/CycloneDX/specification/{ve.SCHEMA_COMMIT}/schema/{name}"
+              with urlopen(url, timeout=30) as response:
+                  raw = response.read(2 * 1024 * 1024)
+              digest = hashlib.sha256(raw).hexdigest()
+              assert digest == expected, f"schema hash mismatch for {name}: {digest}"
+              (cache / name).write_bytes(raw)
+              print(f"fetched {name}")
+          PY
+
+      - name: Run receiver checks for every case in this PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          mapfile -t case_dirs < <(
+            git diff --diff-filter=A --name-only "$merge_base" "$HEAD_SHA" -- \
+              'examples/enterprise-receiver/cases/*' |
+              sed -E 's#^(examples/enterprise-receiver/cases/[^/]+)/.*#\1#' |
+              sort -u
+          )
+          if [ "${#case_dirs[@]}" -eq 0 ]; then
+            echo "::error::No examples/enterprise-receiver/cases/<name> directory was added by this PR"
+            exit 1
+          fi
+          status=0
+          for case_dir in "${case_dirs[@]}"; do
+            case_name="$(basename "$case_dir")"
+            echo "::group::case: $case_name"
+            .venv-evidence/bin/python examples/enterprise-receiver/receiver/check.py \
+              --case "$case_name" \
+              --case-dir "$case_dir" \
+              --base-sha "$BASE_SHA" \
+              --head-sha "$HEAD_SHA" \
+              --schemas "$PWD/.schema-cache" \
+              || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"

@@ -32,20 +32,18 @@ from unittest.mock import Mock
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-import pytest  # noqa: E402
+import pytest
 
-from apmx.contracts import engine, evidence  # noqa: E402
-from apmx.contracts.models import (  # noqa: E402
+from apmx.contracts import engine, evidence
+from apmx.contracts.models import (
     CheckSpec,
     ContractLimits,
     LeafContract,
     LeafPlan,
 )
-from apmx.core.contract_logger import ContractLogger  # noqa: E402
+from apmx.core.contract_logger import ContractLogger
 
-_FIXED_BOM = (
-    b'{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[]}\n'
-)
+_FIXED_BOM = b'{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[]}\n'
 
 _APP_DIR = Path(__file__).resolve().parent.parent / "app"
 
@@ -57,6 +55,7 @@ def greet(name: str) -> str:
 '''
 
 _CANDIDATE_RELATIVE_PATH = "candidate/greeting.py"
+
 
 def _contract_body(variant: str) -> str:
     instruction = (
@@ -75,7 +74,9 @@ def _contract_body(variant: str) -> str:
         "---\nneeds: greeting.py\nproduces: "
         + _CANDIDATE_RELATIVE_PATH
         + "\nverify:\n  acceptance: "
-        + json.dumps(f"{shlex.quote(sys.executable)} checks/run_check.py {_CANDIDATE_RELATIVE_PATH}")
+        + json.dumps(
+            f"{shlex.quote(sys.executable)} checks/run_check.py {_CANDIDATE_RELATIVE_PATH}"
+        )
         + "\n---\n"
         + instruction
         + "\n"
@@ -157,13 +158,17 @@ def _install_fake_adapter(monkeypatch: pytest.MonkeyPatch, plan: LeafPlan) -> No
         from apmx.contracts.models import ProcessRequest
 
         return ProcessRequest(
-            argv=(sys.executable, "-c", code), cwd=snapshot.producer, timeout_seconds=timeout_seconds
+            argv=(sys.executable, "-c", code),
+            cwd=snapshot.producer,
+            timeout_seconds=timeout_seconds,
         )
 
     adapter = Mock()
     adapter.build_contract_request.side_effect = build_request
     monkeypatch.setattr(engine.frontend, "plan_contract", lambda *args, **kwargs: plan)
-    monkeypatch.setattr(engine.RuntimeFactory, "get_runtime_by_name", lambda *args, **kwargs: adapter)
+    monkeypatch.setattr(
+        engine.RuntimeFactory, "get_runtime_by_name", lambda *args, **kwargs: adapter
+    )
 
 
 def make_fixture(destination: Path, variant: str = "approved") -> dict:
