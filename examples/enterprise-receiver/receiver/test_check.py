@@ -709,6 +709,45 @@ def test_capability_revocation_allows_empty_capabilities_list(
     receiver_check.check_capability_revocation(valid_evidence, revoked_sha)  # must not raise
 
 
+def test_capability_revocation_rejects_digest_with_trailing_newline(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """A 65-character 'bodySha256' consisting of 64 valid hex characters
+    plus a trailing newline must be rejected, not accepted as if the
+    extra byte didn't matter. A ``match``-based check against a
+    ``$``-anchored pattern wrongly accepts this because ``$`` matches
+    just before a trailing newline, not only at the true end of string;
+    ``fullmatch`` must be used to require exact-length consumption."""
+    binding = _real_binding(valid_evidence)
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bad_sha = _write_raw_revocation_policy(
+        repo,
+        capabilities=[{"purl": "pkg:generic/demo", "bodySha256": "a" * 64 + "\n"}],
+    )
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+    assert excinfo.value.policy == "capability-revoked"
+    assert "bodySha256" in excinfo.value.detail
+
+
+@pytest.mark.parametrize("malformed_capabilities", [{}, ""])
+def test_capability_revocation_rejects_non_list_capabilities_value(
+    tmp_path, monkeypatch, valid_evidence, malformed_capabilities
+):
+    """The 'capabilities' policy field must itself be a JSON array. A dict
+    or string value (e.g. '{}' or '""') must be rejected explicitly, not
+    silently treated as an empty/no-op revocation set merely because it
+    happens to be non-iterable-as-entries or empty when enumerated."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bad_sha = _write_raw_revocation_policy(repo, capabilities=malformed_capabilities)
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+    assert excinfo.value.policy == "capability-revoked"
+    assert "capabilities" in excinfo.value.detail
+
+
 def test_capability_revocation_matches_same_pair_despite_different_install_path(
     tmp_path, monkeypatch
 ):
