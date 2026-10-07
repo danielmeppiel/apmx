@@ -146,7 +146,16 @@ def main(
                 ctx.exit(_finish_result(result, completion, logger))
             return
         admit_caller_policy(caller_root, limits=limits)
-        if not planning and not allow_advisory:
+        if (
+            not planning
+            and not allow_advisory
+            and not (
+                package_factory
+                and not allow_unproven_inputs
+                and logger.can_confirm_factory()
+                and logger.confirm_package_preparation(package_ref)
+            )
+        ):
             raise ContractError(
                 f"{ContractLogger._harness_label(harness)} and checks can read or change files, "
                 "use the network, and use "

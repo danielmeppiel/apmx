@@ -12,6 +12,11 @@ Both pricing and checkout totals must agree.
 
 ## Set up
 
+For a presentation with short commands and repeatable resets, use the
+[clean two-harness demo kit](../../../docs/demo.md). It prepares two separate
+consumers, uses a native APMX bundle and preserves earlier runs when resetting.
+The source-development setup below remains available.
+
 This is the **development five-stage example**. It requires the corresponding
 APMX source checkout with implicit project capture, backend provisioning and
 the `factory` extra. Existing v0.4.2 downloads and historical recordings below

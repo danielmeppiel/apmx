@@ -1400,7 +1400,21 @@ class ContractLogger:
             if self._factory_contract_count == 1
             else f"these {self._factory_contract_count} contracts"
         )
-        prompt = f"Run {subject} with {self._harness}? [y/N]"
+        return self._confirm(f"Run {subject} with {self._harness}? [y/N]")
+
+    def confirm_package_preparation(self, package_ref: str) -> bool:
+        """Authorize acquisition only; factory execution still needs its own consent."""
+        self._write(f"Package: {package_ref}", severity="heading", indent=0)
+        self._write(
+            "Preparation may install dependencies using host files, network and available "
+            "logins. Run only packages you trust. No agent runs yet; inspect the factory "
+            "and confirm execution afterward.",
+            layout=_Layout.PROSE,
+            indent=0,
+        )
+        return self._confirm("Prepare this package using host access? [y/N]")
+
+    def _confirm(self, prompt: str) -> bool:
         self._write(prompt, accent=prompt, indent=0)
         if not self._display.enabled:
             return False

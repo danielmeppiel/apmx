@@ -98,6 +98,45 @@ def test_public_package_factory_keeps_source_resources_and_consumer_separate(
     assert record["caller_root"] == str(caller)
 
 
+@pytest.mark.parametrize(
+    "interactive,answers,preparations,executions",
+    [
+        (True, "y\ny\n", 1, 2),
+        (True, "n\n", 0, 0),
+        (True, "\n", 0, 0),
+        (True, "", 0, 0),
+        (True, "y\nn\n", 1, 0),
+        (True, "y\n", 1, 0),
+        (False, "y\ny\n", 0, 0),
+    ],
+)
+def test_package_factory_separates_preparation_and_execution_consent(
+    caller, monkeypatch, interactive, answers, preparations, executions
+):
+    root = nested_factory(caller)
+    calls = producer(monkeypatch)
+    monkeypatch.setattr(ContractLogger, "can_confirm_factory", lambda self: interactive)
+    prepare = Mock(wraps=contract_source.prepare_contract_source)
+    monkeypatch.setattr("apmx.cli.prepare_contract_source", prepare)
+    result = CliRunner().invoke(
+        main, ["factory", "--from", str(root), "--on", "copilot"], input=answers
+    )
+    assert result.exit_code == (0 if executions else 21), result.output
+    assert prepare.call_count == preparations
+    assert len(calls) == executions
+    if interactive:
+        assert "Prepare this package using host access? [y/N]" in result.output
+    if preparations:
+        assert result.output.index("Prepare this package") < result.output.index("Factory:")
+        assert "Run these 2 contracts with Copilot? [y/N]" in result.output
+    if executions:
+        record = json.loads(next((caller / ".apm/chains").glob("*/record.json")).read_bytes())
+        assert record["complete"] is True
+        assert record["consent_source"] == "interactive"
+    else:
+        assert not (caller / ".apm/chains").exists()
+
+
 def test_focused_package_leaf_uses_same_factory_check_resources(caller, monkeypatch):
     root = nested_factory(caller)
     (caller / "first.txt").write_text("explicit captured upstream input\n", encoding="ascii")
