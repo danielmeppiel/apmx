@@ -13,7 +13,16 @@ analysis = Analysis(
     ) + copy_metadata("apmx") + [
         (str(root / "pyproject.toml"), "."),
     ],
-    hiddenimports=collect_submodules("apmx") + collect_submodules("rich._unicode_data"),
+    # textual.widgets lazily resolves names like TabbedContent/TabPane via
+    # module-level __getattr__ (see textual/widgets/__init__.py), so PyInstaller's
+    # static import graph never sees submodules such as textual.widgets._tab_pane;
+    # collect_submodules("textual") is required or the frozen TUI crashes at
+    # startup with ModuleNotFoundError the moment that tab is first touched.
+    hiddenimports=(
+        collect_submodules("apmx")
+        + collect_submodules("rich._unicode_data")
+        + collect_submodules("textual")
+    ),
     hookspath=[],
     runtime_hooks=[],
     excludes=["apm_cli", "pytest", "PyInstaller", "tkinter"],
