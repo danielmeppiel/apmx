@@ -1,6 +1,11 @@
 {
-  "$comment": "Trusted receiver signer policy, read from the PR base ref only. Evidence must carry a GitHub artifact attestation produced by exactly this pinned, privileged workflow identity (gh attestation verify --signer-workflow --predicate-type). This authenticates that the CI assessment recorded in the evidence was produced and approved by the pinned receiver-attest workflow -- not that a local agent's execution or any particular SLSA security level is retroactively certified.",
+  "$comment": "Trusted receiver signer policy, read from the PR base ref only. Evidence must carry a GitHub artifact attestation produced by exactly this pinned, privileged workflow identity, triggered from exactly this source ref (gh attestation verify --signer-workflow --predicate-type --source-ref). check_signer() additionally recomputes the subject digest itself and compares the signed predicate's own fields to expectedPredicate -- a bare verify exit code is never treated as sufficient. This authenticates that the exact CI assessment recorded by receiver-attest.yml (structural integrity + factory allowlist + capability revocation, see assess_canonical) was produced and approved by that pinned workflow -- not that a local agent's execution or any particular SLSA security level is retroactively certified.",
   "repo": "danielmeppiel/apmx",
   "signerWorkflow": "danielmeppiel/apmx/.github/workflows/receiver-attest.yml",
-  "predicateType": "https://danielmeppiel.dev/apmx/receiver-ci-assessment/v1"
+  "predicateType": "https://danielmeppiel.dev/apmx/receiver-ci-assessment/v1",
+  "sourceRef": "refs/heads/examples/enterprise-receiver",
+  "expectedPredicate": {
+    "assessedBy": "receiver-attest.yml",
+    "assessment": "accepted"
+  }
 }

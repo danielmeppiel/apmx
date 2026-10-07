@@ -7,10 +7,21 @@ name: Receiver Evidence Attestation
 # has no access to any candidate's working tree and performs no candidate
 # checking itself -- that is receiver-candidate-check.yml's unprivileged job.
 #
+# Before signing, this workflow runs the SAME factory-allowlist and
+# capability-revocation policy checks the unprivileged job runs for every
+# candidate (reused from receiver/check.py's assess_canonical, not
+# duplicated) against the canonical evidence package, in addition to the
+# independent structural/schema verifier. The signed predicate's
+# "assessment":"accepted" claim is only emitted once those checks actually
+# pass -- it does not merely assert schema validity.
+#
 # The signature this workflow produces authenticates one claim only: "this
-# exact CI assessment workflow accepted this exact evidence package". It is
-# not a SLSA build-provenance claim about the underlying candidate code, and
-# it does not retroactively authenticate any local/offline agent execution.
+# exact CI assessment workflow ran its full policy assessment against this
+# exact evidence package and it was accepted". It is not a SLSA
+# build-provenance claim about the underlying candidate code, it is not a
+# per-PR binding claim (binding only applies to a specific candidate PR, and
+# is the unprivileged job's responsibility), and it does not retroactively
+# authenticate any local/offline agent execution.
 
 on:
   push:
@@ -76,15 +87,42 @@ jobs:
               (cache / name).write_bytes(raw)
           PY
 
-      - name: Refuse to sign an evidence package that fails its own verifier
+      - name: Run the receiver's full policy assessment before signing
+        id: assess
         run: |
           set -euo pipefail
-          .venv-evidence/bin/python scripts/verify_evidence.py \
-            "$EVIDENCE_DIR" --schemas "$PWD/.schema-cache"
+          result="$(.venv-evidence/bin/python examples/enterprise-receiver/receiver/check.py \
+            assess-canonical \
+            --evidence-dir "$EVIDENCE_DIR" \
+            --base-sha "${{ github.sha }}" \
+            --schemas "$PWD/.schema-cache")"
+          echo "$result"
+          status="$(echo "$result" | .venv-evidence/bin/python -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+          if [ "$status" != "accepted" ]; then
+            echo "::error::Receiver policy assessment rejected the canonical evidence; refusing to sign."
+            exit 1
+          fi
+          definition_sha256="$(echo "$result" | .venv-evidence/bin/python -c 'import json,sys; print(json.load(sys.stdin)["definitionSha256"])')"
+          echo "definition_sha256=${definition_sha256}" >> "$GITHUB_OUTPUT"
+
+      - name: Build the signed predicate from the actual assessment result
+        id: predicate
+        env:
+          DEFINITION_SHA256: ${{ steps.assess.outputs.definition_sha256 }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg assessedBy "receiver-attest.yml" \
+            --arg assessment "accepted" \
+            --arg definitionSha256 "$DEFINITION_SHA256" \
+            '{assessedBy: $assessedBy, assessment: $assessment,
+              assessedChecks: ["integrity", "factory", "capability-revocation"],
+              definitionSha256: $definitionSha256}' \
+            > predicate.json
+          cat predicate.json
 
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ env.EVIDENCE_DIR }}/index.json
           predicate-type: ${{ env.PREDICATE_TYPE }}
-          predicate: |
-            {"assessedBy":"receiver-attest.yml","assessment":"accepted","verifier":"scripts/verify_evidence.py"}
+          predicate-path: predicate.json
