@@ -6,15 +6,32 @@ This is a FIXTURE generator, not a live demonstration transcript. It drives the
 tiny public application, so the resulting package is a genuine, reproducible
 product of APMX's own code paths rather than a hand-authored JSON sample.
 
-The only thing stood in for is the model backend: apmx normally drives a
-live Copilot/OpenCode runtime, which needs network/model credentials that are
-not available (and should not be committed) in this public repository. In its
-place we substitute a small, fully deterministic child process -- the exact
-technique apmx's own unit tests use (see ``tests/unit/contracts/test_engine.py
-::_fake_adapter``) -- that writes the fixed greeting and reports a normal
-completion. Everything downstream (baseline capture, checker execution,
-in-toto/SLSA statements, CycloneDX export, package assembly) is real apmx code
-running for real against real files on disk.
+Two things are deliberately stood in, and BOTH are disclosed here (an earlier
+draft of this docstring named only the first, which understated what is
+mocked):
+
+1. The model backend. apmx normally drives a live Copilot/OpenCode runtime,
+   which needs network/model credentials that are not available (and should
+   not be committed) in this public repository. In its place we substitute a
+   small, fully deterministic child process -- the exact technique apmx's own
+   unit tests use (see ``tests/unit/contracts/test_engine.py::_fake_adapter``)
+   -- that writes the fixed greeting and reports a normal completion.
+
+2. The capability inventory (CycloneDX BOM). ``evidence._inventory`` is
+   monkeypatched to return a fixed, EMPTY BOM (``_FIXED_BOM`` below) with no
+   components, rather than a real scan of an actual capability/tooling
+   inventory. This means the capability-revocation check exercised by this
+   fixture's evidence package proves only that the receiver's revocation
+   POLICY MECHANISM works end to end against *some* recorded lockIdentity --
+   it is NOT a real APMX capability inventory and does NOT, by itself,
+   demonstrate revocation of any actual, currently-deployed capability. Any
+   public claim about this fixture must say "capability-revocation policy
+   mechanism, exercised against a synthetic empty inventory", never "real
+   APMX capability inventory" or "live capability-revocation demo".
+
+Everything downstream of these two substitutions (baseline capture, checker
+execution, in-toto/SLSA statements, CycloneDX export, package assembly) is
+real apmx code running for real against real files on disk.
 
 No private evidence, transcript, or credential is read or published by this
 script. Output is written only under the path given on the command line.

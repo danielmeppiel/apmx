@@ -1,5 +1,5 @@
 {
-  "$comment": "Trusted receiver signer policy, read from the PR base ref only. Evidence must carry a GitHub artifact attestation produced by exactly this pinned, privileged workflow identity, triggered from exactly this source ref (gh attestation verify --signer-workflow --predicate-type --source-ref). check_signer() additionally recomputes the subject digest itself and compares the signed predicate's own fields to expectedPredicate -- a bare verify exit code is never treated as sufficient. This authenticates that the exact CI assessment recorded by receiver-attest.yml (structural integrity + factory allowlist + capability revocation, see assess_canonical) was produced and approved by that pinned workflow -- not that a local agent's execution or any particular SLSA security level is retroactively certified.",
+  "$comment": "Trusted receiver signer policy, read from the PR base ref only. Evidence must carry a GitHub artifact attestation produced by exactly this pinned, privileged workflow identity, triggered from exactly this source ref (gh attestation verify --signer-workflow --predicate-type --source-ref). check_signer() additionally recomputes the subject digest itself, checks the signer's own certificate sourceRepositoryDigest against approvedSignerSourceDigests, and compares the signed predicate's own definitionSha256/assessedChecks/expectedPredicate fields -- a bare verify exit code is never treated as sufficient. This authenticates that the exact CI assessment recorded by receiver-attest.yml (structural integrity + factory allowlist + capability revocation + independent execution boundary, see assess_canonical) was produced and approved by that pinned workflow AT an approved revision -- not that a local agent's execution or any particular SLSA security level is retroactively certified.",
   "repo": "danielmeppiel/apmx",
   "signerWorkflow": "danielmeppiel/apmx/.github/workflows/receiver-attest.yml",
   "predicateType": "https://danielmeppiel.dev/apmx/receiver-ci-assessment/v1",
@@ -7,5 +7,8 @@
   "expectedPredicate": {
     "assessedBy": "receiver-attest.yml",
     "assessment": "accepted"
-  }
+  },
+  "requiredAssessedChecks": ["integrity", "factory", "capability-revocation", "execution"],
+  "approvedSignerSourceDigests": [],
+  "approvedSignerSourceDigestsBootstrap": "Deliberately empty (fail-closed): this receiver must never trust a signer revision it has not actually reviewed, and revision trust can never be read from the evidence/predicate itself -- only from the Fulcio/sigstore certificate's own sourceRepositoryDigest field, which the signed content cannot forge. Bootstrap sequence (manual, explicitly authorized, NOT part of this commit): (1) land and merge this receiver's own commit of receiver-attest.yml on the 'examples/enterprise-receiver' branch/workflow source; (2) let it run once and inspect the resulting attestation's verificationResult.signature.certificate.sourceRepositoryDigest; (3) in a SEPARATE, SUBSEQUENT receiver-policy commit, add that exact commit digest here. Do not add a digest pre-emptively, and do not force every unrelated future commit on that ref to rotate this list -- only commits that actually change receiver-attest.yml's trusted behavior need a new approved digest, and old digests may be retired once no evidence depends on them."
 }

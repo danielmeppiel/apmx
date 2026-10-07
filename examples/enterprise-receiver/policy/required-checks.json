@@ -1,0 +1,13 @@
+{
+  "$comment": "Trusted receiver policy, read from the PR base ref only (git show <base_sha>:<path>), never from the PR's own tree. Each entry names a behavioral check this receiver independently RE-RUNS against the candidate's real bytes (see execute_receiver_checks in receiver/check.py) -- never the untrusted evidence package's own self-reported checks/run_check.py result. candidateScratchRelative/testScratchRelative describe an explicit throwaway scratch-directory layout (not guessed from the real repo's own paths) that mirrors the sibling-file layout the trusted test itself expects.",
+  "checks": [
+    {
+      "name": "greeting-salutation",
+      "candidatePath": "examples/enterprise-receiver/app/greeting.py",
+      "candidateScratchRelative": "greeting.py",
+      "testPath": "examples/enterprise-receiver/app/checks/test_greeting.py",
+      "testScratchRelative": "checks/test_greeting.py",
+      "testFunction": "test_greet_uses_full_salutation"
+    }
+  ]
+}

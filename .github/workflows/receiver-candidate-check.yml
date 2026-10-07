@@ -6,14 +6,34 @@ name: Receiver Candidate Check
 # GitHub loads this workflow's own YAML *and* every file it executes (this
 # file, check.py, evidence-requirements.txt) from the PR's own tree, so any
 # PR could silently replace them with something that always exits 0 while
-# keeping the same required-check name. pull_request_target loads the
-# workflow definition from the BASE ref, so it is pinned below with an
-# explicit `ref:` -- never implicit/default. The untrusted PR head is never
-# checked out or executed: its objects are fetched (not checked out) in a
-# separate step purely so check.py can read specific candidate bytes via
-# `git show <head_sha>:<path>` for hashing/diffing, matching the PR's
-# trust model in docs/security-story.md. No secrets are used and
-# `contents: read` is the only permission granted.
+# keeping the same required-check name.
+#
+# IMPORTANT (corrected from an earlier draft of this comment): GitHub does
+# NOT load a pull_request_target workflow's own YAML from this trigger's
+# `branches:` (i.e. the PR's *base ref*, examples/enterprise-receiver).
+# It always loads the workflow *definition* from the repository's actual
+# DEFAULT branch (main) at the time the run is dispatched -- this is not
+# configurable per-workflow and is unrelated to the `ref:` given to
+# actions/checkout below. That means, until examples/enterprise-receiver
+# is registered AND this workflow file exists on `main`, GitHub will not
+# run this workflow for PRs opened against examples/enterprise-receiver at
+# all (no check will even appear, let alone block). This is a genuine
+# platform prerequisite, not a configuration choice this repo can make
+# unilaterally from an isolated branch -- see docs/security-story.md and
+# the milestone report to the creator for the explicit call-out.
+#
+# Separately, and still correctly: the actions/checkout step below pins
+# ITS OWN checkout to the PR's trusted base commit
+# (`github.event.pull_request.base.sha`) via an explicit `ref:`, never an
+# implicit/default ref -- this controls which commit's *files* this job
+# reads and executes as code, which is a different question from which
+# commit the *workflow definition itself* was loaded from (always main,
+# per above). The untrusted PR head is never checked out or executed: its
+# objects are fetched (not checked out) in a separate step purely so
+# check.py can read specific candidate bytes via `git show <head_sha>:<path>`
+# for hashing/diffing, matching the PR's trust model in
+# docs/security-story.md. No secrets are used and `contents: read` is the
+# only permission granted.
 
 on:
   pull_request_target:
@@ -71,6 +91,18 @@ jobs:
           .venv-evidence/bin/python -m pip install --quiet --upgrade pip
           .venv-evidence/bin/python -m pip install --quiet -r scripts/evidence-requirements.txt
 
+      - name: Install independent execution interpreter
+        run: |
+          set -euo pipefail
+          # Deliberately a SEPARATE venv from .venv-evidence above: the
+          # interpreter that actually imports and runs candidate bytes
+          # (execute_receiver_checks in check.py) must not share a
+          # dependency set with the interpreter that verifies signed
+          # attestations. See scripts/execution-requirements.txt.
+          python3 -m venv .venv-execution
+          .venv-execution/bin/python -m pip install --quiet --upgrade pip
+          .venv-execution/bin/python -m pip install --quiet -r scripts/execution-requirements.txt
+
       - name: Fetch pinned evidence schemas (offline afterwards)
         run: |
           set -euo pipefail
@@ -100,6 +132,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          APMX_EXECUTION_PYTHON: ${{ github.workspace }}/.venv-execution/bin/python
         run: |
           set -euo pipefail
           merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
