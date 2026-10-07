@@ -66,6 +66,24 @@ allowlist. Generate attestations through a pinned supported GitHub action.
 Separate source/build type identifiers from attestation predicate types.
 Never present a user-controlled predicate field as authenticated platform identity.
 
+Before activation, enforce these distinctions in code and regression tests:
+
+- A workflow path plus mutable branch name is not an immutable signer revision.
+  Bootstrap a receiver-controlled digest allowlist or pinned reusable signer.
+- Signed definition, assessment set and receiver policy identity must match the
+  independently verified candidate context, not only an "accepted" string.
+- Successful evidence integrity verification can describe a recorded failed
+  checker. Require the receiver's mandated checks to pass; do not treat valid
+  schemas and consistent recorded failures as candidate acceptance.
+- Run actual receiver-required candidate checks without signing privileges and
+  bind their results before the separate attestation step.
+- Establish workflow-definition provenance, trigger prerequisites and the exact
+  checked PR revision using observed GitHub behavior, not YAML comments alone.
+- Refuse oversized Git blobs before reading them into memory. Limit untrusted
+  tree listings as well as file counts and bytes written to disk.
+- Label all mocked fixture surfaces, including model events and ABOM inventory.
+  Empty synthetic inventory is not a real dependency incident-response demo.
+
 ## Public examples
 
 Create an isolated receiver/demo base branch in the existing public repository,
