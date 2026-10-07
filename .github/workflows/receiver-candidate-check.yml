@@ -1,14 +1,22 @@
 name: Receiver Candidate Check
 
-# Unprivileged gate for the enterprise-receiver demo. Runs on the untrusted
-# pull_request head with no access to secrets or write permissions; policy is
-# always read from the trusted BASE ref, never the candidate's own tree. This
-# is the candidate side of the split described in docs/security-story.md: no
-# attestation signing happens here, and no privileged token is exposed to
-# code from the PR head.
+# Unprivileged gate for the enterprise-receiver demo.
+#
+# This MUST run as pull_request_target, not pull_request: for pull_request,
+# GitHub loads this workflow's own YAML *and* every file it executes (this
+# file, check.py, evidence-requirements.txt) from the PR's own tree, so any
+# PR could silently replace them with something that always exits 0 while
+# keeping the same required-check name. pull_request_target loads the
+# workflow definition from the BASE ref, so it is pinned below with an
+# explicit `ref:` -- never implicit/default. The untrusted PR head is never
+# checked out or executed: its objects are fetched (not checked out) in a
+# separate step purely so check.py can read specific candidate bytes via
+# `git show <head_sha>:<path>` for hashing/diffing, matching the PR's
+# trust model in docs/security-story.md. No secrets are used and
+# `contents: read` is the only permission granted.
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - "examples/enterprise-receiver"
 
@@ -27,11 +35,30 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          # Full history so check.py can read both the trusted base policy
-          # and the candidate head via `git show <sha>:<path>` regardless of
-          # how many commits separate them on examples/enterprise-receiver.
+          # Pin the checkout -- and therefore every file this job reads or
+          # executes as code -- to the PR's trusted BASE commit, never the
+          # PR's own tree. Full history so check.py's trusted-ref reads and
+          # the merge-base computation below work regardless of how many
+          # commits separate base/head on examples/enterprise-receiver.
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Fetch untrusted PR head objects (never checked out or executed)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # This only transfers git objects into the local store; it does
+          # not check them out or run anything. refs/pull/<N>/head always
+          # exists on the base repo for same-repo and fork PRs alike.
+          git fetch --no-tags --prune --no-recurse-submodules origin \
+            "refs/pull/${PR_NUMBER}/head"
+          # Defense in depth: confirm the fetched tip really is the exact
+          # commit GitHub's event payload named, not something that moved
+          # out from under us between event dispatch and this fetch.
+          git cat-file -e "${HEAD_SHA}^{commit}"
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -91,6 +118,7 @@ jobs:
             case_name="$(basename "$case_dir")"
             echo "::group::case: $case_name"
             .venv-evidence/bin/python examples/enterprise-receiver/receiver/check.py \
+              check-case \
               --case "$case_name" \
               --case-dir "$case_dir" \
               --base-sha "$BASE_SHA" \
