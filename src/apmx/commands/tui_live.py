@@ -159,6 +159,7 @@ class LiveFactoryApp(FactoryApp):
         self.append_diagnostic("Cancel requested; waiting for the current step to stop.")
 
     def on_mount(self) -> None:
+        super().on_mount()
         threading.Thread(target=self._run, name="apmx-tui-chain", daemon=True).start()
 
     def _run(self) -> None:
@@ -168,6 +169,29 @@ class LiveFactoryApp(FactoryApp):
             self.run_failure = exc
         finally:
             self.call_from_thread(self.exit)
+
+
+def _print_final_summary(result: ChainResult) -> None:
+    """Print the authoritative plain-text outcome after the TUI has exited.
+
+    ``launch_live`` disables ``ContractLogger``'s own live terminal echo so
+    Textual can own the alt-screen; nothing else replaces that echo once the
+    screen is released, so without this the operator sees nothing at all
+    about what happened. Every value below is read straight off the already
+    -recorded ``ChainResult``/``RunResult`` -- this never recomputes or
+    reinterprets an outcome, only reports the one the engine already
+    decided.
+    """
+    passed = sum(1 for run in result.runs if run.outcome is Outcome.COMPLETE)
+    total = len(result.runs)
+    print()
+    print(f"apmx factory: {result.outcome.name} ({passed}/{total} contracts passed)")
+    if result.stop_reason:
+        print(f"  stopped: {result.stop_reason}")
+    for run in result.runs:
+        if run.outcome is not Outcome.COMPLETE:
+            print(f"  {run.outcome.name}: {run.run_directory}")
+    print(f"  record: {result.record_path}")
 
 
 def launch_live(
@@ -211,7 +235,6 @@ def launch_live(
     if app.run_failure is not None:
         raise app.run_failure
     if app.chain_result is None:
-        raise ContractError(
-            "The live TUI exited before the run finished.", code="tui_interrupted"
-        )
+        raise ContractError("The live TUI exited before the run finished.", code="tui_interrupted")
+    _print_final_summary(app.chain_result)
     return app.chain_result

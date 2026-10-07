@@ -49,6 +49,42 @@ def build_nodes(graph: Graph) -> tuple[ContractNode, ...]:
     )
 
 
+@dataclass(frozen=True)
+class DependencyEdge:
+    """One real producer -> consumer edge, named by the declared file it
+    carries -- read straight from ``graph.edges``, never an assumed adjacency
+    between whatever levels happen to render next to each other."""
+
+    producer: str
+    consumer: str
+    name: str
+
+
+def dependency_edges(graph: Graph) -> tuple[DependencyEdge, ...]:
+    """Every real edge, with both ends resolved to the same card identities
+    the graph view renders (not raw catalog paths)."""
+    nodes = build_nodes(graph)
+    by_path = {
+        contract.path: node.identity for contract, node in zip(graph.order, nodes, strict=True)
+    }
+    result: list[DependencyEdge] = []
+    for edge in graph.edges:
+        consumer = by_path.get(edge.consumer)
+        producer = by_path.get(edge.producer)
+        if consumer is not None and producer is not None:
+            result.append(DependencyEdge(producer=producer, consumer=consumer, name=edge.name))
+    return tuple(result)
+
+
+def dependencies_of(graph: Graph) -> dict[str, tuple[DependencyEdge, ...]]:
+    """Map each node identity to the real edges that feed it (its direct
+    upstream producers), for the detail pane and the graph view's connectors."""
+    grouped: dict[str, list[DependencyEdge]] = {}
+    for edge in dependency_edges(graph):
+        grouped.setdefault(edge.consumer, []).append(edge)
+    return {identity: tuple(edges) for identity, edges in grouped.items()}
+
+
 def levels(graph: Graph) -> tuple[tuple[ContractNode, ...], ...]:
     """Group nodes into left-to-right levels from real producer/consumer edges.
 
