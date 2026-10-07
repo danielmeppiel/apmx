@@ -1,0 +1,9 @@
+{
+  "$comment": "Trusted receiver policy, read from the PR base ref only (git show <base_sha>:<path>), never from the PR's own tree. Maps Evidence Package-relative names, as recorded under attempts/<run_id>/baseline/ and attempts/<run_id>/artifacts/, to the real repository-relative paths the receiver binds them to at the PR base and head commits respectively.",
+  "baseline": {
+    "greeting.py": "examples/enterprise-receiver/app/greeting.py"
+  },
+  "candidate": {
+    "candidate/greeting.py": "examples/enterprise-receiver/app/greeting.py"
+  }
+}

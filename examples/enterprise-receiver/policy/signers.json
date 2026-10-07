@@ -1,0 +1,5 @@
+{
+  "$comment": "Trusted receiver signer policy, read from the PR base ref only. Evidence must carry a GitHub artifact attestation produced by exactly this pinned, privileged workflow identity (gh attestation verify --signer-workflow). This authenticates that the CI assessment recorded in the evidence was produced and approved by the pinned receiver-attest workflow -- not that a local agent's execution or any particular SLSA security level is retroactively certified.",
+  "repo": "danielmeppiel/apmx",
+  "signerWorkflow": "danielmeppiel/apmx/.github/workflows/receiver-attest.yml@refs/heads/examples/enterprise-receiver"
+}

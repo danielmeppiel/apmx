@@ -1,0 +1,4 @@
+{
+  "$comment": "Trusted receiver capability-revocation list, read from the PR base ref only. If an Evidence Package's capability-bindings.json names a capability whose lockIdentity appears here, the receiver rejects the PR even though binding, factory and signer checks would otherwise pass -- this is the incident-response control: revoking trust in a previously-approved imported capability without touching main's protections or any other policy file.",
+  "lockIdentity": []
+}
