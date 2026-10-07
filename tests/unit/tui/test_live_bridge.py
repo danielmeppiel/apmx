@@ -20,7 +20,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from apmx.commands.tui_live import LiveFactoryApp, _attach_live, launch_live
+from apmx.commands.tui_live import LiveFactoryApp, _attach_live, _fire_and_forget, launch_live
 from apmx.contracts import resolution
 from apmx.contracts.chain import run_chain
 from apmx.contracts.models import ChainResult, Outcome, ProcessRequest, RunEvent
@@ -273,6 +273,54 @@ def test_live_factory_app_cancel_binding_sets_the_cooperative_flag(
     assert app.run_failure is None
     assert app.chain_result is not None
     assert app.chain_result.outcome is Outcome.HALTED
+
+
+def test_fire_and_forget_does_not_block_when_the_apps_loop_has_already_stopped() -> None:
+    """Regression for the windows-x86_64 native CI job stalling for 35
+    minutes inside test_live_factory_app_cancel_binding_sets_the_cooperative_flag:
+    ``App.call_from_thread`` schedules the callback with
+    ``asyncio.run_coroutine_threadsafe`` and then blocks on ``Future.result()``
+    with no timeout, which hangs forever if the app's loop has already
+    stopped processing by the time the background run thread calls it (the
+    exact race that produced the CI stall). This directly reproduces that
+    dispatch-after-stop scenario against a real, stopped asyncio loop -- not
+    a timing-dependent Textual pilot interaction -- so it fails
+    deterministically, not just most of the time, if ``_fire_and_forget``
+    regresses back to a blocking wait.
+    """
+
+    class _StoppedLoopApp:
+        _loop: object = None
+
+    loop = asyncio.new_event_loop()
+    runner = threading.Thread(target=loop.run_forever, daemon=True)
+    runner.start()
+    try:
+        while not loop.is_running():
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        runner.join(timeout=5)
+        assert not runner.is_alive(), "setup failed: loop never stopped"
+        assert not loop.is_running()
+
+        app = _StoppedLoopApp()
+        app._loop = loop
+        called: list[str] = []
+        finished = threading.Event()
+
+        def call_it() -> None:
+            _fire_and_forget(app, called.append, "ran")
+            finished.set()
+
+        caller = threading.Thread(target=call_it, daemon=True)
+        caller.start()
+        caller.join(timeout=5)
+        assert finished.is_set(), (
+            "_fire_and_forget blocked despite the app's loop already being "
+            "stopped -- this is the exact production hang-on-exit bug"
+        )
+    finally:
+        loop.close()
 
 
 def test_launch_live_disables_terminal_echo_before_the_real_chain_runs(
