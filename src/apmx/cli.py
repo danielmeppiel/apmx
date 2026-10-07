@@ -1,4 +1,4 @@
-"""Native entrypoint for local factory directories and explicit leaf contracts."""
+"""Native entrypoint for factories, source packages and explicit leaf contracts."""
 
 import os
 import sys
@@ -14,6 +14,8 @@ from apmx.core.contract_logger import ContractLogger
 from apmx.core.output_mode import configure_output_mode, detect_output_mode
 from apmx.core.tls_trust import configure_process_tls_trust
 from apmx.install.contract_source import prepare_contract_source
+from apmx.install.contract_source_validation import validate_reference
+from apmx.models.dependency.reference import DependencyReference
 from apmx.version import get_version
 
 
@@ -54,27 +56,72 @@ def _finish_result(
     return int(result.outcome)
 
 
+def _select_entry(
+    contract: str | None, package_ref: str | None
+) -> tuple[str, str | None, Path | None]:
+    """Expand package shorthand without changing existing local workspace roots."""
+    if package_ref is not None:
+        return "." if contract is None else contract, package_ref, None
+    if contract is None:
+        raise click.UsageError(
+            "No factory selected. Pass a local directory, .contract.md file, "
+            "Git package reference, or --from PACKAGE_REF."
+        )
+    selected = Path(contract).expanduser().absolute()
+    if selected.is_dir():
+        return contract, None, selected
+    if contract.endswith(".contract.md"):
+        return contract, None, None
+    if selected.exists() or selected.is_symlink():
+        raise click.UsageError(
+            "The selected local entry is not a factory directory or .contract.md file. "
+            "Choose a factory directory or an explicit .contract.md file."
+        )
+    try:
+        dependency = DependencyReference.parse(contract)
+    except ValueError as exc:
+        raise click.UsageError(
+            "Selection is not a local factory directory, .contract.md file, or Git package "
+            "reference. Use ./PATH for a local factory or --from PACKAGE_REF for a package."
+        ) from exc
+    if dependency.is_local:
+        raise click.UsageError(
+            "Local factory directory was not found. Check the path, or use "
+            "--from PACKAGE_REF to run a package against the current project."
+        )
+    validate_reference(dependency)
+    return ".", contract, None
+
+
 @click.command(
     cls=NativeCommand,
     name="apmx",
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
-        "Run a factory directory or one .contract.md file. "
+        "Run a Git package, local factory directory or one .contract.md file. "
         "A factory's input and output files determine which steps run first.\n\n"
-        "Package entries are relative factory directories or .contract.md paths. Inputs and "
-        "retained evidence belong to the calling directory, not the package. "
-        "A factory directory is its own input, policy and retained-evidence root."
+        "Packages default to the whole factory at their root. With --from, an optional "
+        "entry selects a package-relative directory or .contract.md file. Package inputs "
+        "and evidence belong to the calling directory.\n\n"
+        "An existing positional directory is its own input, policy and evidence root. "
+        "Use ./PATH to require a local directory; use --from to select a source package "
+        "even when a local directory has the same name."
     ),
 )
-@click.argument("contract", type=str, metavar="FACTORY_OR_CONTRACT")
+@click.argument("contract", required=False, type=str, metavar="[FACTORY_OR_CONTRACT_OR_PACKAGE]")
 @click.option(
     "--from",
     "package_ref",
     metavar="PACKAGE_REF",
-    help="Select a factory or contract from an APM source package.",
+    help="Run an APM source package against the current project; default entry: package root.",
 )
 @click.option(
-    "--on", "harness", required=True, type=str, help="Agent CLI to use (copilot, opencode)."
+    "--on",
+    "harness",
+    default="copilot",
+    show_default=True,
+    type=str,
+    help="Agent CLI to use (copilot, opencode).",
 )
 @click.option("--model", metavar="MODEL", help="Model to use through the selected agent CLI.")
 @click.option(
@@ -98,7 +145,7 @@ def _finish_result(
 @click.pass_context
 def main(
     ctx: click.Context,
-    contract: str,
+    contract: str | None,
     package_ref: str | None,
     harness: str,
     model: str | None,
@@ -107,7 +154,7 @@ def main(
     verbose: bool,
     allow_unproven_inputs: bool,
 ) -> None:
-    """Dispatch an explicit directory or file through canonical admission."""
+    """Dispatch the selected factory or file through canonical admission."""
     configure_output_mode(detect_output_mode([]))
     configure_process_tls_trust()
     ctx.ensure_object(dict)
@@ -117,15 +164,10 @@ def main(
     result = None
     completion = CompletionBoundary()
     try:
-        selected = Path(contract).expanduser().absolute()
-        factory_root = selected if package_ref is None and selected.is_dir() else None
+        contract, package_ref, factory_root = _select_entry(contract, package_ref)
         package_factory = package_ref is not None and not contract.endswith(".contract.md")
         if not planning and factory_root is None and not package_factory:
             logger.execution_context()
-        if package_ref is None and factory_root is None and not contract.endswith(".contract.md"):
-            raise click.UsageError(
-                "Select a local factory directory or one explicit .contract.md file."
-            )
         if allow_unproven_inputs and factory_root is None and not package_factory:
             raise click.UsageError("--allow-unproven-inputs requires a factory directory.")
         if package_ref is None:

@@ -182,6 +182,23 @@ transitive matches without a top-level choice, remain an ambiguity error.
 
 ## Package factory entry selection
 
+Name a Git package once: `apmx OWNER/REPO` runs its root factory against the
+current application. Copilot is the default harness; `--on opencode` overrides
+it. No model is selected on the user's behalf. `--plan` is an optional offline
+preview, not a prerequisite to execution. Existing policy, dependency locks,
+integrity checks and preparation/execution consent still apply.
+
+For a local source package, use `apmx --from ../factory`. Omitting the entry
+selects the package root, exactly like an explicit `.`. This runs the entire
+root graph; it does not guess a leaf or choose among nested factories.
+
+An existing positional directory still runs in place and owns its inputs,
+policy and evidence. `apmx ../factory` therefore differs from
+`apmx --from ../factory`. Use `./PATH` to require a local directory: a missing
+explicit local path never becomes a remote fetch. Use `--from OWNER/REPO` to
+force package selection when a local directory has the same name. A bare
+`apmx` refuses to guess what to run.
+
 `apmx --from PACKAGE_REF factory --on copilot` selects every contract below the
 package-relative `factory` directory using the same dependency graph as a local
 factory. `.` explicitly selects the package root. The calling directory remains

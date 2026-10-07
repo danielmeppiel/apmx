@@ -12,6 +12,7 @@ from scripts import demo
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="The demo shell is POSIX-only")
 REAL_INSTALL = demo.install
+REAL_PREVIEW = demo.preview
 
 
 @pytest.fixture
@@ -166,6 +167,30 @@ def test_shell_runs_real_binary_without_hidden_consent_or_models(
     assert "APMX_APM_BACKEND" not in options["env"]
     assert "PYTHONPATH" not in options["env"]
     assert "APM_NO_SCRIPTS" not in options["env"]
+
+
+@pytest.mark.parametrize(
+    "name,options",
+    [
+        ("copilot", []),
+        ("opencode", ["--on", "opencode", "--model", "github-copilot/gpt-5.6-sol"]),
+    ],
+)
+def test_displayed_short_command_matches_the_native_preview(
+    kit: Path, monkeypatch: pytest.MonkeyPatch, capsys, name: str, options: list[str]
+) -> None:
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(demo.subprocess, "run", run)
+    command = ["apmx", "--from", "../factory", *options]
+    REAL_PREVIEW(kit, name)
+    assert calls == [[str(kit / ".demo/native/apmx-test/apmx"), *command[1:], "--plan"]]
+    assert demo.shell(kit, name) == 0
+    assert f"Run:     {' '.join(command)}\n" in capsys.readouterr().out
 
 
 def test_inherited_script_bypass_is_not_silently_used(

@@ -408,7 +408,7 @@ def test_failed_preparation_never_launches_producer_or_claims_success(
         (["--version"], 0),
         ([], 2),
         (["job", "--on", "copilot"], 2),
-        (["job.contract.md"], 2),
+        (["--from"], 2),
         (["job.contract.md", "extra", "--on", "copilot"], 2),
     ],
 )
