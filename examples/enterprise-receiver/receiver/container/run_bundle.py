@@ -4,7 +4,8 @@ produced -- is everything the disposable, zero-permission "execute" job
 (job B in receiver-candidate-check.yml/receiver-attest.yml) ever needs:
 no repository checkout, no ``scripts/verify_evidence`` import, no git
 invocation, no secrets. It depends on nothing beyond the Python standard
-library so it can run on a bare `ubuntu-24.04` runner with only Docker
+library (plus the sibling ``bounded_io.py`` shipped into the same bundle
+directory) so it can run on a bare `ubuntu-24.04` runner with only Docker
 preinstalled.
 
 ``check.py``'s own ``run_execution_bundle`` delegates to this module (via
@@ -18,13 +19,28 @@ checked out from the PR or any other untrusted source.
 For every required check, invokes `docker run` with a fully locked-down
 flag set (`--network none --read-only --cap-drop ALL --security-opt
 no-new-privileges --user 65532:65532`, resource/pids/cpu limits, a small
-`noexec,nosuid` tmpfs for `/tmp`, and a READ-ONLY bind mount containing only
-the bundle's own trusted scripts and the untrusted candidate bytes -- no
-Docker socket, no host workspace, no runner credentials, no expected
-outputs) against the pinned, digest-referenced image, feeds
-`container_driver.py` its JSON payload over stdin, and reads its single
-`CASES:[...]` line back with the SAME incremental, bounded-read discipline
-used inside the container itself (see `_read_bounded`).
+`noexec,nosuid` tmpfs for `/tmp`) against the pinned, digest-referenced
+image, feeds `container_driver.py` its JSON payload over stdin (candidate
+bytes travel over stdin as a string field, NEVER as a mounted file), and
+reads its single `CASES:[...]` line back with the SAME bounded-while-
+reading discipline used inside the container itself (see
+``bounded_io.read_process_bounded``).
+
+The ONLY thing ever bind-mounted into the container is a purpose-built,
+per-run MINIMAL harness directory containing exactly ``container_driver.py``,
+``executor.py``, and ``bounded_io.py`` -- never this bundle directory
+itself, which also holds ``manifest.json`` (containing every case's
+``expectedOutput``), this very file, and every OTHER check's
+``candidate.bin``. Mounting the whole bundle would hand a compromised,
+network-isolated-but-still-adversarial container read access to the exact
+answers it is being tested against, and to candidate bytes belonging to
+checks it has no business seeing. The harness directory's path is always
+resolved to an absolute path and passed via an explicit
+``--mount type=bind,source=...,destination=/harness,readonly`` flag --
+never the short ``-v NAME:/path`` form, which Docker's CLI treats as a
+NAMED VOLUME (not a host bind mount) whenever the given source has no path
+separator, silently mounting an anonymous, empty, Docker-managed volume
+instead of the intended host directory.
 
 This function performs its own best-effort, host-side (never candidate-
 reachable) comparison against `expectedOutput` purely so a clearly broken
@@ -41,67 +57,46 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import selectors
+import shutil
 import subprocess
-import time
+import sys
+import tempfile
+import uuid
 from pathlib import Path
 
+# This script is always invoked as ``python3 <bundle_dir>/run_bundle.py``
+# (a real top-level script execution, whether that is job B's actual
+# invocation, this module's own ``main()`` below, or ``check.py``'s
+# local/test-only ``importlib``-based delegation) OR loaded via
+# ``importlib.util.spec_from_file_location`` (which does NOT prepend the
+# loaded file's own directory to ``sys.path``). The explicit insert below
+# makes the sibling ``bounded_io.py`` importable in every one of those
+# cases, not just the ones where Python would have added it automatically.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bounded_io import BoundedReadResult, read_process_bounded  # noqa: E402
+
 # Bounds enforced WHILE reading the execution container's own stdout (not
-# only after a full, unbounded capture) -- see _read_bounded. A compromised
-# container cannot force this job to buffer an unbounded amount of data
-# before the bound is ever checked.
-_MAX_CONTAINER_OUTPUT_BYTES = 65536
-_CHUNK_BYTES = 4096
+# only after a full, unbounded capture) -- see bounded_io.read_process_bounded.
+# A compromised container cannot force this job to buffer an unbounded
+# amount of data before the bound is ever checked.
+_MAX_CONTAINER_STDOUT_BYTES = 65536
+# Docker CLI/daemon diagnostics (image pull failures, mount errors) land on
+# stderr; a bounded amount is retained for operator diagnostics on failure,
+# but is NEVER treated as, or substituted for, a pass/fail signal.
+_MAX_CONTAINER_STDERR_BYTES = 4096
 _EXECUTION_TIMEOUT_SECONDS = 20
 _CONTAINER_RUN_TIMEOUT_SECONDS = _EXECUTION_TIMEOUT_SECONDS + 15
+_DOCKER_RM_TIMEOUT_SECONDS = 15
 
 
-def _read_bounded(proc: subprocess.Popen, timeout_seconds: float) -> tuple[bytes, bool]:
-    """Read ``proc.stdout`` incrementally, stopping (and killing the
-    process) the instant either the byte bound or the deadline is hit --
-    the bound is enforced during the read loop itself, never only after a
-    full, unbounded capture."""
-    deadline = time.monotonic() + timeout_seconds
-    chunks: list[bytes] = []
-    total = 0
-    overflowed = False
-    selector = selectors.DefaultSelector()
-    assert proc.stdout is not None
-    selector.register(proc.stdout, selectors.EVENT_READ)
-    try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                proc.kill()
-                break
-            events = selector.select(timeout=min(remaining, 0.25))
-            if not events:
-                if proc.poll() is not None:
-                    break
-                continue
-            chunk = proc.stdout.read(_CHUNK_BYTES)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > _MAX_CONTAINER_OUTPUT_BYTES:
-                overflowed = True
-                proc.kill()
-                break
-            chunks.append(chunk)
-    finally:
-        selector.close()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
-    return b"".join(chunks), overflowed
-
-
-def _parse_driver_output(stdout: bytes, overflowed: bool) -> list[dict] | None:
-    if overflowed:
+def _parse_driver_output(result: BoundedReadResult) -> list[dict] | None:
+    # Exactly as in container_driver.py: a line's own content is never
+    # sufficient. A process that printed a well-formed CASES: line and then
+    # hung past the deadline, or exited nonzero afterward, or exceeded its
+    # output bound, is exactly as untrusted as one that printed nothing.
+    if not result.trustworthy:
         return None
-    text = stdout.decode(errors="replace")
+    text = result.stdout.decode(errors="replace")
     prefix = "CASES:"
     matching = [line for line in text.splitlines() if line.startswith(prefix)]
     if len(matching) != 1:
@@ -115,6 +110,41 @@ def _parse_driver_output(stdout: bytes, overflowed: bool) -> list[dict] | None:
     if not isinstance(parsed, list):
         return None
     return parsed
+
+
+def _build_harness_dir(bundle_dir: Path, scratch_root: Path) -> Path:
+    """Build the MINIMAL, candidate-inaccessible directory that is the
+    ONLY thing ever bind-mounted into the execution container: exactly the
+    trusted ``container_driver.py``/``executor.py``/``bounded_io.py`` the
+    prepare stage (job A) shipped into this bundle -- never
+    ``manifest.json`` (which holds every case's ``expectedOutput``), never
+    this file, never any check's ``candidate.bin``, and never the bundle
+    directory itself."""
+    harness_dir = scratch_root / "harness"
+    harness_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("container_driver.py", "executor.py", "bounded_io.py"):
+        shutil.copy2(bundle_dir / name, harness_dir / name)
+    return harness_dir
+
+
+def _cleanup_container(container_name: str) -> None:
+    """Unconditionally remove the container by its own unique, owned name,
+    regardless of whether this job killed the `docker` CLI client process,
+    the container exited on its own, or `--rm` already cleaned it up.
+    Killing the CLI process alone does NOT guarantee the container itself
+    (a separate process tree supervised by the daemon, not a child of the
+    CLI) stops running -- only an explicit `docker rm -f` against its own
+    name does. This is scoped to exactly the one container this run
+    created (never a broad `docker kill`/`prune` sweep, which could affect
+    unrelated containers on a shared runner) and is always best-effort: a
+    "no such container" failure here just means `--rm` (or a prior call to
+    this same function) already won the race, which is fine."""
+    subprocess.run(
+        ["docker", "rm", "--force", container_name],
+        capture_output=True,
+        timeout=_DOCKER_RM_TIMEOUT_SECONDS,
+        check=False,
+    )
 
 
 def run_execution_bundle(bundle_dir: Path) -> list[dict]:
@@ -146,48 +176,80 @@ def run_execution_bundle(bundle_dir: Path) -> list[dict]:
             "cases": [{"input": case["input"]} for case in entry["cases"]],
             "timeoutSeconds": _EXECUTION_TIMEOUT_SECONDS,
         }
-        args = [
-            "docker",
-            "run",
-            "--rm",
-            "-i",
-            "--network",
-            "none",
-            "--read-only",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "--user",
-            "65532:65532",
-            "--pids-limit",
-            "64",
-            "--memory",
-            "256m",
-            "--cpus",
-            "0.5",
-            "--tmpfs",
-            "/tmp:rw,noexec,nosuid,size=16m",
-            "-v",
-            f"{bundle_dir}:/harness:ro",
-            image,
-            "python3",
-            "/harness/container_driver.py",
-        ]
-        proc = subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        assert proc.stdin is not None
-        try:
-            proc.stdin.write(json.dumps(payload).encode())
-            proc.stdin.close()
-        except BrokenPipeError:
-            pass
-        stdout, overflowed = _read_bounded(proc, _CONTAINER_RUN_TIMEOUT_SECONDS)
-        observed_cases = _parse_driver_output(stdout, overflowed)
+        container_name = f"apmx-exec-{uuid.uuid4().hex}"
+        diagnostic: str | None = None
+        observed_cases: list[dict] | None = None
+        with tempfile.TemporaryDirectory(prefix="apmx-harness-") as scratch:
+            harness_dir = _build_harness_dir(bundle_dir, Path(scratch))
+            args = [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--name",
+                container_name,
+                "--network",
+                "none",
+                "--read-only",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--user",
+                "65532:65532",
+                "--pids-limit",
+                "64",
+                "--memory",
+                "256m",
+                "--cpus",
+                "0.5",
+                "--tmpfs",
+                "/tmp:rw,noexec,nosuid,size=16m",
+                "--mount",
+                f"type=bind,source={harness_dir.resolve()},destination=/harness,readonly",
+                image,
+                "python3",
+                "/harness/container_driver.py",
+            ]
+            try:
+                proc = subprocess.Popen(
+                    args,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                assert proc.stdin is not None
+                try:
+                    proc.stdin.write(json.dumps(payload).encode())
+                    proc.stdin.close()
+                except BrokenPipeError:
+                    pass
+                result = read_process_bounded(
+                    proc,
+                    _CONTAINER_RUN_TIMEOUT_SECONDS,
+                    _MAX_CONTAINER_STDOUT_BYTES,
+                    _MAX_CONTAINER_STDERR_BYTES,
+                )
+                observed_cases = _parse_driver_output(result)
+                if observed_cases is None:
+                    reason = (
+                        "timed out"
+                        if result.timed_out
+                        else "output exceeded the bound"
+                        if result.overflowed
+                        else f"exited with status {result.returncode}"
+                        if result.returncode != 0
+                        else "produced no single well-formed CASES line"
+                    )
+                    stderr_tail = result.stderr.decode(errors="replace").strip()
+                    diagnostic = f"container run {reason}" + (
+                        f"; stderr: {stderr_tail}" if stderr_tail else ""
+                    )
+            finally:
+                # Unconditional, bounded, scoped-to-this-one-container
+                # cleanup regardless of which branch above was taken.
+                _cleanup_container(container_name)
+
         case_results = []
         if observed_cases is None or len(observed_cases) != len(entry["cases"]):
             # Incomplete test set: crash, timeout, overflow, or a case
@@ -218,14 +280,18 @@ def run_execution_bundle(bundle_dir: Path) -> list[dict]:
                         "matched": matched,
                     }
                 )
-        results.append(
-            {
-                "name": name,
-                "candidateSha256": candidate_sha256,
-                "imageDigestUsed": image,
-                "cases": case_results,
-            }
-        )
+        result_entry = {
+            "name": name,
+            "candidateSha256": candidate_sha256,
+            "imageDigestUsed": image,
+            "cases": case_results,
+        }
+        if diagnostic is not None:
+            # Diagnostic context only -- never consulted by any pass/fail
+            # decision, which is derived exclusively from `case_results`
+            # above.
+            result_entry["diagnostic"] = diagnostic
+        results.append(result_entry)
     return results
 
 

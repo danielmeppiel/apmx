@@ -14,6 +14,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -166,6 +167,9 @@ def _init_repo(tmp_path: Path, *, approved_digests: list[str]) -> Path:
     (container_dir / "executor.py").write_bytes((_HERE / "container" / "executor.py").read_bytes())
     (container_dir / "run_bundle.py").write_bytes(
         (_HERE / "container" / "run_bundle.py").read_bytes()
+    )
+    (container_dir / "bounded_io.py").write_bytes(
+        (_HERE / "container" / "bounded_io.py").read_bytes()
     )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
@@ -889,6 +893,305 @@ def test_container_driver_rejects_oversized_response():
     }
     cases = _run_container_driver(payload)
     assert cases == [{"ok": False, "error": "observed value exceeded the size bound"}]
+
+
+def test_run_bundle_module_imports_cleanly_via_spec_from_file_location():
+    """``check.py`` loads ``run_bundle.py`` via ``importlib.util.spec_from_
+    file_location`` (see ``_run_bundle_module``), which does NOT add the
+    loaded file's own directory to ``sys.path`` automatically -- unlike a
+    genuine top-level script invocation. This proves run_bundle.py's own
+    explicit ``sys.path.insert`` makes its sibling ``bounded_io`` import
+    succeed in exactly this loader context too, not only when run directly
+    as ``python3 run_bundle.py``."""
+    module = receiver_check._run_bundle_module()
+    assert hasattr(module, "run_execution_bundle")
+    assert hasattr(module, "read_process_bounded")
+
+
+import importlib.util as _importlib_util  # noqa: E402
+
+_bounded_io_spec = _importlib_util.spec_from_file_location(
+    "_test_bounded_io", _CONTAINER_DIR / "bounded_io.py"
+)
+assert _bounded_io_spec is not None and _bounded_io_spec.loader is not None
+bounded_io = _importlib_util.module_from_spec(_bounded_io_spec)
+sys.modules[_bounded_io_spec.name] = bounded_io
+_bounded_io_spec.loader.exec_module(bounded_io)
+
+
+def _spawn(code: str) -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-I", "-S", "-c", code],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def test_bounded_io_rejects_one_byte_then_hang():
+    """The core regression this module exists to fix: a process that
+    writes a single byte (just enough to make ``selectors.select()``
+    report readiness) and then hangs WITHOUT closing its output must still
+    be caught by the deadline -- a buffered ``file.read(n)`` call would
+    block waiting to accumulate a full chunk and blow straight through the
+    intended timeout. Guarded by an external, independent wall-clock bound
+    (never relying solely on the code under test to enforce its own
+    timeout) so a regression here fails fast instead of hanging the suite."""
+    proc = _spawn(
+        "import sys, time\n"
+        "sys.stdout.buffer.write(b'x')\n"
+        "sys.stdout.buffer.flush()\n"
+        "time.sleep(60)\n"
+    )
+    started = time.monotonic()
+    try:
+        result = bounded_io.read_process_bounded(
+            proc, timeout_seconds=1.0, max_stdout_bytes=4096
+        )
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+    elapsed = time.monotonic() - started
+    assert elapsed < 10.0, "a 1s-timeout read must never take anywhere near 60s"
+    assert result.timed_out is True
+    assert result.overflowed is False
+    assert result.stdout == b"x"
+    assert result.trustworthy is False
+
+
+def test_bounded_io_rejects_valid_line_then_nonzero_exit():
+    """A well-formed, complete output line is never sufficient on its own:
+    a process that writes it and then exits with a nonzero status must be
+    reported as untrustworthy, not accepted merely because the line's
+    content looked fine."""
+    proc = _spawn(
+        "import sys\n"
+        "sys.stdout.buffer.write(b'RESULT:{\"ok\": true}\\n')\n"
+        "sys.stdout.buffer.flush()\n"
+        "sys.exit(3)\n"
+    )
+    result = bounded_io.read_process_bounded(proc, timeout_seconds=5.0, max_stdout_bytes=4096)
+    assert result.stdout == b'RESULT:{"ok": true}\n'
+    assert result.timed_out is False
+    assert result.overflowed is False
+    assert result.returncode == 3
+    assert result.trustworthy is False
+
+
+def test_bounded_io_rejects_valid_line_then_hang_past_deadline():
+    """A process that writes its complete, well-formed line and THEN hangs
+    (rather than exiting) must still be rejected: the line's presence in
+    ``stdout`` does not make it trustworthy once ``timed_out`` is set."""
+    proc = _spawn(
+        "import sys, time\n"
+        "sys.stdout.buffer.write(b'RESULT:{\"ok\": true}\\n')\n"
+        "sys.stdout.buffer.flush()\n"
+        "time.sleep(60)\n"
+    )
+    started = time.monotonic()
+    try:
+        result = bounded_io.read_process_bounded(
+            proc, timeout_seconds=1.0, max_stdout_bytes=4096
+        )
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+    elapsed = time.monotonic() - started
+    assert elapsed < 10.0
+    assert result.stdout == b'RESULT:{"ok": true}\n'
+    assert result.timed_out is True
+    assert result.trustworthy is False
+
+
+_run_bundle_spec = _importlib_util.spec_from_file_location(
+    "_test_run_bundle", _CONTAINER_DIR / "run_bundle.py"
+)
+assert _run_bundle_spec is not None and _run_bundle_spec.loader is not None
+run_bundle = _importlib_util.module_from_spec(_run_bundle_spec)
+sys.modules[_run_bundle_spec.name] = run_bundle
+_run_bundle_spec.loader.exec_module(run_bundle)
+
+
+def test_run_bundle_harness_dir_contains_only_expected_files(tmp_path):
+    """The harness directory bind-mounted into the execution container
+    must contain EXACTLY the three trusted scripts -- never
+    ``manifest.json`` (which holds every case's ``expectedOutput``), never
+    any check's ``candidate.bin``, never anything else the bundle
+    directory happens to also hold."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    for name in ("container_driver.py", "executor.py", "bounded_io.py"):
+        (bundle_dir / name).write_text(f"# {name}\n")
+    (bundle_dir / "manifest.json").write_text('{"expectedOutput": "secret"}')
+    check_dir = bundle_dir / "some-check"
+    check_dir.mkdir()
+    (check_dir / "candidate.bin").write_bytes(b"candidate bytes")
+
+    scratch_root = tmp_path / "scratch"
+    harness_dir = run_bundle._build_harness_dir(bundle_dir, scratch_root)
+
+    produced = {p.name for p in harness_dir.iterdir()}
+    assert produced == {"container_driver.py", "executor.py", "bounded_io.py"}
+
+
+def test_run_bundle_uses_explicit_bind_mount_not_named_volume(tmp_path, monkeypatch):
+    """Docker's ``-v NAME:/path`` short form treats ``NAME`` as a NAMED
+    VOLUME (not a host bind mount) whenever it contains no path separator
+    -- silently mounting an empty, Docker-managed volume instead of the
+    intended host directory. This proves the actual invocation uses the
+    unambiguous ``--mount type=bind,source=<absolute path>,...`` form."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    for name in ("container_driver.py", "executor.py", "bounded_io.py"):
+        (bundle_dir / name).write_bytes((_CONTAINER_DIR / name).read_bytes())
+    check_dir = bundle_dir / "greeting"
+    check_dir.mkdir()
+    (check_dir / "candidate.bin").write_bytes(_FIXED_GREETING)
+    manifest = {
+        "executionImage": _TEST_EXECUTION_IMAGE,
+        "checks": [
+            {
+                "name": "greeting",
+                "candidateMissing": False,
+                "entrypoint": {"module": "candidate_module", "function": "greet"},
+                "cases": [{"input": "World", "expectedOutput": "Hello, World!"}],
+            }
+        ],
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    captured_args = {}
+    real_popen = subprocess.Popen
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdin = _FakeStdin()
+            self.stdout = None
+            self.stderr = None
+            self.returncode = 0
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    class _FakeStdin:
+        def write(self, data):
+            pass
+
+        def close(self):
+            pass
+
+    def fake_popen(args, **kwargs):
+        if args and args[0] == "docker" and "run" in args:
+            captured_args["args"] = args
+            return _FakeProc()
+        return real_popen(args, **kwargs)
+
+    monkeypatch.setattr(run_bundle.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        run_bundle,
+        "read_process_bounded",
+        lambda *a, **k: bounded_io.BoundedReadResult(
+            stdout=b'CASES:[{"ok": true, "observed": "Hello, World!"}]',
+            stderr=b"",
+            overflowed=False,
+            timed_out=False,
+            returncode=0,
+        ),
+    )
+    cleaned_up = []
+    monkeypatch.setattr(
+        run_bundle, "_cleanup_container", lambda name: cleaned_up.append(name)
+    )
+
+    run_bundle.run_execution_bundle(bundle_dir)
+
+    args = captured_args["args"]
+    assert "--mount" in args
+    mount_value = args[args.index("--mount") + 1]
+    assert mount_value.startswith("type=bind,source=/"), mount_value
+    assert mount_value.endswith(",destination=/harness,readonly"), mount_value
+    assert not any(a == "-v" for a in args), "must never use the ambiguous -v short form"
+    assert "--name" in args
+    container_name = args[args.index("--name") + 1]
+    assert container_name.startswith("apmx-exec-")
+    assert cleaned_up == [container_name]
+
+
+def test_run_bundle_cleans_up_container_even_on_timeout(tmp_path, monkeypatch):
+    """Killing the local `docker` CLI client process does not stop the
+    actual container inside the daemon -- only an explicit, scoped
+    `docker rm -f <name>` against its own unique name does. This proves
+    cleanup runs even when the container run itself is treated as timed
+    out."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    for name in ("container_driver.py", "executor.py", "bounded_io.py"):
+        (bundle_dir / name).write_bytes((_CONTAINER_DIR / name).read_bytes())
+    check_dir = bundle_dir / "greeting"
+    check_dir.mkdir()
+    (check_dir / "candidate.bin").write_bytes(_FIXED_GREETING)
+    manifest = {
+        "executionImage": _TEST_EXECUTION_IMAGE,
+        "checks": [
+            {
+                "name": "greeting",
+                "candidateMissing": False,
+                "entrypoint": {"module": "candidate_module", "function": "greet"},
+                "cases": [{"input": "World", "expectedOutput": "Hello, World!"}],
+            }
+        ],
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    real_popen = subprocess.Popen
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdin = _FakeStdin()
+            self.stdout = None
+            self.stderr = None
+            self.returncode = None
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    class _FakeStdin:
+        def write(self, data):
+            pass
+
+        def close(self):
+            pass
+
+    def fake_popen(args, **kwargs):
+        if args and args[0] == "docker" and "run" in args:
+            return _FakeProc()
+        return real_popen(args, **kwargs)
+
+    monkeypatch.setattr(run_bundle.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        run_bundle,
+        "read_process_bounded",
+        lambda *a, **k: bounded_io.BoundedReadResult(
+            stdout=b"", stderr=b"", overflowed=False, timed_out=True, returncode=None
+        ),
+    )
+    cleaned_up = []
+    monkeypatch.setattr(
+        run_bundle, "_cleanup_container", lambda name: cleaned_up.append(name)
+    )
+
+    results = run_bundle.run_execution_bundle(bundle_dir)
+
+    assert len(cleaned_up) == 1
+    assert cleaned_up[0].startswith("apmx-exec-")
+    # The timed-out run must be recorded as a failed case, never a silent
+    # drop or an accidental pass.
+    assert results[0]["cases"][0]["matched"] is False
 
 
 def _docker_daemon_reachable() -> bool:

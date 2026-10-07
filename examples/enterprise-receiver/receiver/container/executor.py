@@ -2,8 +2,35 @@
 ``container_driver.py`` via ``subprocess.Popen`` (never ``fork``/
 ``multiprocessing``) specifically so the candidate code it imports shares NO
 address space, open file descriptors, or Python object graph with the
-driver that spawned it -- only this process's own stdin/stdout, which this
-script fully controls from outside candidate reach.
+DRIVER process. This does NOT mean the real stdout fd is outside the
+CANDIDATE's own reach: the candidate's code is ``exec_module``-ed directly
+into THIS process -- it shares this same process, the same open file
+descriptor table, and the same Python call stack as the code performing the
+fd-0/1/2 redirection below. A sufficiently adversarial candidate CAN read
+``real_stdout_fd``'s value via stack-frame introspection
+(``sys._getframe()``/``f_back``) or simply enumerate and probe this
+process's own open descriptors, and CAN then write directly to that fd
+itself, bypassing the devnull redirection entirely. Redirecting fd 0/1/2
+before import raises the bar against trivial accidental interference (a
+candidate's ordinary ``print()``/``os.write(1, ...)``) but is NOT a
+same-process sandboxing guarantee against a deliberately adversarial
+candidate, and must never be described or relied on as one.
+
+The property that actually makes this safe is enforced OUTSIDE this
+process entirely: this executor runs disposably inside the digest-pinned,
+network-isolated, read-only, non-root container, and NOTHING it ever
+writes -- however it writes it, forged, duplicated, flooded, or delayed
+past a deadline -- is trusted by anything outside the container. A
+candidate that discovers and forges the real stdout fd can at best cause
+``container_driver.py`` to see an extra, duplicated, or malformed
+``RESULT:`` line (all of which it explicitly rejects as failures, never
+picking "a" line to trust), or a line claiming an arbitrary ``observed``
+value (which the receiver's trusted, out-of-sandbox comparison against
+``expectedOutput`` -- a value this executor and the candidate it runs
+NEVER see -- still has to actually match to count as a pass). Duplicated,
+hung-past-deadline, or output-flooding behavior can never become
+"passed": see ``container_driver.py``'s and ``run_bundle.py``'s bounded,
+trustworthy-gated readers.
 
 Protocol: read one JSON payload from stdin (candidate source text, the
 module/function to call, and one bare input value), import the candidate
@@ -11,12 +38,9 @@ source as a throwaway module, call the named function with that input, and
 write exactly one ``RESULT:{...}`` line to this process's real stdout
 containing the raw observed return value (bounded in size) or a
 distinguished error -- nothing else. Before importing candidate code, this
-process's own fd 0/1/2 are redirected to /dev/null, so none of the
-candidate's own ``print()``/``os.write(1, ...)`` calls (however it tries,
-including direct raw-fd writes that bypass ``sys.stdout``) can reach the
-real channel back to the driver; the saved real stdout fd is only restored,
-and only ever written to by this trusted script's own code, after the call
-completes or raises.
+process's own fd 0/1/2 are redirected to /dev/null as a best-effort measure
+against ACCIDENTAL interference; see above for why this is not, by itself,
+a trust boundary against deliberate adversarial behavior.
 
 If candidate code calls ``os._exit()`` (or otherwise crashes the whole
 process) during import or execution, this process terminates immediately,

@@ -223,6 +223,24 @@ jobs:
           definition_sha256="$(echo "$result" | .venv-evidence/bin/python -c 'import json,sys; print(json.load(sys.stdin)["definitionSha256"])')"
           echo "definition_sha256=${definition_sha256}" >> "$GITHUB_OUTPUT"
 
+      - name: Write the assessment receipt for the gate job (even on rejection)
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 -c '
+          import json
+          json.dump({"accepted": "${{ steps.assess.outcome }}" == "success"}, open("receipt.json", "w"))
+          '
+
+      - name: Upload the assessment receipt for the gate job
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: receiver-attest-receipt-${{ github.run_id }}
+          path: receipt.json
+          retention-days: 1
+          if-no-files-found: ignore
+
       - name: Build the signed predicate from the actual assessment result
         id: predicate
         env:
@@ -244,3 +262,38 @@ jobs:
           subject-path: ${{ env.EVIDENCE_DIR }}/index.json
           predicate-type: ${{ env.PREDICATE_TYPE }}
           predicate-path: predicate.json
+
+  gate:
+    # The ACTUAL required status check, if/when this workflow is ever wired
+    # to a branch-protection rule -- never `sign` directly. Same fail-closed
+    # `if: always()` rationale as receiver-candidate-check.yml's gate job:
+    # a downstream job skipped because its own `needs:` upstream job failed
+    # is reported as "skipped", which GitHub branch protection treats as
+    # SATISFYING a required check, not blocking it.
+    name: Receiver Evidence Attestation / gate (required)
+    if: always()
+    needs: [prepare, execute, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: receiver-attest-receipt-${{ github.run_id }}
+          path: receipt/
+        continue-on-error: true
+
+      - name: Evaluate the fail-closed gate
+        run: |
+          set -euo pipefail
+          python3 examples/enterprise-receiver/receiver/gate.py \
+            --job-result "prepare=${{ needs.prepare.result }}" \
+            --job-result "execute=${{ needs.execute.result }}" \
+            --job-result "sign=${{ needs.sign.result }}" \
+            --receipt receipt/receipt.json
+
