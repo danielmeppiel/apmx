@@ -389,16 +389,21 @@ def check_binding(
         )
 
 
-_SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
-def _validated_revoked_pairs(entries: list) -> set[tuple[str, str]]:
+def _validated_revoked_pairs(entries) -> set[tuple[str, str]]:
     """Validate every structured capability-revocation selector explicitly,
     never silently drop a malformed one. A typo'd or missing digest in an
     intended deny rule must fail closed (reject the whole policy) rather
     than quietly narrowing the revocation set and turning an intended deny
     into an accidental allow. An absent/empty ``capabilities`` list remains
     valid (legacy lockIdentity-only policies stay supported)."""
+    if not isinstance(entries, list):
+        raise ReceiverFailure(
+            "capability-revoked",
+            f"revoked-capabilities.json 'capabilities' must be an array, got: {entries!r}",
+        )
     validated: set[tuple[str, str]] = set()
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -414,11 +419,15 @@ def _validated_revoked_pairs(entries: list) -> set[tuple[str, str]]:
                 f"revoked-capabilities.json capabilities[{index}] has a missing or "
                 f"non-string 'purl' selector field: {entry!r}",
             )
-        if not isinstance(body_sha256, str) or not _SHA256_HEX_PATTERN.match(body_sha256):
+        # fullmatch (not match/$) rejects a trailing newline or any other
+        # extra character after the 64 hex digits: a bare `match` with a
+        # `$`-anchored pattern accepts one trailing "\n" because `$` matches
+        # just before a final newline, not only at the true end of string.
+        if not isinstance(body_sha256, str) or not _SHA256_HEX_PATTERN.fullmatch(body_sha256):
             raise ReceiverFailure(
                 "capability-revoked",
                 f"revoked-capabilities.json capabilities[{index}] has a missing, "
-                "non-string, or malformed (not 64 lowercase hex characters) "
+                "non-string, or malformed (not exactly 64 lowercase hex characters) "
                 f"'bodySha256' selector field: {entry!r}",
             )
         validated.add((purl, body_sha256))
