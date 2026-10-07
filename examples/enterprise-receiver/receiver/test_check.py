@@ -538,6 +538,45 @@ def test_capability_revocation_allows_unrevoked_identity(tmp_path, monkeypatch):
     receiver_check.check_capability_revocation(evidence_dir, base_sha)  # must not raise
 
 
+def _revoke_policy(repo: Path, lock_identities: list[str]) -> None:
+    """Overwrite revoked-capabilities.json with a fresh commit (simulating a
+    real incident-response policy change on the trusted base ref)."""
+    policy_path = repo / _POLICY_RELATIVE / "revoked-capabilities.json"
+    policy_path.write_text(json.dumps({"lockIdentity": lock_identities}))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "revoke")
+
+
+def test_capability_revocation_real_fixture_identity_accept_then_reject(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """End-to-end proof using the REAL, nonempty capability-bindings.json
+    produced by the real ``make_fixture``/apmx inventory pipeline (not a
+    hand-written synthetic lockIdentity string like the two tests above):
+    the genuine ``full-salutation-style`` binding is accepted against an
+    empty revocation list, then genuinely rejected once its own real
+    lockIdentity is added to the policy -- proving the real inventory
+    output integrates correctly with incident-response revocation, not
+    just the check function in isolation."""
+    bindings = json.loads((valid_evidence / "capability-bindings.json").read_bytes())
+    assert bindings, "fixture produced an empty capability-bindings.json; GAP #6 regressed"
+    real_identity = bindings[0]["lockIdentity"]
+    assert real_identity, "real fixture binding has no lockIdentity to revoke"
+
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    # Accept: the real binding is not yet on the revocation list.
+    receiver_check.check_capability_revocation(valid_evidence, base_sha)  # must not raise
+
+    _revoke_policy(repo, [real_identity])
+    revoked_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_capability_revocation(valid_evidence, revoked_sha)
+    assert excinfo.value.policy == "capability-revoked"
+    assert real_identity in excinfo.value.detail
+
+
 def test_candidate_cannot_override_the_control_plane(tmp_path, monkeypatch, valid_evidence):
     """The PR head commits a tampered copy of the receiver's own approved-
     factories policy at the SAME repo path the real policy lives at. If
