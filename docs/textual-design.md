@@ -298,6 +298,66 @@ confirm):
    supervisor — `--tui` today is only reachable from the `--plan` (no
    execution) branch.
 
+### Milestone 2 correction: frozen `--tui` live/interactive path was never actually proven
+
+The milestone 2 entry above only proved the frozen binary's `--plan`
+(no-execution, preview-only) path rendered Textual output — it never drove
+a live run or any keystroke through the frozen executable. The project's
+own native CI (`native-notice-ci.yml` + `scripts/smoke.py`) builds all five
+archives and exercises them, but `smoke.py` never invokes `--tui` either —
+it is real proof of frozen packaging/notices/backend-staging, not of the
+frozen TUI's startup or interactivity. Re-verified directly, source-free,
+once this gap was flagged:
+
+1. **A fresh, from-spec rebuild for the current commit crashed
+   immediately** the first time `--tui` (live path, not `--plan`) reached
+   any `TabbedContent`/`TabPane` usage: `ModuleNotFoundError: No module
+   named 'textual.widgets._tab_pane'`. Root cause: `textual.widgets`
+   resolves those names through a module-level `__getattr__` lazy import
+   (`textual/widgets/__init__.py`), so PyInstaller's static import graph
+   never sees the backing submodules — this is a genuine, 100%-reproducible
+   packaging defect in `build/apmx.spec`, invisible to any source-run test
+   or to `--plan`-only smoke coverage, because the Checks/Evidence/Output
+   tabs are core to every real `--tui` session.
+2. **Fixed** by adding `collect_submodules("textual")` to the spec's
+   `hiddenimports`. Bundle size grew honestly from 29 MB to 80 MB (pulls in
+   Textual's full widget/driver surface, not just what this app imports) —
+   recorded here rather than hand-picking a narrower hidden-import list,
+   since the lazy-loader pattern makes a minimal allowlist fragile against
+   future Textual versions.
+3. **Verified genuinely, source-free, against the rebuilt frozen binary**
+   (macOS arm64, current commit): real `pty.fork()` child execing the
+   frozen executable directly (not `python -m apmx`, no `textual`/
+   `pyinstaller` on the child's `PATH`), forced `TERM=xterm-256color`, the
+   real read-only-sourced APM 0.30.0 backend staged into the bundle's
+   `libexec/apm/` (the frozen loader intentionally refuses `PATH`/env
+   overrides — see `apmx/install/apm_backend.py::locate_backend`, "Never
+   consult PATH or source overrides in a frozen release" — so this is the
+   only legitimate way to exercise a frozen build's real backend lookup),
+   run against the same hermetic 4-contract live factory used for
+   milestone 4/5 source evidence. Captured: genuine alternate-screen entry
+   (`CSI ?1049h`), a real mid-run `k` keystroke switching to the Checks tab
+   with live content rendered, genuine alternate-screen exit
+   (`CSI ?1049l`), and the authoritative plain-text `apmx factory: COMPLETE
+   (4/4 contracts passed)` summary with a real evidence-record path
+   surviving after exit — all emitted by the frozen executable itself, not
+   source. Interestingly, the frozen run's own evidence record reports
+   `assurance.profile: "native-advisory"` rather than the source profile,
+   confirming the native/source distinction is itself tracked in the
+   authoritative record, not just asserted.
+4. **Scope note for the remaining four native targets**: this proof is
+   necessarily macOS-arm64-only (no local cross-build). The other four
+   targets' CI builds are real (they build+notice+smoke-check the actual
+   archives), but — per the correction above — none of their CI jobs
+   invoke `--tui` either, so **frozen-TUI-interactive proof currently
+   exists for exactly one of five targets** (this host). The
+   `collect_submodules("textual")` fix is target-independent (a spec-file
+   change, not a platform-specific code path), so there is no known reason
+   it would behave differently on the other four, but that is an inference
+   from the fix's mechanism, not an observed proof — it is reported here
+   as such rather than rounded up to "all five platforms verified
+   interactive."
+
 ## Milestone 3 implementation notes
 
 Milestone 3 wires the live `--tui` path through the real engine instead of
