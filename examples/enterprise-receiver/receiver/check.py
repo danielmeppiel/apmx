@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,19 @@ _POLICY_DIR_RELATIVE = "examples/enterprise-receiver/policy"
 # exceed it, not to make a particular PR pass.
 _MAX_EVIDENCE_FILES = 2000
 _MAX_EVIDENCE_TOTAL_BYTES = 64 * 1024 * 1024
+# Per-blob cap, enforced from trusted git object metadata (git cat-file
+# --batch-check) BEFORE any blob's content is read into memory. Without
+# this, a single PR-supplied blob near the total cap would still be fully
+# read into a subprocess capture_output buffer first, making the total-byte
+# enforcement after-the-fact rather than byte-bounded.
+_MAX_EVIDENCE_BLOB_BYTES = 8 * 1024 * 1024
+# Raw ``git ls-tree -z`` output itself is bounded defensively: a PR cannot
+# make the *content* of any blob larger than the cap above, but an adversary
+# could in principle still try to inflate the listing's own output (e.g. an
+# enormous number of long paths) ahead of the file-count check below, since
+# that check only runs after the full listing is decoded. This caps the
+# subprocess capture itself.
+_MAX_LS_TREE_OUTPUT_BYTES = 16 * 1024 * 1024
 
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 import verify_evidence
@@ -119,6 +133,24 @@ def git_blob_sha256(ref: str, relative_path: str) -> str:
     return hashlib.sha256(completed.stdout).hexdigest()
 
 
+def git_blob_bytes(ref: str, relative_path: str) -> bytes:
+    """Read a candidate file's bytes at an arbitrary ref (e.g. the PR head).
+
+    Distinct from ``trusted_bytes`` in name (not in mechanism) to keep
+    "this ref's content is policy-trusted" separate from "this is the
+    specific candidate content we are about to independently re-check" --
+    callers of this function must already have hash-bound the result via
+    ``check_binding``/``git_blob_sha256`` before treating it as the real
+    repo's actual candidate.
+    """
+    completed = _run_git(["show", f"{ref}:{relative_path}"])
+    if completed.returncode != 0:
+        raise ReceiverFailure(
+            "binding", f"Candidate binding references a path missing at {ref}: {relative_path}"
+        )
+    return completed.stdout
+
+
 def git_changed_paths(base_sha: str, head_sha: str) -> set[str]:
     completed = _run_git(["diff", "--name-only", f"{base_sha}..{head_sha}"])
     if completed.returncode != 0:
@@ -126,31 +158,73 @@ def git_changed_paths(base_sha: str, head_sha: str) -> set[str]:
     return {line.strip() for line in completed.stdout.decode().splitlines() if line.strip()}
 
 
-def _git_ls_tree_blobs(ref: str, path_prefix: str) -> list[tuple[str, str]]:
-    """List (mode, path) for every blob at ``ref`` under ``path_prefix``.
+def _git_ls_tree_blobs(ref: str, path_prefix: str) -> list[tuple[str, str, str]]:
+    """List (mode, blob_sha, path) for every blob at ``ref`` under ``path_prefix``.
 
     Non-blob entries (symlinks, gitlinks/submodules) are rejected outright --
-    this is untrusted PR content and must never be followed or executed.
+    this is untrusted PR content and must never be followed or executed. The
+    blob sha is retained (not discarded) so callers can look up each blob's
+    trusted-metadata size via ``git cat-file --batch-check`` before reading
+    any content.
     """
-    completed = _run_git(["ls-tree", "-r", "-z", ref, "--", path_prefix])
+    completed = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "ls-tree", "-r", "-z", ref, "--", path_prefix],
+        capture_output=True,
+        check=False,
+    )
     if completed.returncode != 0:
         raise ReceiverFailure(
             "missing-evidence", f"Unable to list {path_prefix} at {ref}: {completed.stderr!r}"
         )
-    entries: list[tuple[str, str]] = []
+    if len(completed.stdout) > _MAX_LS_TREE_OUTPUT_BYTES:
+        raise ReceiverFailure(
+            "missing-evidence",
+            f"Evidence tree listing for {path_prefix} at {ref} exceeds the bounded "
+            f"output size of {_MAX_LS_TREE_OUTPUT_BYTES} bytes before it is even parsed.",
+        )
+    entries: list[tuple[str, str, str]] = []
     for record in completed.stdout.decode().split("\0"):
         if not record:
             continue
         meta, _, path = record.partition("\t")
-        mode, obj_type, _blob_sha = meta.split(" ", 2)
+        mode, obj_type, blob_sha = meta.split(" ", 2)
         if obj_type != "blob" or mode == "120000":
             raise ReceiverFailure(
                 "missing-evidence",
                 f"Evidence tree entry {path!r} at {ref} is not a plain file "
                 f"(mode={mode}, type={obj_type}); refusing to materialize it.",
             )
-        entries.append((mode, path))
+        entries.append((mode, blob_sha, path))
     return entries
+
+
+def _git_blob_sizes(blob_shas: list[str]) -> dict[str, int]:
+    """Look up each blob's size from trusted git object metadata alone.
+
+    This uses ``git cat-file --batch-check``, which never reads blob
+    *content* -- only object headers -- so a blob's size can be checked and
+    rejected before any of its bytes are ever loaded into memory via
+    ``git show``/``capture_output``.
+    """
+    if not blob_shas:
+        return {}
+    completed = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "cat-file", "--batch-check=%(objectname) %(objectsize)"],
+        input="\n".join(blob_shas).encode() + b"\n",
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise ReceiverFailure(
+            "missing-evidence", f"Unable to read blob metadata: {completed.stderr!r}"
+        )
+    sizes: dict[str, int] = {}
+    for line in completed.stdout.decode().splitlines():
+        if not line or line.endswith("missing"):
+            continue
+        sha, _, size = line.partition(" ")
+        sizes[sha] = int(size)
+    return sizes
 
 
 @contextmanager
@@ -160,10 +234,11 @@ def materialized_case_evidence(head_sha: str, case_dir_relative: str):
     The PR head is untrusted and its evidence directory is archive-shaped
     input (many files, including nested JSON), so this never does a blind
     ``git archive | tar -x``: every path is listed explicitly via
-    ``git ls-tree``, confined to this exact prefix, file count and total
-    byte size are bounded, and every byte is written with plain file
-    permissions (no symlinks, no executable bits) to a throwaway temporary
-    directory that is removed afterwards.
+    ``git ls-tree``, every blob's SIZE is checked from trusted git object
+    metadata (``git cat-file --batch-check``) and rejected BEFORE any
+    content is read, file count and total byte size are bounded, and every
+    byte is written with plain file permissions (no symlinks, no executable
+    bits) to a throwaway temporary directory that is removed afterwards.
     """
     evidence_prefix = f"{case_dir_relative.rstrip('/')}/evidence"
     blobs = _git_ls_tree_blobs(head_sha, evidence_prefix)
@@ -178,23 +253,36 @@ def materialized_case_evidence(head_sha: str, case_dir_relative: str):
             f"Evidence directory has {len(blobs)} files, exceeding the "
             f"bounded limit of {_MAX_EVIDENCE_FILES}.",
         )
+    sizes = _git_blob_sizes([blob_sha for _mode, blob_sha, _path in blobs])
+    total_bytes = 0
+    for _mode, blob_sha, path in blobs:
+        size = sizes.get(blob_sha)
+        if size is None:
+            raise ReceiverFailure("missing-evidence", f"Unable to size blob for {path!r}.")
+        if size > _MAX_EVIDENCE_BLOB_BYTES:
+            raise ReceiverFailure(
+                "missing-evidence",
+                f"Evidence file {path!r} is {size} bytes, exceeding the bounded "
+                f"per-file limit of {_MAX_EVIDENCE_BLOB_BYTES} bytes; refusing to "
+                "read its content at all.",
+            )
+        total_bytes += size
+        if total_bytes > _MAX_EVIDENCE_TOTAL_BYTES:
+            raise ReceiverFailure(
+                "missing-evidence",
+                f"Evidence directory exceeds the bounded size limit of "
+                f"{_MAX_EVIDENCE_TOTAL_BYTES} bytes (checked from object metadata, "
+                "before reading any content).",
+            )
     with tempfile.TemporaryDirectory(prefix="receiver-evidence-") as scratch:
         scratch_root = Path(scratch)
-        total_bytes = 0
-        for _mode, path in blobs:
+        for _mode, _blob_sha, path in blobs:
             relative = PurePosixPath(path).relative_to(evidence_prefix)
             if ".." in relative.parts:
                 raise ReceiverFailure("missing-evidence", f"Refusing path traversal: {path!r}")
             completed = _run_git(["show", f"{head_sha}:{path}"])
             if completed.returncode != 0:
                 raise ReceiverFailure("missing-evidence", f"Unable to read {path} at {head_sha}")
-            total_bytes += len(completed.stdout)
-            if total_bytes > _MAX_EVIDENCE_TOTAL_BYTES:
-                raise ReceiverFailure(
-                    "missing-evidence",
-                    f"Evidence directory exceeds the bounded size limit of "
-                    f"{_MAX_EVIDENCE_TOTAL_BYTES} bytes.",
-                )
             destination = scratch_root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(completed.stdout)
@@ -320,23 +408,173 @@ def check_capability_revocation(evidence_dir: Path, base_sha: str) -> None:
             )
 
 
-def check_signer(evidence_dir: Path, base_sha: str) -> None:
+_EXECUTION_TIMEOUT_SECONDS = 60
+
+
+def _required_checks(base_sha: str) -> list[dict]:
+    return trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/required-checks.json").get("checks", [])
+
+
+def execute_receiver_checks(
+    base_sha: str, candidate_bytes_by_real_path: dict[str, bytes]
+) -> list[dict]:
+    """Independently RE-RUN the receiver's own required checks against the
+    candidate's ACTUAL bytes, with no signing credentials and no trust in
+    the evidence's own self-reported results.
+
+    This is the missing unprivileged execution boundary: ``verify_evidence
+    .verify()``'s ``"status": "passed"`` only certifies that the Evidence
+    Package's recorded claims are internally CONSISTENT (its own
+    ``_check_statement`` explicitly accepts a recorded "FAILED" or "WARNED"
+    checker result as a valid, consistent claim) -- it never independently
+    re-executes anything, so it cannot by itself prove the candidate really
+    satisfies any requirement. Likewise ``check_case``/``assess_canonical``'s
+    other checks (integrity, factory, binding, capability-revocation) only
+    bind *identity and provenance*, never *behavior*. This function is the
+    one place that actually proves behavior, by running the RECEIVER's own
+    trusted test (read only from the base ref, never the untrusted evidence
+    or PR tree) against the real candidate bytes in a throwaway scratch
+    directory.
+
+    Deliberately does NOT execute the untrusted evidence's own embedded
+    ``checks/run_check.py`` -- that script is PR/evidence-controlled content
+    with no real-repo binding, so a malicious or buggy PR could ship a
+    rigged script that always reports success. The only code this function
+    executes is: (a) the candidate's own bytes, which are inert data until
+    imported by (b) the receiver's own pinned test module.
+
+    Must be invoked from a zero-permission context with no attestation
+    signing credentials and no policy write access; the candidate bytes
+    given here must never be trusted beyond "this looks like the right path
+    to test", since this function's entire purpose is to find out whether
+    they are actually acceptable.
+    """
+    results = []
+    for entry in _required_checks(base_sha):
+        name = entry["name"]
+        candidate_bytes = candidate_bytes_by_real_path.get(entry["candidatePath"])
+        if candidate_bytes is None:
+            results.append(
+                {
+                    "name": name,
+                    "passed": False,
+                    "detail": f"No candidate bytes supplied for {entry['candidatePath']!r}.",
+                }
+            )
+            continue
+        test_bytes = trusted_bytes(base_sha, entry["testPath"])
+        with tempfile.TemporaryDirectory(prefix="receiver-execute-") as scratch:
+            scratch_root = Path(scratch)
+            candidate_dest = scratch_root / entry["candidateScratchRelative"]
+            candidate_dest.parent.mkdir(parents=True, exist_ok=True)
+            candidate_dest.write_bytes(candidate_bytes)
+            test_dest = scratch_root / entry["testScratchRelative"]
+            test_dest.parent.mkdir(parents=True, exist_ok=True)
+            test_dest.write_bytes(test_bytes)
+            node_id = f"{entry['testScratchRelative']}::{entry['testFunction']}"
+            # Prefer an independently-pinned execution interpreter
+            # (scripts/execution-requirements.txt, installed into its own
+            # venv by the "execute" step of receiver-candidate-check.yml)
+            # over the evidence-verification interpreter, so the untrusted
+            # candidate's test run never shares a dependency set with the
+            # CycloneDX/in-toto verification code. Falls back to the
+            # current interpreter for local/unit-test runs.
+            execution_python = os.environ.get("APMX_EXECUTION_PYTHON", sys.executable)
+            try:
+                completed = subprocess.run(
+                    [execution_python, "-m", "pytest", "-q", node_id],
+                    cwd=scratch_root,
+                    capture_output=True,
+                    timeout=_EXECUTION_TIMEOUT_SECONDS,
+                    check=False,
+                    env={"PATH": os.environ.get("PATH", "")},
+                )
+                passed = completed.returncode == 0
+                detail = completed.stdout.decode(errors="replace")[-4000:]
+            except subprocess.TimeoutExpired:
+                passed = False
+                detail = (
+                    f"Execution of {node_id} exceeded the "
+                    f"{_EXECUTION_TIMEOUT_SECONDS}s receiver timeout."
+                )
+        results.append({"name": name, "passed": passed, "detail": detail})
+    return results
+
+
+def check_execution_boundary(base_sha: str, results: list[dict]) -> None:
+    required = {entry["name"] for entry in _required_checks(base_sha)}
+    observed = {result["name"]: result for result in results}
+    missing = required - observed.keys()
+    if missing:
+        raise ReceiverFailure(
+            "execution",
+            f"No independent execution result was recorded for required check(s): "
+            f"{sorted(missing)}. The receiver-required behavioral check(s) were never "
+            "actually re-run against the candidate's real bytes.",
+        )
+    failed = {
+        name: result.get("detail", "")
+        for name, result in observed.items()
+        if name in required and not result.get("passed")
+    }
+    if failed:
+        raise ReceiverFailure(
+            "execution",
+            "Independent re-execution of receiver-required check(s) against the "
+            f"candidate's actual bytes failed: {sorted(failed)}. A signed assessment "
+            "or structurally-valid evidence package never overrides this: the "
+            "candidate must actually pass the receiver's own test.",
+        )
+
+
+def check_signer(evidence_dir: Path, base_sha: str, definition_sha256: str) -> None:
     """Authenticate that this exact evidence index was signed by the pinned
-    attestation workflow, binding both the signer's identity/ref and the
-    content it actually claims to have assessed.
+    attestation workflow, AT an approved signer revision, binding the
+    signer's identity/ref, the specific evidence content it claims to have
+    assessed, and the specific set of checks it claims to have run.
 
     A zero exit code from ``gh attestation verify`` only proves a valid
     signature from *some* run of the named workflow exists for this exact
     subject digest -- it does not, by itself, prove the signer evaluated the
-    claims this receiver cares about. So the parsed ``--format json`` output
-    is inspected: the subject digest is independently recomputed (never
-    trusting gh's own report of it), the source ref is pinned via
-    ``--source-ref`` so only runs triggered from the receiver's own trusted
-    branch count, and every field in the policy's ``expectedPredicate`` is
-    compared exactly against the signed predicate -- rejecting, for example,
-    a validly-signed predicate that never actually claims policy acceptance.
+    claims this receiver cares about, nor that it ran at a revision this
+    receiver has actually reviewed and approved. So the parsed
+    ``--format json`` output is inspected in full:
+
+      * the subject digest is independently recomputed (never trusting gh's
+        own report of it);
+      * the source ref is pinned via ``--source-ref`` so only runs triggered
+        from the receiver's own trusted branch count;
+      * the signer's own COMMIT DIGEST (``signature.certificate
+        .sourceRepositoryDigest`` -- a Fulcio/sigstore certificate SAN field
+        populated directly from the OIDC token at signing time, which the
+        signed predicate's own content cannot forge) is checked against an
+        explicit allowlist in policy, so an older or weaker revision of the
+        signer workflow on the SAME ref cannot sign the same accepted
+        predicate. A workflow-path-plus-mutable-ref pin alone is NOT
+        equivalent to this: ``signerWorkflow``/``sourceRef`` only say "some
+        commit on this ref", not "a commit this receiver has reviewed".
+        Revision trust is never read from the predicate/evidence itself --
+        only from the certificate the verifier independently checks;
+      * every field in the policy's ``expectedPredicate`` is compared
+        exactly against the signed predicate (rejecting a validly-signed
+        predicate that never actually claims policy acceptance);
+      * the signed ``definitionSha256`` must equal the specific evidence
+        digest independently computed by this check (not merely "some
+        generic accepted predicate" -- it must be THIS evidence's own
+        definition); and
+      * the signed ``assessedChecks`` must be a superset of the policy's
+        ``requiredAssessedChecks`` (rejecting a signature that is silent
+        about, e.g., the independent execution boundary).
     """
     signers = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/signers.json")
+    approved_source_digests = set(signers.get("approvedSignerSourceDigests", []))
+    if not approved_source_digests:
+        raise ReceiverFailure(
+            "signer",
+            "signers.json has no approvedSignerSourceDigests; refusing to trust any "
+            "signer revision until the bootstrap commit-digest allowlist is populated.",
+        )
+    required_assessed_checks = set(signers.get("requiredAssessedChecks", []))
     subject = evidence_dir / "index.json"
     expected_digest = hashlib.sha256(subject.read_bytes()).hexdigest()
     args = [
@@ -377,14 +615,28 @@ def check_signer(evidence_dir: Path, base_sha: str) -> None:
         digests = {s.get("digest", {}).get("sha256") for s in subjects}
         if expected_digest not in digests:
             continue
+        certificate = (
+            result.get("verificationResult", {}).get("signature", {}).get("certificate", {})
+        )
+        source_digest = certificate.get("sourceRepositoryDigest")
+        if source_digest not in approved_source_digests:
+            continue
         predicate = statement.get("predicate", {})
-        if all(predicate.get(key) == value for key, value in expected_predicate.items()):
-            return
+        if not all(predicate.get(key) == value for key, value in expected_predicate.items()):
+            continue
+        if predicate.get("definitionSha256") != definition_sha256:
+            continue
+        assessed_checks = set(predicate.get("assessedChecks", []))
+        if required_assessed_checks and not required_assessed_checks.issubset(assessed_checks):
+            continue
+        return
     raise ReceiverFailure(
         "signer",
         "No verified attestation matched the exact expected subject digest "
-        f"({expected_digest}) and predicate {expected_predicate!r}. A signature "
-        "exists but does not authenticate this evidence's actual content/claims.",
+        f"({expected_digest}), an approved signer commit digest, predicate "
+        f"{expected_predicate!r}, definitionSha256 {definition_sha256}, and required "
+        f"assessedChecks {sorted(required_assessed_checks)}. A signature exists but "
+        "does not authenticate this evidence's actual content/claims/revision.",
     )
 
 
@@ -404,8 +656,21 @@ def check_case(
         check_binding(evidence_dir, index, base_sha, head_sha, case_dir_relative)
         check_capability_revocation(evidence_dir, base_sha)
         checks = ["integrity", "factory", "binding", "capability-revocation"]
+        # Independent unprivileged re-execution: binding already proved the
+        # evidence's recorded candidate hash matches the PR head's actual
+        # tree, so it is now safe to read the real candidate bytes at
+        # head_sha and re-prove behavior, not merely recorded/self-reported
+        # claims (see execute_receiver_checks' docstring).
+        binding_map = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/binding-map.json")
+        candidate_bytes_by_real_path = {
+            real_path: git_blob_bytes(head_sha, real_path)
+            for real_path in binding_map.get("candidate", {}).values()
+        }
+        execution_results = execute_receiver_checks(base_sha, candidate_bytes_by_real_path)
+        check_execution_boundary(base_sha, execution_results)
+        checks.append("execution")
         if not skip_signer:
-            check_signer(evidence_dir, base_sha)
+            check_signer(evidence_dir, base_sha, summary["definitionSha256"])
             checks.append("signer")
         return CaseResult(
             case=case, definition_sha256=summary["definitionSha256"], checks=tuple(checks)
@@ -422,11 +687,27 @@ def assess_canonical(evidence_dir: Path, base_sha: str, schemas_dir: Path) -> di
 
     Binding and signer checks are deliberately not run here: binding is
     specific to a PR candidate (there is none at sign time) and signer
-    verification would be circular before the signature exists.
+    verification would be circular before the signature exists. The
+    independent execution boundary IS run here (sourcing candidate bytes
+    directly from the canonical evidence package's own recorded artifacts,
+    since there is no PR head to read from), so the signed predicate's
+    "accepted" claim also proves the behavioral check actually passed, not
+    merely that the evidence's own self-report was internally consistent.
     """
     summary = check_integrity(evidence_dir, schemas_dir)
     check_factory_policy(summary["definitionSha256"], base_sha)
     check_capability_revocation(evidence_dir, base_sha)
+    index = _evidence_index(evidence_dir)
+    run_id = _run_id(index)
+    binding_map = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/binding-map.json")
+    candidate_bytes_by_real_path = {
+        real_path: (
+            evidence_dir / "attempts" / run_id / "artifacts" / evidence_relative
+        ).read_bytes()
+        for evidence_relative, real_path in binding_map.get("candidate", {}).items()
+    }
+    execution_results = execute_receiver_checks(base_sha, candidate_bytes_by_real_path)
+    check_execution_boundary(base_sha, execution_results)
     return summary
 
 

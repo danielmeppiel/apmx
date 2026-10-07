@@ -64,6 +64,17 @@ jobs:
           .venv-evidence/bin/python -m pip install --quiet --upgrade pip
           .venv-evidence/bin/python -m pip install --quiet -r scripts/evidence-requirements.txt
 
+      - name: Install independent execution interpreter
+        run: |
+          set -euo pipefail
+          # Same separation rationale as receiver-candidate-check.yml: the
+          # interpreter that runs the canonical evidence's candidate bytes
+          # against the receiver's own trusted test must not share a
+          # dependency set with the attestation-signing interpreter.
+          python3 -m venv .venv-execution
+          .venv-execution/bin/python -m pip install --quiet --upgrade pip
+          .venv-execution/bin/python -m pip install --quiet -r scripts/execution-requirements.txt
+
       - name: Fetch pinned evidence schemas (offline afterwards)
         run: |
           set -euo pipefail
@@ -89,6 +100,8 @@ jobs:
 
       - name: Run the receiver's full policy assessment before signing
         id: assess
+        env:
+          APMX_EXECUTION_PYTHON: ${{ github.workspace }}/.venv-execution/bin/python
         run: |
           set -euo pipefail
           result="$(.venv-evidence/bin/python examples/enterprise-receiver/receiver/check.py \
@@ -116,7 +129,7 @@ jobs:
             --arg assessment "accepted" \
             --arg definitionSha256 "$DEFINITION_SHA256" \
             '{assessedBy: $assessedBy, assessment: $assessment,
-              assessedChecks: ["integrity", "factory", "capability-revocation"],
+              assessedChecks: ["integrity", "factory", "capability-revocation", "execution"],
               definitionSha256: $definitionSha256}' \
             > predicate.json
           cat predicate.json

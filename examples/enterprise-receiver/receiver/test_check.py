@@ -29,6 +29,8 @@ import make_fixture
 _POLICY_RELATIVE = "examples/enterprise-receiver/policy"
 _APP_RELATIVE = "examples/enterprise-receiver/app/greeting.py"
 _BUGGY_GREETING = (_EXAMPLE_ROOT / "app" / "greeting.py").read_bytes()
+_APPROVED_SIGNER_DIGEST = "a" * 40
+_UNAPPROVED_SIGNER_DIGEST = "b" * 40
 _FIXED_GREETING = make_fixture._PATCHED_GREETING.encode()
 
 
@@ -68,13 +70,36 @@ def _init_repo(tmp_path: Path, *, approved_digests: list[str]) -> Path:
                     "assessedBy": "receiver-attest.yml",
                     "assessment": "accepted",
                 },
+                "requiredAssessedChecks": ["integrity", "factory", "capability-revocation"],
+                "approvedSignerSourceDigests": [_APPROVED_SIGNER_DIGEST],
             }
         )
     )
     (policy_dir / "revoked-capabilities.json").write_text(json.dumps({"lockIdentity": []}))
+    (policy_dir / "required-checks.json").write_text(
+        json.dumps(
+            {
+                "checks": [
+                    {
+                        "name": "greeting-salutation",
+                        "candidatePath": _APP_RELATIVE,
+                        "candidateScratchRelative": "greeting.py",
+                        "testPath": "examples/enterprise-receiver/app/checks/test_greeting.py",
+                        "testScratchRelative": "checks/test_greeting.py",
+                        "testFunction": "test_greet_uses_full_salutation",
+                    }
+                ]
+            }
+        )
+    )
     app_dir = repo / "examples" / "enterprise-receiver" / "app"
     app_dir.mkdir(parents=True)
     (app_dir / "greeting.py").write_bytes(_BUGGY_GREETING)
+    checks_dir = app_dir / "checks"
+    checks_dir.mkdir()
+    (checks_dir / "test_greeting.py").write_bytes(
+        (_EXAMPLE_ROOT / "app" / "checks" / "test_greeting.py").read_bytes()
+    )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
     return repo
@@ -227,8 +252,20 @@ def _fake_gh_run(returncode: int, stdout: bytes, stderr: bytes):
     return fake_run
 
 
-def _matching_attestation_json(evidence_dir: Path) -> bytes:
-    digest = hashlib.sha256((evidence_dir / "index.json").read_bytes()).hexdigest()
+def _attestation_json(
+    evidence_dir: Path,
+    *,
+    source_digest: str = _APPROVED_SIGNER_DIGEST,
+    assessment: str = "accepted",
+    subject_digest: str | None = None,
+    definition_sha256: str | None = None,
+    assessed_checks: tuple[str, ...] = ("integrity", "factory", "capability-revocation"),
+) -> bytes:
+    digest = (
+        subject_digest or hashlib.sha256((evidence_dir / "index.json").read_bytes()).hexdigest()
+    )
+    if definition_sha256 is None:
+        definition_sha256 = _evidence_digest(evidence_dir)
     return json.dumps(
         [
             {
@@ -238,13 +275,20 @@ def _matching_attestation_json(evidence_dir: Path) -> bytes:
                         "subject": [{"digest": {"sha256": digest}}],
                         "predicate": {
                             "assessedBy": "receiver-attest.yml",
-                            "assessment": "accepted",
+                            "assessment": assessment,
+                            "definitionSha256": definition_sha256,
+                            "assessedChecks": list(assessed_checks),
                         },
-                    }
+                    },
+                    "signature": {"certificate": {"sourceRepositoryDigest": source_digest}},
                 }
             }
         ]
     ).encode()
+
+
+def _matching_attestation_json(evidence_dir: Path) -> bytes:
+    return _attestation_json(evidence_dir)
 
 
 def test_signer_check_rejects_when_gh_fails(tmp_path, monkeypatch, valid_evidence):
@@ -257,7 +301,7 @@ def test_signer_check_rejects_when_gh_fails(tmp_path, monkeypatch, valid_evidenc
         _fake_gh_run(1, b"", b"no attestations found"),
     )
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha)
+        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
     assert excinfo.value.policy == "signer"
 
 
@@ -270,7 +314,8 @@ def test_signer_check_accepts_when_gh_succeeds(tmp_path, monkeypatch, valid_evid
         "run",
         _fake_gh_run(0, _matching_attestation_json(valid_evidence), b""),
     )
-    receiver_check.check_signer(valid_evidence, base_sha)  # must not raise
+    # must not raise
+    receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
 
 
 def test_signer_check_rejects_predicate_content_mismatch(tmp_path, monkeypatch, valid_evidence):
@@ -280,27 +325,11 @@ def test_signer_check_rejects_predicate_content_mismatch(tmp_path, monkeypatch, 
     trust-boundary review flagged)."""
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    digest = hashlib.sha256((valid_evidence / "index.json").read_bytes()).hexdigest()
-    mismatched = json.dumps(
-        [
-            {
-                "verificationResult": {
-                    "statement": {
-                        "predicateType": "https://example.invalid/receiver-ci-assessment/v1",
-                        "subject": [{"digest": {"sha256": digest}}],
-                        "predicate": {
-                            "assessedBy": "receiver-attest.yml",
-                            "assessment": "rejected",
-                        },
-                    }
-                }
-            }
-        ]
-    ).encode()
+    mismatched = _attestation_json(valid_evidence, assessment="rejected")
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, mismatched, b""))
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha)
+        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
     assert excinfo.value.policy == "signer"
 
 
@@ -309,26 +338,95 @@ def test_signer_check_rejects_subject_digest_mismatch(tmp_path, monkeypatch, val
     (i.e. it attests to some other evidence package) must be rejected."""
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    wrong_digest = json.dumps(
-        [
-            {
-                "verificationResult": {
-                    "statement": {
-                        "predicateType": "https://example.invalid/receiver-ci-assessment/v1",
-                        "subject": [{"digest": {"sha256": "0" * 64}}],
-                        "predicate": {
-                            "assessedBy": "receiver-attest.yml",
-                            "assessment": "accepted",
-                        },
-                    }
-                }
-            }
-        ]
-    ).encode()
+    wrong_digest = _attestation_json(valid_evidence, subject_digest="0" * 64)
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, wrong_digest, b""))
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha)
+        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+    assert excinfo.value.policy == "signer"
+
+
+def test_signer_check_rejects_unapproved_signer_revision(tmp_path, monkeypatch, valid_evidence):
+    """A validly-signed attestation from a real, legitimately-authenticated
+    run of the signer workflow -- but at a commit/revision this receiver has
+    not actually approved -- must still be rejected. This requires no live
+    second signer identity: it is purely a policy-side allowlist check, so
+    this exercises it directly against a verifier-success payload carrying
+    an unapproved sourceRepositoryDigest (the live-identity/certificate
+    cryptography itself is exercised separately by the other signer tests,
+    which all use the approved digest)."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    unapproved = _attestation_json(valid_evidence, source_digest=_UNAPPROVED_SIGNER_DIGEST)
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, unapproved, b""))
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+    assert excinfo.value.policy == "signer"
+
+
+def test_signer_check_rejects_empty_allowlist(tmp_path, monkeypatch, valid_evidence):
+    """A signers.json with no approvedSignerSourceDigests must fail closed
+    even when gh attestation verify would otherwise succeed -- this is the
+    deliberate pre-bootstrap state."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    policy_path = repo / _POLICY_RELATIVE / "signers.json"
+    policy = json.loads(policy_path.read_text())
+    policy["approvedSignerSourceDigests"] = []
+    policy_path.write_text(json.dumps(policy))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "empty allowlist")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    monkeypatch.setattr(
+        receiver_check.subprocess,
+        "run",
+        _fake_gh_run(0, _matching_attestation_json(valid_evidence), b""),
+    )
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+    assert excinfo.value.policy == "signer"
+
+
+def test_signer_check_rejects_definition_sha256_mismatch(tmp_path, monkeypatch, valid_evidence):
+    """A validly-signed, correctly-worded, approved-revision attestation
+    that nonetheless signs a DIFFERENT definitionSha256 than the one this
+    receiver independently computed for this evidence must be rejected --
+    otherwise a signature accepted for one definition could be replayed
+    against unrelated evidence sharing the same generic predicate shape."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    wrong_definition = _attestation_json(valid_evidence, definition_sha256="f" * 64)
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, wrong_definition, b""))
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+    assert excinfo.value.policy == "signer"
+
+
+def test_signer_check_rejects_missing_assessed_checks(tmp_path, monkeypatch, valid_evidence):
+    """A signature that never actually claims to have run a
+    receiver-required assessed check (e.g. it omits "execution") must be
+    rejected, even though every other field matches."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    policy_path = repo / _POLICY_RELATIVE / "signers.json"
+    policy = json.loads(policy_path.read_text())
+    policy["requiredAssessedChecks"] = [
+        "integrity",
+        "factory",
+        "capability-revocation",
+        "execution",
+    ]
+    policy_path.write_text(json.dumps(policy))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "require execution")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    incomplete = _attestation_json(valid_evidence)  # omits "execution"
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, incomplete, b""))
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
     assert excinfo.value.policy == "signer"
 
 
@@ -460,6 +558,78 @@ def test_assess_canonical_runs_factory_and_capability_checks(
 
     summary = receiver_check.assess_canonical(valid_evidence, base_sha, schemas_dir)
     assert summary["definitionSha256"] == digest
+
+
+def test_execute_receiver_checks_passes_for_correct_candidate(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    results = receiver_check.execute_receiver_checks(base_sha, {_APP_RELATIVE: _FIXED_GREETING})
+    assert results == [
+        {"name": "greeting-salutation", "passed": True, "detail": results[0]["detail"]}
+    ]
+    receiver_check.check_execution_boundary(base_sha, results)  # must not raise
+
+
+def test_execute_receiver_checks_fails_for_incorrect_candidate(tmp_path, monkeypatch):
+    """The receiver-required test is actually re-run against the real
+    candidate bytes, not merely consulted structurally: unfixed (still
+    buggy) candidate content must fail the independent re-execution, even
+    though it would still pass every other check (integrity/factory/
+    binding/capability-revocation) that never inspects behavior."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    results = receiver_check.execute_receiver_checks(base_sha, {_APP_RELATIVE: _BUGGY_GREETING})
+    assert results[0]["passed"] is False
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_execution_boundary(base_sha, results)
+    assert excinfo.value.policy == "execution"
+
+
+def test_execute_receiver_checks_fails_when_candidate_bytes_missing(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    results = receiver_check.execute_receiver_checks(base_sha, {})
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_execution_boundary(base_sha, results)
+    assert excinfo.value.policy == "execution"
+
+
+def test_materialized_case_evidence_rejects_oversized_blob_without_reading_it(
+    tmp_path, monkeypatch
+):
+    """Byte-bounding must come from trusted git object METADATA, not from
+    reading content and checking afterwards: this proves an oversized blob
+    is rejected via ``_git_blob_sizes`` alone, with ``git show`` (the actual
+    content read) never invoked for that blob."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    case_dir = repo / "cases" / "oversized"
+    evidence_dir = case_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "big.bin").write_bytes(b"x" * 4096)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "oversized blob")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    monkeypatch.setattr(receiver_check, "_MAX_EVIDENCE_BLOB_BYTES", 1024)
+
+    real_run_git = receiver_check._run_git
+
+    def spying_run_git(args, **kwargs):
+        if args and args[0] == "show" and args[1].endswith("big.bin"):
+            pytest.fail("git show must never be called to read an oversized blob's content")
+        return real_run_git(args, **kwargs)
+
+    monkeypatch.setattr(receiver_check, "_run_git", spying_run_git)
+    with (
+        pytest.raises(receiver_check.ReceiverFailure) as excinfo,
+        receiver_check.materialized_case_evidence(head_sha, "cases/oversized"),
+    ):
+        pass
+    assert excinfo.value.policy == "missing-evidence"
 
 
 def _copy_tree(source: Path, destination: Path) -> None:
