@@ -183,6 +183,32 @@ def test_gate_fails_when_a_case_entry_is_malformed():
     assert "malformed" in outcome.reason
 
 
+def test_gate_fails_when_receipt_contains_a_duplicate_case_name():
+    # The exact reproduced bug: a receipt that lists one real, accepted
+    # case TWICE and omits a different expected case must still be
+    # rejected -- a naive `set(names)` comparison would silently fold the
+    # duplicate away and see the same cardinality as the fully-correct
+    # set, wrongly passing.
+    cases = _full_accepted_cases(["case-a", "case-a", "case-b"])
+    outcome = gate.evaluate_gate(
+        ALL_SUCCESS,
+        _receipt(accepted=True, cases=cases),
+        expected_case_names=THREE_CASES,
+    )
+    assert outcome.ok is False
+    assert "duplicate" in outcome.reason
+    assert "case-a" in outcome.reason
+
+
+def test_gate_fails_when_job_results_is_empty():
+    # A workflow misconfiguration that supplies zero `--job-result` facts
+    # at all must never vacuously pass merely because there is nothing to
+    # disagree with.
+    outcome = gate.evaluate_gate({}, _receipt(accepted=True), expected_case_names=None)
+    assert outcome.ok is False
+    assert "no upstream job results" in outcome.reason
+
+
 # ---------------------------------------------------------------------------
 # File-loading helpers
 # ---------------------------------------------------------------------------
@@ -208,11 +234,22 @@ def test_load_expected_case_names_parses_tab_separated_bundles_cases(tmp_path):
     assert gate._load_expected_case_names(path) == ["case-a", "case-b"]
 
 
-def test_load_expected_case_names_returns_empty_list_for_missing_file(tmp_path):
-    # Fail-closed: a missing cases.txt is treated as "zero cases expected",
-    # which the gate's own comparison then rejects against any non-empty
-    # receipt -- it must never be interpreted as "no comparison needed".
-    assert gate._load_expected_case_names(tmp_path / "missing.txt") == []
+def test_load_expected_case_names_raises_for_missing_file(tmp_path):
+    # Fail-closed: a file EXPLICITLY supplied via --expected-cases but
+    # missing/unreadable must be distinguishable from "no file was
+    # supplied at all" (which legitimately returns None for the
+    # single-canonical-package workflow) -- collapsing both into an empty
+    # list would let a missing cases.txt degrade into "zero cases
+    # expected", which an empty receipt could then trivially satisfy.
+    with pytest.raises(gate.ExpectedCaseLoadError):
+        gate._load_expected_case_names(tmp_path / "missing.txt")
+
+
+def test_load_expected_case_names_raises_for_empty_file(tmp_path):
+    path = tmp_path / "cases.txt"
+    path.write_text("")
+    with pytest.raises(gate.ExpectedCaseLoadError):
+        gate._load_expected_case_names(path)
 
 
 def test_load_expected_case_names_returns_none_when_path_is_none():
@@ -264,6 +301,27 @@ def test_cli_rejects_malformed_job_result_argument():
 def test_cli_requires_at_least_one_job_result_argument():
     with pytest.raises(SystemExit):
         gate.main([])
+
+
+def test_cli_fails_closed_when_expected_cases_file_is_missing(tmp_path, capsys):
+    # The exact reproduced bug: job A's prepare step failed to produce
+    # bundles/cases.txt (file absent), while an otherwise-complete,
+    # vacuously-accepted empty receipt was recorded. Without this fix the
+    # gate treated "file not found" as "zero cases expected" and the empty
+    # receipt trivially satisfied that, producing a wrongly PASS result.
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_receipt(accepted=True, cases=[])))
+    rc = gate.main(
+        [
+            "--job-result", "prepare=success",
+            "--job-result", "execute=success",
+            "--job-result", "assess=success",
+            "--receipt", str(receipt_path),
+            "--expected-cases", str(tmp_path / "does-not-exist.txt"),
+        ]
+    )
+    assert rc == 1
+    assert "gate: FAIL" in capsys.readouterr().err
 
 
 def test_cli_as_actual_subprocess_fails_closed_end_to_end(tmp_path):

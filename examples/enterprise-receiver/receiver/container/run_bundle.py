@@ -73,7 +73,7 @@ from pathlib import Path
 # makes the sibling ``bounded_io.py`` importable in every one of those
 # cases, not just the ones where Python would have added it automatically.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bounded_io import BoundedReadResult, read_process_bounded  # noqa: E402
+from bounded_io import BoundedReadResult, run_process_bounded  # noqa: E402
 
 # Bounds enforced WHILE reading the execution container's own stdout (not
 # only after a full, unbounded capture) -- see bounded_io.read_process_bounded.
@@ -127,7 +127,7 @@ def _build_harness_dir(bundle_dir: Path, scratch_root: Path) -> Path:
     return harness_dir
 
 
-def _cleanup_container(container_name: str) -> None:
+def _cleanup_container(container_name: str) -> str | None:
     """Unconditionally remove the container by its own unique, owned name,
     regardless of whether this job killed the `docker` CLI client process,
     the container exited on its own, or `--rm` already cleaned it up.
@@ -136,14 +136,40 @@ def _cleanup_container(container_name: str) -> None:
     CLI) stops running -- only an explicit `docker rm -f` against its own
     name does. This is scoped to exactly the one container this run
     created (never a broad `docker kill`/`prune` sweep, which could affect
-    unrelated containers on a shared runner) and is always best-effort: a
-    "no such container" failure here just means `--rm` (or a prior call to
-    this same function) already won the race, which is fine."""
-    subprocess.run(
-        ["docker", "rm", "--force", container_name],
-        capture_output=True,
-        timeout=_DOCKER_RM_TIMEOUT_SECONDS,
-        check=False,
+    unrelated containers on a shared runner).
+
+    Returns ``None`` when the container is verified gone -- either this
+    call removed it, or Docker reports "no such container" (meaning
+    `--rm`, or a prior call to this same function, already won the race:
+    genuinely fine, not a failure). Returns a short diagnostic string for
+    every OTHER outcome (a nonzero exit for any other reason, or the
+    `docker rm` invocation itself timing out/erroring) -- these are
+    DISTINCT from "already removed" and must never be silently swallowed
+    as though cleanup definitely succeeded; the caller records this
+    diagnostic for operator visibility (it never affects any check's
+    pass/fail verdict, which depends solely on `case_results`)."""
+    try:
+        proc = subprocess.run(
+            ["docker", "rm", "--force", container_name],
+            capture_output=True,
+            timeout=_DOCKER_RM_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return f"docker rm --force {container_name} timed out"
+    except OSError as exc:
+        return f"docker rm --force {container_name} failed to run: {exc}"
+    if proc.returncode == 0:
+        return None
+    stderr_text = proc.stderr.decode(errors="replace")
+    if "no such container" in stderr_text.lower():
+        # The container was already gone (``--rm`` or a prior cleanup call
+        # won the race) -- an explicit, verified-absent outcome, not a
+        # failure.
+        return None
+    return (
+        f"docker rm --force {container_name} exited {proc.returncode}: "
+        f"{stderr_text.strip()}"
     )
 
 
@@ -218,17 +244,19 @@ def run_execution_bundle(bundle_dir: Path) -> list[dict]:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
-                assert proc.stdin is not None
-                try:
-                    proc.stdin.write(json.dumps(payload).encode())
-                    proc.stdin.close()
-                except BrokenPipeError:
-                    pass
-                result = read_process_bounded(
+                # One call bounds the whole write-input / read-output /
+                # wait-for-exit lifecycle under a single shared deadline
+                # (see bounded_io.run_process_bounded's docstring): a
+                # blocking stdin write issued before this call could let a
+                # container that is slow to start, or never reads stdin at
+                # all, block well past `_CONTAINER_RUN_TIMEOUT_SECONDS`
+                # with no bound whatsoever on that phase.
+                result = run_process_bounded(
                     proc,
                     _CONTAINER_RUN_TIMEOUT_SECONDS,
                     _MAX_CONTAINER_STDOUT_BYTES,
                     _MAX_CONTAINER_STDERR_BYTES,
+                    stdin_payload=json.dumps(payload).encode(),
                 )
                 observed_cases = _parse_driver_output(result)
                 if observed_cases is None:
@@ -248,7 +276,19 @@ def run_execution_bundle(bundle_dir: Path) -> list[dict]:
             finally:
                 # Unconditional, bounded, scoped-to-this-one-container
                 # cleanup regardless of which branch above was taken.
-                _cleanup_container(container_name)
+                # Its own failure is distinct from the run's own
+                # diagnostic and must never be silently dropped: a
+                # `docker rm` failure (permission error, unreachable
+                # daemon, etc.) is operator-relevant evidence that this
+                # job may be leaking a container, even when the
+                # candidate's own execution looked fine.
+                cleanup_diagnostic = _cleanup_container(container_name)
+                if cleanup_diagnostic is not None:
+                    diagnostic = (
+                        diagnostic + "; " + cleanup_diagnostic
+                        if diagnostic
+                        else cleanup_diagnostic
+                    )
 
         case_results = []
         if observed_cases is None or len(observed_cases) != len(entry["cases"]):

@@ -42,7 +42,7 @@ from pathlib import Path
 # bundle (which also holds ``manifest.json``'s ``expectedOutput`` and other
 # checks' candidate bytes).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bounded_io import BoundedReadResult, read_process_bounded  # noqa: E402
+from bounded_io import BoundedReadResult, run_process_bounded  # noqa: E402
 
 _EXECUTOR_PATH = Path(__file__).resolve().parent / "executor.py"
 
@@ -112,13 +112,19 @@ def main() -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
-        assert proc.stdin is not None
-        try:
-            proc.stdin.write(json.dumps(executor_payload).encode())
-            proc.stdin.close()
-        except BrokenPipeError:
-            pass
-        result = read_process_bounded(proc, timeout_seconds, _MAX_EXECUTOR_OUTPUT_BYTES)
+        # A single call bounding the WHOLE write-input / read-output /
+        # wait-for-exit lifecycle under one shared deadline. A plain
+        # blocking ``proc.stdin.write(...)`` here would run BEFORE any
+        # read-side deadline's clock even starts: an executor that never
+        # reads its stdin (stalled, or deliberately not reading it) could
+        # then block this driver indefinitely, with the intended
+        # ``timeout_seconds`` bound never actually applying.
+        result = run_process_bounded(
+            proc,
+            timeout_seconds,
+            _MAX_EXECUTOR_OUTPUT_BYTES,
+            stdin_payload=json.dumps(executor_payload).encode(),
+        )
         observed.append(_parse_result(result))
 
     sys.stdout.write("CASES:" + json.dumps(observed) + "\n")

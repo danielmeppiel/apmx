@@ -64,7 +64,10 @@ def evaluate_gate(
 
     ``job_results`` maps each upstream job name (e.g. "prepare", "execute",
     "assess" or "sign") to its own GitHub Actions ``needs.<job>.result``
-    string. ALL of them must be exactly "success".
+    string. ALL of them must be exactly "success". An EMPTY mapping is
+    always rejected outright -- a workflow misconfiguration that passes no
+    job results at all must never vacuously satisfy the gate merely
+    because "there was nothing to disagree with".
 
     ``receipt`` is the parsed JSON artifact the assess/sign job itself
     produced (``None`` if the artifact was missing/unreadable, which is
@@ -76,9 +79,15 @@ def evaluate_gate(
     is the complete list of case names job A actually prepared. The
     receipt's own ``"cases"`` list (each entry a dict with ``"name"`` and
     ``"accepted"``) must name EXACTLY that same set -- no fewer (a
-    silently dropped case), no more (a forged/duplicated entry) -- and
-    every one of them must itself be ``"accepted": True``.
+    silently dropped case), no more (a forged/duplicated entry), and no
+    REPEATED name (a receipt that lists one real case twice to pad out an
+    otherwise-incomplete set, which a naive set-based comparison would
+    silently accept) -- and every one of them must itself be
+    ``"accepted": True``.
     """
+    if not job_results:
+        return GateOutcome(ok=False, reason="no upstream job results were supplied")
+
     for job_name, result in sorted(job_results.items()):
         if result != _REQUIRED_RESULT:
             return GateOutcome(
@@ -100,16 +109,28 @@ def evaluate_gate(
         cases = receipt.get("cases")
         if not isinstance(cases, list):
             return GateOutcome(ok=False, reason="receipt was missing its per-case 'cases' list")
-        receipt_names = set()
+        receipt_names: set[str] = set()
+        duplicate_names: set[str] = set()
         for entry in cases:
             if not isinstance(entry, dict) or "name" not in entry:
                 return GateOutcome(ok=False, reason="receipt contained a malformed case entry")
-            receipt_names.add(entry["name"])
+            name = entry["name"]
+            if name in receipt_names:
+                duplicate_names.add(name)
+            receipt_names.add(name)
             if entry.get("accepted") is not True:
                 return GateOutcome(
                     ok=False,
                     reason=f"receipt case {entry['name']!r} was not recorded as accepted",
                 )
+        if duplicate_names:
+            return GateOutcome(
+                ok=False,
+                reason=(
+                    "receipt contained duplicate case name(s), which a naive set-based "
+                    f"comparison would silently hide: {sorted(duplicate_names)}"
+                ),
+            )
         expected_names = set(expected_case_names)
         if receipt_names != expected_names:
             missing = expected_names - receipt_names
@@ -134,13 +155,29 @@ def _load_receipt(path: Path | None) -> dict | None:
         return None
 
 
+class ExpectedCaseLoadError(Exception):
+    """Raised when ``--expected-cases`` was explicitly given but the file
+    could not be read, or was read but contained zero case names. This is
+    DISTINCT from omitting the flag entirely (``None``, meaning "this
+    workflow has no case-level expectations to check at all" -- the
+    single-canonical-package attest workflow's legitimate case). Silently
+    collapsing "explicitly supplied but unreadable/empty" into the exact
+    same empty list as "intentionally not supplied" would let a missing or
+    corrupted expected-case artifact (e.g. job A's own prepare step
+    failing to produce ``bundles/cases.txt``) degrade into "zero cases
+    expected", which a receipt recording ``{"accepted": true, "cases": []}``
+    would then trivially, wrongly satisfy."""
+
+
 def _load_expected_case_names(path: Path | None) -> list[str] | None:
     if path is None:
         return None
     try:
         text = path.read_text()
-    except OSError:
-        return []
+    except OSError as exc:
+        raise ExpectedCaseLoadError(
+            f"--expected-cases file {path} was supplied but could not be read: {exc}"
+        ) from exc
     names = []
     for line in text.splitlines():
         if not line.strip():
@@ -148,6 +185,10 @@ def _load_expected_case_names(path: Path | None) -> list[str] | None:
         # Matches prepare's own tab-separated "name\tcase_dir" format
         # (bundles/cases.txt) -- see receiver-candidate-check.yml.
         names.append(line.split("\t", 1)[0])
+    if not names:
+        raise ExpectedCaseLoadError(
+            f"--expected-cases file {path} was supplied but named zero cases"
+        )
     return names
 
 
@@ -179,7 +220,11 @@ def main(argv: list[str] | None = None) -> int:
         job_results[name] = result
 
     receipt = _load_receipt(args.receipt)
-    expected_case_names = _load_expected_case_names(args.expected_cases)
+    try:
+        expected_case_names = _load_expected_case_names(args.expected_cases)
+    except ExpectedCaseLoadError as exc:
+        print(f"::error::gate: FAIL ({exc})", file=sys.stderr)
+        return 1
 
     outcome = evaluate_gate(job_results, receipt, expected_case_names)
     if outcome.ok:
