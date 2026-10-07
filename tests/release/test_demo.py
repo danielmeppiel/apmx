@@ -182,6 +182,9 @@ def test_install_uses_only_official_backend_and_scopes_no_scripts(
     calls = []
 
     def run(argv, **kwargs):
+        manifest = json.loads((kit / "checkout-copilot/apm.yml").read_text())
+        assert manifest["name"] == "checkout-demo"
+        assert manifest["dependencies"]["apm"] == [str(kit / "factory")]
         calls.append((argv, kwargs))
         return subprocess.CompletedProcess(argv, 0)
 
@@ -209,6 +212,40 @@ def test_prepare_refuses_existing_directory_before_installing(tmp_path: Path) ->
     with pytest.raises(ValueError, match="fresh"):
         demo.prepare(tmp_path, Path("missing.tar.gz"), "a" * 64, Path(sys.executable))
     assert (tmp_path / "important").read_text() == "Untouched"
+
+
+def test_install_preserves_an_existing_consumer_manifest(kit: Path, monkeypatch) -> None:
+    manifest = kit / "checkout-copilot/apm.yml"
+    original = b"name: existing-project\nversion: 2.0.0\n"
+    manifest.write_bytes(original)
+    monkeypatch.setattr(
+        demo.subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0)
+    )
+    REAL_INSTALL(kit, "copilot")
+    assert manifest.read_bytes() == original
+
+
+@pytest.mark.component
+def test_real_backend_prepares_manifest_and_lock_together(kit: Path, monkeypatch) -> None:
+    from apmx.install.apm_backend import locate_backend
+    from apmx.utils.yaml_io import load_yaml_str
+
+    backend = locate_backend()
+    real_run = subprocess.run
+
+    def run(argv, **kwargs):
+        return real_run([str(backend), *argv[1:]], **kwargs)
+
+    monkeypatch.setattr(demo.subprocess, "run", run)
+    (kit / "factory/apm.yml").write_text("name: demo\nversion: 1.0.0\n")
+    skill = kit / "factory/.apm/skills/example/SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: example\ndescription: Local fixture.\n---\nUse tests.\n")
+    REAL_INSTALL(kit, "copilot")
+    manifest = load_yaml_str((kit / "checkout-copilot/apm.yml").read_text())
+    assert manifest["name"] == "checkout-demo"
+    assert manifest["dependencies"]["apm"] == [str(kit / "factory")]
+    assert (kit / "checkout-copilot/apm.lock.yaml").is_file()
 
 
 def test_moved_or_unmarked_kit_is_not_owned(kit: Path) -> None:

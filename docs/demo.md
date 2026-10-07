@@ -150,6 +150,9 @@ uses the release owner's safe extraction and notice/provenance checks, and
 refuses existing destinations or destinations inside Git. It copies the current
 factory/seed with content inventories, retains the bundle, and installs the real
 pinned capability separately into each consumer through bundled APM.
+The helper creates a minimal consumer `apm.yml` declaring the factory when absent;
+official APM resolves and locks its dependencies. Application source and the
+original seed are not edited.
 
 The checker environment must stay available. No dependencies, credentials or
 shell-profile changes are installed silently. Authenticate through `copilot`

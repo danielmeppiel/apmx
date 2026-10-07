@@ -232,6 +232,19 @@ def archive(root: Path, config: dict, names: list[str]) -> None:
 
 def install(root: Path, name: str) -> None:
     """Only official APM owns capability acquisition and materialization."""
+    manifest = root / f"checkout-{name}/apm.yml"
+    if not manifest.exists():
+        with manifest.open("x", encoding="ascii") as stream:
+            json.dump(
+                {
+                    "name": "checkout-demo",
+                    "version": "1.0.0",
+                    "dependencies": {"apm": [str(root / "factory")]},
+                },
+                stream,
+                indent=2,
+            )
+            stream.write("\n")
     log = root / ".demo/logs" / f"prepare-{name}-{uuid.uuid4().hex}.log"
     env = environment(root)
     env["APM_NO_SCRIPTS"] = "1"
