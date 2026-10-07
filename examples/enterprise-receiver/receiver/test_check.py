@@ -633,6 +633,82 @@ def test_capability_revocation_allows_different_package_identity(
     receiver_check.check_capability_revocation(valid_evidence, revoked_sha)  # must not raise
 
 
+def _write_raw_revocation_policy(repo: Path, *, capabilities: list) -> str:
+    """Like ``_write_revocation_policy``, but writes the raw ``capabilities``
+    list verbatim (including deliberately malformed entries), to prove a
+    malformed structured selector is rejected explicitly rather than
+    silently filtered out of the active revocation set."""
+    policy_path = repo / _POLICY_RELATIVE / "revoked-capabilities.json"
+    policy_path.write_text(json.dumps({"lockIdentity": [], "capabilities": capabilities}))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "revoke (raw)")
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_capability_revocation_rejects_malformed_entry_missing_body_sha256(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """A selector entry with a 'purl' but no 'bodySha256' at all must fail
+    closed (reject the whole check), never be silently dropped from the
+    active revocation set -- a typo'd/missing field in an intended deny
+    rule must not turn into an accidental allow."""
+    binding = _real_binding(valid_evidence)
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bad_sha = _write_raw_revocation_policy(
+        repo, capabilities=[{"purl": binding["purl"]}]
+    )
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+    assert excinfo.value.policy == "capability-revoked"
+    assert "bodySha256" in excinfo.value.detail
+
+
+def test_capability_revocation_rejects_malformed_entry_wrong_field_type(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """A selector entry with a non-string purl (wrong type) must fail
+    closed rather than being silently filtered out via truthiness."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bad_sha = _write_raw_revocation_policy(
+        repo, capabilities=[{"purl": 12345, "bodySha256": "a" * 64}]
+    )
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+    assert excinfo.value.policy == "capability-revoked"
+    assert "purl" in excinfo.value.detail
+
+
+def test_capability_revocation_rejects_malformed_digest_format(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """A 'bodySha256' that is not exactly 64 lowercase hex characters (e.g.
+    a truncated/typo'd digest) must fail closed, not be silently dropped
+    from the active revocation set."""
+    binding = _real_binding(valid_evidence)
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bad_sha = _write_raw_revocation_policy(
+        repo, capabilities=[{"purl": binding["purl"], "bodySha256": "not-a-real-digest"}]
+    )
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+    assert excinfo.value.policy == "capability-revoked"
+    assert "bodySha256" in excinfo.value.detail
+
+
+def test_capability_revocation_allows_empty_capabilities_list(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """An absent/empty structured 'capabilities' list remains valid --
+    legacy lockIdentity-only policies must keep working unchanged."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    revoked_sha = _write_revocation_policy(repo)  # lock_identities=(), pairs=()
+    receiver_check.check_capability_revocation(valid_evidence, revoked_sha)  # must not raise
+
+
 def test_capability_revocation_matches_same_pair_despite_different_install_path(
     tmp_path, monkeypatch
 ):
