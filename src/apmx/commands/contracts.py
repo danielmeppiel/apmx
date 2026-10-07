@@ -24,6 +24,7 @@ def invoke_contract(
     logger: ContractLogger | None = None,
     factory_root: Path | None = None,
     allow_unproven_inputs: bool = False,
+    tui: bool = False,
 ) -> ChainResult | RunResult | None:
     """Plan or execute a local factory or one explicit leaf through shared admission."""
     from ..contracts import frontend, workspace
@@ -115,6 +116,18 @@ def invoke_contract(
                 )
                 logger.stop_activity()
                 if planning:
+                    if tui:
+                        from ..tui.entry import launch_preview, tui_eligible
+
+                        if not tui_eligible():
+                            raise ContractError(
+                                "The TUI preview needs an interactive terminal on both ends; "
+                                "omit --tui or redirect/CI runs stay on --plan.",
+                                code="tui_unavailable",
+                                outcome=Outcome.UNPROVEN,
+                            )
+                        launch_preview(closure.graph)
+                        return None
                     logger.render_chain_plan(closure)
                     return None
                 chain_result = run_chain(
@@ -137,6 +150,13 @@ def invoke_contract(
             inventory = workspace.inspect_workspace(plan)
             logger.stop_activity()
             if planning:
+                if tui:
+                    raise ContractError(
+                        "The TUI preview needs a factory directory; pass a factory "
+                        "directory, not a single contract file.",
+                        code="tui_requires_factory",
+                        outcome=Outcome.UNPROVEN,
+                    )
                 logger.render_plan(plan, inventory)
                 return
             logger.on_preparation(ImportsSelectedEvent(plan.imported_skills))
