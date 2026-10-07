@@ -12,6 +12,7 @@ hand-authored, per the project's fixture-labeling requirement.
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -538,43 +539,140 @@ def test_capability_revocation_allows_unrevoked_identity(tmp_path, monkeypatch):
     receiver_check.check_capability_revocation(evidence_dir, base_sha)  # must not raise
 
 
-def _revoke_policy(repo: Path, lock_identities: list[str]) -> None:
+def _write_revocation_policy(
+    repo: Path, *, lock_identities: list[str] = (), pairs: list[tuple[str, str]] = ()
+) -> str:
     """Overwrite revoked-capabilities.json with a fresh commit (simulating a
-    real incident-response policy change on the trusted base ref)."""
+    real incident-response policy change on the trusted base ref) and
+    return the new commit SHA."""
     policy_path = repo / _POLICY_RELATIVE / "revoked-capabilities.json"
-    policy_path.write_text(json.dumps({"lockIdentity": lock_identities}))
+    policy_path.write_text(
+        json.dumps(
+            {
+                "lockIdentity": list(lock_identities),
+                "capabilities": [{"purl": purl, "bodySha256": digest} for purl, digest in pairs],
+            }
+        )
+    )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "revoke")
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
-def test_capability_revocation_real_fixture_identity_accept_then_reject(
+def _real_binding(evidence_dir: Path) -> dict:
+    bindings = json.loads((evidence_dir / "capability-bindings.json").read_bytes())
+    assert bindings, "fixture produced an empty capability-bindings.json; GAP #6 regressed"
+    binding = bindings[0]
+    assert binding.get("purl") and binding.get(
+        "bodySha256"
+    ), "real fixture binding is missing purl/bodySha256 selector fields"
+    return binding
+
+
+def test_capability_revocation_accepts_real_binding_against_empty_policy(
     tmp_path, monkeypatch, valid_evidence
 ):
-    """End-to-end proof using the REAL, nonempty capability-bindings.json
-    produced by the real ``make_fixture``/apmx inventory pipeline (not a
-    hand-written synthetic lockIdentity string like the two tests above):
-    the genuine ``full-salutation-style`` binding is accepted against an
-    empty revocation list, then genuinely rejected once its own real
-    lockIdentity is added to the policy -- proving the real inventory
-    output integrates correctly with incident-response revocation, not
-    just the check function in isolation."""
-    bindings = json.loads((valid_evidence / "capability-bindings.json").read_bytes())
-    assert bindings, "fixture produced an empty capability-bindings.json; GAP #6 regressed"
-    real_identity = bindings[0]["lockIdentity"]
-    assert real_identity, "real fixture binding has no lockIdentity to revoke"
-
+    """The real, nonempty capability-bindings.json produced by the real
+    make_fixture/apmx inventory pipeline is accepted when nothing is
+    revoked -- the baseline accept case for the structured selector."""
+    _real_binding(valid_evidence)  # sanity: real nonempty binding exists
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    # Accept: the real binding is not yet on the revocation list.
     receiver_check.check_capability_revocation(valid_evidence, base_sha)  # must not raise
 
-    _revoke_policy(repo, [real_identity])
-    revoked_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+def test_capability_revocation_rejects_exact_purl_and_digest_pair(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """Revoking the REAL (purl, bodySha256) pair observed in the real
+    fixture's binding -- not a synthetic string -- genuinely rejects it."""
+    binding = _real_binding(valid_evidence)
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    revoked_sha = _write_revocation_policy(
+        repo, pairs=[(binding["purl"], binding["bodySha256"])]
+    )
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
         receiver_check.check_capability_revocation(valid_evidence, revoked_sha)
     assert excinfo.value.policy == "capability-revoked"
-    assert real_identity in excinfo.value.detail
+    assert binding["purl"] in excinfo.value.detail
+    assert binding["bodySha256"] in excinfo.value.detail
+
+
+def test_capability_revocation_allows_changed_body_digest_same_package(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """A revoked pair naming the SAME package purl but a DIFFERENT
+    bodySha256 (e.g. a prior, since-edited revision of the skill) must not
+    revoke the current, differently-hashed content -- selectors match
+    exactly, not by package identity alone."""
+    binding = _real_binding(valid_evidence)
+    different_digest = "0" * 64
+    assert different_digest != binding["bodySha256"]
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    revoked_sha = _write_revocation_policy(
+        repo, pairs=[(binding["purl"], different_digest)]
+    )
+    receiver_check.check_capability_revocation(valid_evidence, revoked_sha)  # must not raise
+
+
+def test_capability_revocation_allows_different_package_identity(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """A revoked pair with the SAME bodySha256 but a DIFFERENT purl (e.g. a
+    coincidentally identical byte sequence published under another
+    package) must not revoke this package -- both fields are required."""
+    binding = _real_binding(valid_evidence)
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    revoked_sha = _write_revocation_policy(
+        repo, pairs=[("pkg:generic/unrelated-package", binding["bodySha256"])]
+    )
+    receiver_check.check_capability_revocation(valid_evidence, revoked_sha)  # must not raise
+
+
+def test_capability_revocation_matches_same_pair_despite_different_install_path(
+    tmp_path, monkeypatch
+):
+    """Generate the REAL fixture twice, each declaring its local-path
+    dependency against its OWN independent copy of the real skill content
+    at a distinct filesystem location (lockIdentity is apmx's local-path
+    dependency unique key -- the declared path string itself, not a
+    function of the per-call temporary project_root; a fixed declared path
+    would always produce the same lockIdentity, so this test must actually
+    vary the declared source path to exercise portability). The two
+    bindings' lockIdentity values therefore genuinely differ, while their
+    purl/bodySha256 (derived from the skill's own name/content, not its
+    filesystem location) stay identical -- proving the structured
+    (purl, bodySha256) selector, unlike lockIdentity, is portable across
+    reinstalls/relocations of the exact same real capability content."""
+    first_skill_dir = tmp_path / "checkout-one" / "full-salutation-style"
+    second_skill_dir = tmp_path / "checkout-two" / "full-salutation-style"
+    shutil.copytree(make_fixture._CAPABILITY_SKILL_DIR, first_skill_dir)
+    shutil.copytree(make_fixture._CAPABILITY_SKILL_DIR, second_skill_dir)
+
+    first = tmp_path / "first" / "package"
+    second = tmp_path / "second" / "package"
+    make_fixture.make_fixture(first, variant="approved", skill_source_dir=first_skill_dir)
+    make_fixture.make_fixture(second, variant="approved", skill_source_dir=second_skill_dir)
+    first_binding = _real_binding(first)
+    second_binding = _real_binding(second)
+    assert first_binding["lockIdentity"] != second_binding["lockIdentity"], (
+        "expected two distinct declared checkout paths to produce different lockIdentity"
+    )
+    assert first_binding["purl"] == second_binding["purl"]
+    assert first_binding["bodySha256"] == second_binding["bodySha256"]
+
+    repo = _init_repo(tmp_path, approved_digests=[])
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    revoked_sha = _write_revocation_policy(
+        repo, pairs=[(first_binding["purl"], first_binding["bodySha256"])]
+    )
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.check_capability_revocation(second, revoked_sha)
+    assert excinfo.value.policy == "capability-revoked"
 
 
 def test_candidate_cannot_override_the_control_plane(tmp_path, monkeypatch, valid_evidence):
@@ -945,6 +1043,65 @@ def test_run_bundle_module_imports_cleanly_via_spec_from_file_location():
     module = receiver_check._run_bundle_module()
     assert hasattr(module, "run_execution_bundle")
     assert hasattr(module, "run_process_bounded")
+
+
+def test_run_bundle_refuses_non_utf8_candidate_instead_of_silently_repairing_it(tmp_path):
+    """``candidate_sha256`` must always be the hash of the EXACT bytes that
+    are actually executed. A lossy ``bytes.decode("utf-8", errors="replace")``
+    would silently turn invalid UTF-8 candidate bytes into different,
+    executable text than the bytes that were hashed and bound into the
+    result -- the recorded digest and the executed content would diverge.
+    This reproduces exactly that scenario with real invalid UTF-8 (an 0xFF
+    byte inside an otherwise-valid-looking Python module) and proves
+    run_execution_bundle refuses to run it (no Docker invocation needed:
+    the refusal happens before Docker is ever invoked), reporting an
+    explicit per-check error rather than quietly substituting repaired
+    bytes. A companion case proves a genuinely valid-UTF-8 module is
+    unaffected: its hash is still the hash of the bytes actually sent to
+    the container."""
+    invalid_bytes = (
+        b'"""Demo docstring with byte: \xff"""\n'
+        b"def greet(name):\n"
+        b'    return f"Hello, {name}!"\n'
+    )
+    with pytest.raises(UnicodeDecodeError):
+        invalid_bytes.decode("utf-8")
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    for name in ("container_driver.py", "executor.py", "bounded_io.py"):
+        (bundle_dir / name).write_bytes((_CONTAINER_DIR / name).read_bytes())
+    (bundle_dir / "run_bundle.py").write_bytes((_CONTAINER_DIR / "run_bundle.py").read_bytes())
+
+    check_dir = bundle_dir / "greeting-check"
+    check_dir.mkdir()
+    (check_dir / "candidate.bin").write_bytes(invalid_bytes)
+    manifest = {
+        "executionImage": _TEST_EXECUTION_IMAGE,
+        "checks": [
+            {
+                "name": "greeting-check",
+                "candidateMissing": False,
+                "candidateScratchRelative": "candidate.py",
+                "entrypoint": "greet",
+                "cases": [{"input": ["World"], "expectedOutput": "Hello, World!"}],
+                "expectedCandidateSha256": hashlib.sha256(invalid_bytes).hexdigest(),
+            }
+        ],
+    }
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    module = receiver_check._run_bundle_module()
+    results = module.run_execution_bundle(bundle_dir)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result["name"] == "greeting-check"
+    assert result["candidateSha256"] == hashlib.sha256(invalid_bytes).hexdigest()
+    assert result["cases"] == []
+    assert "utf-8" in result["error"].lower()
+    assert "refus" in result["error"].lower()
+
 
 
 import importlib.util as _importlib_util  # noqa: E402
