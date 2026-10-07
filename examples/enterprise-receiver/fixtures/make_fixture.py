@@ -263,7 +263,9 @@ def _install_fake_adapter(monkeypatch: pytest.MonkeyPatch, plan: LeafPlan) -> No
     )
 
 
-def make_fixture(destination: Path, variant: str = "approved", skill_source_dir: Path | None = None) -> dict:
+def make_fixture(
+    destination: Path, variant: str = "approved", skill_source_dir: Path | None = None
+) -> dict:
     with TemporaryDirectory(prefix="apmx-enterprise-receiver-fixture-") as temporary:
         project_root = Path(temporary) / "project"
         project_root.mkdir()

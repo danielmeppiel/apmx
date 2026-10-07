@@ -563,9 +563,9 @@ def _real_binding(evidence_dir: Path) -> dict:
     bindings = json.loads((evidence_dir / "capability-bindings.json").read_bytes())
     assert bindings, "fixture produced an empty capability-bindings.json; GAP #6 regressed"
     binding = bindings[0]
-    assert binding.get("purl") and binding.get(
-        "bodySha256"
-    ), "real fixture binding is missing purl/bodySha256 selector fields"
+    assert binding.get("purl") and binding.get("bodySha256"), (
+        "real fixture binding is missing purl/bodySha256 selector fields"
+    )
     return binding
 
 
@@ -590,9 +590,7 @@ def test_capability_revocation_rejects_exact_purl_and_digest_pair(
     binding = _real_binding(valid_evidence)
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    revoked_sha = _write_revocation_policy(
-        repo, pairs=[(binding["purl"], binding["bodySha256"])]
-    )
+    revoked_sha = _write_revocation_policy(repo, pairs=[(binding["purl"], binding["bodySha256"])])
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
         receiver_check.check_capability_revocation(valid_evidence, revoked_sha)
     assert excinfo.value.policy == "capability-revoked"
@@ -612,9 +610,7 @@ def test_capability_revocation_allows_changed_body_digest_same_package(
     assert different_digest != binding["bodySha256"]
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    revoked_sha = _write_revocation_policy(
-        repo, pairs=[(binding["purl"], different_digest)]
-    )
+    revoked_sha = _write_revocation_policy(repo, pairs=[(binding["purl"], different_digest)])
     receiver_check.check_capability_revocation(valid_evidence, revoked_sha)  # must not raise
 
 
@@ -655,9 +651,7 @@ def test_capability_revocation_rejects_malformed_entry_missing_body_sha256(
     binding = _real_binding(valid_evidence)
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    bad_sha = _write_raw_revocation_policy(
-        repo, capabilities=[{"purl": binding["purl"]}]
-    )
+    bad_sha = _write_raw_revocation_policy(repo, capabilities=[{"purl": binding["purl"]}])
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
         receiver_check.check_capability_revocation(valid_evidence, bad_sha)
     assert excinfo.value.policy == "capability-revoked"
@@ -718,7 +712,7 @@ def test_capability_revocation_rejects_digest_with_trailing_newline(
     ``$``-anchored pattern wrongly accepts this because ``$`` matches
     just before a trailing newline, not only at the true end of string;
     ``fullmatch`` must be used to require exact-length consumption."""
-    binding = _real_binding(valid_evidence)
+    _real_binding(valid_evidence)
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     bad_sha = _write_raw_revocation_policy(
@@ -1016,7 +1010,7 @@ def test_verify_execution_results_rejects_missing_required_check(tmp_path, monke
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    bundle_dir, manifest = _write_execution_bundle_for(
+    _bundle_dir, manifest = _write_execution_bundle_for(
         tmp_path, monkeypatch, repo, base_sha, _FIXED_GREETING
     )
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
@@ -1175,9 +1169,7 @@ def test_run_bundle_refuses_non_utf8_candidate_instead_of_silently_repairing_it(
     unaffected: its hash is still the hash of the bytes actually sent to
     the container."""
     invalid_bytes = (
-        b'"""Demo docstring with byte: \xff"""\n'
-        b"def greet(name):\n"
-        b'    return f"Hello, {name}!"\n'
+        b'"""Demo docstring with byte: \xff"""\ndef greet(name):\n    return f"Hello, {name}!"\n'
     )
     with pytest.raises(UnicodeDecodeError):
         invalid_bytes.decode("utf-8")
@@ -1218,8 +1210,7 @@ def test_run_bundle_refuses_non_utf8_candidate_instead_of_silently_repairing_it(
     assert "refus" in result["error"].lower()
 
 
-
-import importlib.util as _importlib_util  # noqa: E402
+import importlib.util as _importlib_util
 
 _bounded_io_spec = _importlib_util.spec_from_file_location(
     "_test_bounded_io", _CONTAINER_DIR / "bounded_io.py"
@@ -1255,9 +1246,7 @@ def test_bounded_io_rejects_one_byte_then_hang():
     )
     started = time.monotonic()
     try:
-        result = bounded_io.read_process_bounded(
-            proc, timeout_seconds=1.0, max_stdout_bytes=4096
-        )
+        result = bounded_io.read_process_bounded(proc, timeout_seconds=1.0, max_stdout_bytes=4096)
     finally:
         proc.kill()
         proc.wait(timeout=5)
@@ -1300,9 +1289,7 @@ def test_bounded_io_rejects_valid_line_then_hang_past_deadline():
     )
     started = time.monotonic()
     try:
-        result = bounded_io.read_process_bounded(
-            proc, timeout_seconds=1.0, max_stdout_bytes=4096
-        )
+        result = bounded_io.read_process_bounded(proc, timeout_seconds=1.0, max_stdout_bytes=4096)
     finally:
         proc.kill()
         proc.wait(timeout=5)
@@ -1322,17 +1309,10 @@ def test_bounded_io_rejects_process_that_closes_pipes_then_outlives_deadline():
     ``wait_grace_seconds`` budget instead of the ORIGINAL deadline would
     let this process accumulate unaccounted-for extra runtime and then be
     wrongly reported ``trustworthy``."""
-    proc = _spawn(
-        "import os, sys, time\n"
-        "os.close(1)\n"
-        "os.close(2)\n"
-        "time.sleep(0.3)\n"
-    )
+    proc = _spawn("import os, sys, time\nos.close(1)\nos.close(2)\ntime.sleep(0.3)\n")
     started = time.monotonic()
     try:
-        result = bounded_io.read_process_bounded(
-            proc, timeout_seconds=0.1, max_stdout_bytes=4096
-        )
+        result = bounded_io.read_process_bounded(proc, timeout_seconds=0.1, max_stdout_bytes=4096)
     finally:
         proc.kill()
         proc.wait(timeout=5)
@@ -1347,12 +1327,7 @@ def test_bounded_io_accepts_process_that_closes_pipes_then_exits_within_deadline
     early but exits well within the original deadline must still be
     accepted (so the fix above is a genuine deadline-preservation fix, not
     an overcorrection that now rejects every early-EOF process)."""
-    proc = _spawn(
-        "import os, sys, time\n"
-        "os.close(1)\n"
-        "os.close(2)\n"
-        "time.sleep(0.05)\n"
-    )
+    proc = _spawn("import os, sys, time\nos.close(1)\nos.close(2)\ntime.sleep(0.05)\n")
     result = bounded_io.read_process_bounded(proc, timeout_seconds=5.0, max_stdout_bytes=4096)
     assert result.timed_out is False
     assert result.returncode == 0
@@ -1500,10 +1475,12 @@ def test_run_process_bounded_round_trips_payload_for_a_well_behaved_child():
             "-I",
             "-S",
             "-c",
-            "import sys\n"
-            "data = sys.stdin.buffer.read()\n"
-            "sys.stdout.buffer.write(b'RESULT:' + data)\n"
-            "sys.stdout.buffer.flush()\n",
+            (
+                "import sys\n"
+                "data = sys.stdin.buffer.read()\n"
+                "sys.stdout.buffer.write(b'RESULT:' + data)\n"
+                "sys.stdout.buffer.flush()\n"
+            ),
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -1616,9 +1593,7 @@ def test_run_bundle_uses_explicit_bind_mount_not_named_volume(tmp_path, monkeypa
         ),
     )
     cleaned_up = []
-    monkeypatch.setattr(
-        run_bundle, "_cleanup_container", lambda name: cleaned_up.append(name)
-    )
+    monkeypatch.setattr(run_bundle, "_cleanup_container", lambda name: cleaned_up.append(name))
 
     run_bundle.run_execution_bundle(bundle_dir)
 
@@ -1696,9 +1671,7 @@ def test_run_bundle_cleans_up_container_even_on_timeout(tmp_path, monkeypatch):
         ),
     )
     cleaned_up = []
-    monkeypatch.setattr(
-        run_bundle, "_cleanup_container", lambda name: cleaned_up.append(name)
-    )
+    monkeypatch.setattr(run_bundle, "_cleanup_container", lambda name: cleaned_up.append(name))
 
     results = run_bundle.run_execution_bundle(bundle_dir)
 

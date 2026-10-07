@@ -17,10 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 import gate
-
+import pytest
 
 ALL_SUCCESS = {"prepare": "success", "execute": "success", "assess": "success"}
 THREE_CASES = ["case-a", "case-b", "case-c"]
@@ -263,17 +261,24 @@ def test_load_expected_case_names_returns_none_when_path_is_none():
 
 def test_cli_exits_zero_and_prints_pass_on_success(tmp_path, capsys):
     receipt_path = tmp_path / "receipt.json"
-    receipt_path.write_text(json.dumps(_receipt(accepted=True, cases=_full_accepted_cases(THREE_CASES))))
+    receipt_path.write_text(
+        json.dumps(_receipt(accepted=True, cases=_full_accepted_cases(THREE_CASES)))
+    )
     cases_path = tmp_path / "cases.txt"
     cases_path.write_text("".join(f"{name}\tbundles/{name}\n" for name in THREE_CASES))
 
     rc = gate.main(
         [
-            "--job-result", "prepare=success",
-            "--job-result", "execute=success",
-            "--job-result", "assess=success",
-            "--receipt", str(receipt_path),
-            "--expected-cases", str(cases_path),
+            "--job-result",
+            "prepare=success",
+            "--job-result",
+            "execute=success",
+            "--job-result",
+            "assess=success",
+            "--receipt",
+            str(receipt_path),
+            "--expected-cases",
+            str(cases_path),
         ]
     )
     assert rc == 0
@@ -283,10 +288,14 @@ def test_cli_exits_zero_and_prints_pass_on_success(tmp_path, capsys):
 def test_cli_exits_nonzero_and_prints_fail_on_failure(tmp_path, capsys):
     rc = gate.main(
         [
-            "--job-result", "prepare=success",
-            "--job-result", "execute=failure",
-            "--job-result", "assess=skipped",
-            "--receipt", str(tmp_path / "missing.json"),
+            "--job-result",
+            "prepare=success",
+            "--job-result",
+            "execute=failure",
+            "--job-result",
+            "assess=skipped",
+            "--receipt",
+            str(tmp_path / "missing.json"),
         ]
     )
     assert rc == 1
@@ -313,11 +322,16 @@ def test_cli_fails_closed_when_expected_cases_file_is_missing(tmp_path, capsys):
     receipt_path.write_text(json.dumps(_receipt(accepted=True, cases=[])))
     rc = gate.main(
         [
-            "--job-result", "prepare=success",
-            "--job-result", "execute=success",
-            "--job-result", "assess=success",
-            "--receipt", str(receipt_path),
-            "--expected-cases", str(tmp_path / "does-not-exist.txt"),
+            "--job-result",
+            "prepare=success",
+            "--job-result",
+            "execute=success",
+            "--job-result",
+            "assess=success",
+            "--receipt",
+            str(receipt_path),
+            "--expected-cases",
+            str(tmp_path / "does-not-exist.txt"),
         ]
     )
     assert rc == 1
@@ -333,13 +347,18 @@ def test_cli_as_actual_subprocess_fails_closed_end_to_end(tmp_path):
         [
             sys.executable,
             str(gate_path),
-            "--job-result", "prepare=success",
-            "--job-result", "execute=success",
-            "--job-result", "assess=cancelled",
-            "--receipt", str(tmp_path / "missing.json"),
+            "--job-result",
+            "prepare=success",
+            "--job-result",
+            "execute=success",
+            "--job-result",
+            "assess=cancelled",
+            "--receipt",
+            str(tmp_path / "missing.json"),
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert completed.returncode == 1
     assert "gate: FAIL" in completed.stderr
