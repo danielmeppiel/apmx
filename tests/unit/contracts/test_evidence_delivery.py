@@ -63,7 +63,7 @@ def test_both_cli_completion_paths_keep_delivery_separate(
     assert json.loads(path.read_bytes())["execution"] == {"name": "COMPLETE", "exit_code": 0}
     assert "Contract COMPLETE" in response.output
     assert ("Evidence delivery failed" in response.output) is bool(failure)
-    assert ("Standard package:" in response.output) is (failure is None)
+    assert ("Evidence package:" in response.output) is (failure is None)
     assert "apmx: HALTED" not in response.output
     assert "private filesystem error" not in response.output
 
@@ -76,5 +76,5 @@ def test_ordinary_no_inventory_run_preserves_default_output(tmp_path, monkeypatc
         main, ["job.contract.md", "--on", "copilot", "--allow-host-access"]
     )
     assert response.exit_code == 0, response.output
-    assert "Standard package:" not in response.output
+    assert "Evidence package:" not in response.output
     assert not list(tmp_path.glob(".apm/runs/*/evidence"))

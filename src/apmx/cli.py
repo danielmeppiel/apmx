@@ -139,7 +139,10 @@ def _select_entry(
     help="Allow the selected agent CLI and checks to use host files, network and available login details.",
 )
 @click.option(
-    "--verbose", "-v", is_flag=True, help="Show detailed planning and execution observations."
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Stream native debug logs and show source/process details.",
 )
 @click.version_option(version=get_version(), prog_name="apmx")
 @click.pass_context
@@ -207,7 +210,7 @@ def main(
                 code="advisory_consent_required",
                 outcome=Outcome.UNPROVEN,
             )
-        logger.start_activity("Preparing package", announce=False)
+        logger.start_activity("Loading factory and dependencies", announce=False)
         with prepare_contract_source(
             package_ref,
             contract,

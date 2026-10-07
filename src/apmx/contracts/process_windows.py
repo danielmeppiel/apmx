@@ -446,9 +446,11 @@ def supervise_process(
     records the actual TerminateJobObject operation, not invented POSIX signals.
     No native fallback runs if safe pre-resume job assignment is unavailable.
     """
+    from .native_logs import NativeLogStream
     from .process import post_exit_grace
 
     limits = limits or ContractLimits()
+    native_logs = NativeLogStream(request.log_directory, events)
     started = time.monotonic()
     if os.name != "nt":
         return ProcessObservation(None, error="The native Windows adapter requires Windows.")
@@ -498,6 +500,7 @@ def supervise_process(
             stop("cancelled", time.monotonic())
         while True:
             try:
+                native_logs.poll()
                 now = time.monotonic()
                 returncode = child.poll()
                 active = child.active_processes()
@@ -556,6 +559,7 @@ def supervise_process(
                         time.sleep(_POLL_SECONDS)
         finally:
             child.close()
+    native_logs.finish()
     if events is not None and stop_reason is not None:
         events.emit("stop_observed", confirmed=cleanup_confirmed, reason=stop_reason)
     return ProcessObservation(

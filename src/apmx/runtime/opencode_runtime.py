@@ -134,6 +134,9 @@ class OpenCodeRuntime:
             raise self._unobservable()
         argv = [
             str(plan.executable),
+            "--print-logs",
+            "--log-level",
+            "DEBUG",
             "run",
             "--format",
             "json",

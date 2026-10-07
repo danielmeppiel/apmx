@@ -649,8 +649,11 @@ class ContractLogger:
         """Consume the conductor's ordered stream; never derive an outcome."""
         handlers = {
             "selected": self._selected,
+            "input_captured": self._input_captured,
+            "workspace_captured": self._workspace_captured,
             "phase": self._phase,
             "activity": self._activity,
+            "native_diagnostic": self._native_diagnostic,
             "skill_loaded": self._skill_loaded,
             "diagnostic": self._diagnostic,
             "metadata": self._metadata,
@@ -823,6 +826,9 @@ class ContractLogger:
                 indent=0,
             )
         self._write(f"Produces: {self._produces}")
+        needs = event.data.get("needs", ())
+        if isinstance(needs, tuple):
+            self._write("Needs: " + (", ".join(needs) if needs else "no declared input files"))
         if not self._display.identity_shown:
             self._display.identity_shown = True
             self._write(f"Harness: {self._field(event, 'harness', 'copilot')} / {model}")
@@ -838,6 +844,22 @@ class ContractLogger:
             detail=True,
         )
 
+    def _input_captured(self, event: RunEvent) -> None:
+        entry = event.data.get("entry")
+        if not isinstance(entry, FileEntry):
+            raise TypeError("input_captured requires an admitted FileEntry.")
+        self._write(
+            f"Found input: {entry.relative_path} "
+            f"({self._field(event, 'origin')}; captured {entry.size} bytes)"
+        )
+        self._write(f"Input SHA-256: {entry.sha256}", severity="detail", detail=True)
+        record = self._field(event, "producer_record", "")
+        if record:
+            self._write(f"Input record: {self._path(record)}", severity="detail", detail=True)
+
+    def _workspace_captured(self, event: RunEvent) -> None:
+        self._write(f"Working copy: {event.data['files']} captured files; execution uses copies.")
+
     def _phase(self, event: RunEvent) -> None:
         phase = self._field(event, "name")
         if phase == self._last_phase:
@@ -846,7 +868,7 @@ class ContractLogger:
         if phase == "checks":
             self._checks_heading()
         message = {
-            "preflight": f"Preparing files for {self._harness}",
+            "preflight": f"Capturing files for {self._harness}",
             "execution": f"Running {self._harness}",
             "capture": "Saving output",
             "checks": f"Checking {self._produces}",
@@ -857,7 +879,7 @@ class ContractLogger:
             self._write(
                 message,
                 severity="start",
-                detail=phase != "execution" or self._display.animates(),
+                detail=False,
             )
 
     def _attribution(self, event: RunEvent) -> str:
@@ -878,6 +900,20 @@ class ContractLogger:
             attribution=self._attribution(event),
         )
 
+    def _native_diagnostic(self, event: RunEvent) -> None:
+        """Keep native debug noise out of the checker evidence retention budget."""
+        self._display.emit(
+            _DisplayLine(
+                safe_text(self._field(event, "text"), limit=TEXT_LINE_BYTES),
+                source=f"{self._harness} native debug",
+                role=_Role.DETAIL,
+                level=_Level.DETAIL,
+                layout=_Layout.LITERAL,
+            ),
+            visibility=_Visibility.VERBOSE,
+            verbose=self.verbose,
+        )
+
     def _activity(self, event: RunEvent) -> None:
         text = self._field(event, "text", "")
         tool_status = self._field(event, "tool_status", "")
@@ -894,8 +930,7 @@ class ContractLogger:
             if not self._check_evidence.total_lines:
                 self._display.emit(
                     _DisplayLine(safe_text(f"Check {name} stdout:"), role=_Role.DETAIL),
-                    visibility=_Visibility.VERBOSE,
-                    verbose=self.verbose,
+                    visibility=_Visibility.ALWAYS,
                 )
             self._check_evidence.append(safe_text(text))
         displayed = None
@@ -914,12 +949,12 @@ class ContractLogger:
             attribution=source,
             accent=text if tool_status == "failed" else "",
             display_message=displayed,
-            detail=not stderr and tool_status != "failed",
+            detail=False,
             layout=_Layout.PROSE if not tool_status else _Layout.LITERAL,
             retained_limit=TEXT_LINE_BYTES if checker_stdout else None,
             display=(
                 _DisplayLine(
-                    safe_text(text),
+                    safe_text(text, limit=TEXT_LINE_BYTES),
                     role=_Role.DETAIL,
                     source=safe_text(source, limit=256),
                     level=_Level.DETAIL,
@@ -990,6 +1025,9 @@ class ContractLogger:
         self._flush_check_evidence(completion_observed=False)
         self._check_evidence = _CheckEvidence(self._field(event, "name"))
         self._checks_heading()
+        name = self._field(event, "name")
+        command = self._field(event, "command", "")
+        self._write(f"Running check: {name}" + (f" - {command}" if command else ""))
         self.start_activity(
             f"Checking {self._produces} ({self._field(event, 'name')})",
             announce=False,
@@ -1036,7 +1074,7 @@ class ContractLogger:
             self._check_evidence = None
 
     def _flush_check_evidence(self, *, completion_observed: bool) -> None:
-        """Replay stdout to the terminal only; stderr was already visible."""
+        """Close live output without replaying already-displayed checker lines."""
         evidence, self._check_evidence = self._check_evidence, None
         if evidence is None or not evidence.total_lines:
             return
@@ -1044,38 +1082,6 @@ class ContractLogger:
         if not completion_observed:
             self._display.emit(
                 _DisplayLine(f"Check {name}: completion was not observed.", level=_Level.DETAIL)
-            )
-        if self.verbose:
-            return
-        excerpt = evidence.excerpt()
-        self._display.emit(_DisplayLine(f"Check {name} stdout excerpt:", role=_Role.DETAIL))
-        if excerpt.omitted_bytes:
-            self._display.emit(
-                _DisplayLine(
-                    f"[... sanitized bytes omitted: {excerpt.omitted_bytes}; "
-                    f"whole lines omitted: {excerpt.omitted_lines}; "
-                    f"partial lines: {excerpt.partial_lines}; beginning/tail follow ...]",
-                    role=_Role.DETAIL,
-                    level=_Level.DETAIL,
-                    layout=_Layout.PROSE,
-                )
-            )
-        for fragment in excerpt.fragments:
-            self._display.emit(
-                _DisplayLine(
-                    fragment.text.removesuffix("\n"),
-                    source=f"Check {name}",
-                    level=_Level.DETAIL,
-                    layout=_Layout.LITERAL,
-                )
-            )
-        if self._run_directory is not None:
-            self._display.emit(
-                _DisplayLine(
-                    safe_text(f"Logs: {self._path(self._run_directory / 'transcript.log')}"),
-                    role=_Role.DETAIL,
-                    level=_Level.DETAIL,
-                )
             )
 
     @staticmethod
@@ -1323,7 +1329,7 @@ class ContractLogger:
 
     def new_attempt(self, *, index: int, count: int) -> ContractLogger:
         """Give each attempt a private transcript while retaining the factory step."""
-        self._write(f"Attempt {index}/{count} (shared repair budget)", severity="info")
+        self._write(f"Attempt {index} of {count}", severity="info")
         attempt = ContractLogger(verbose=self.verbose, _display=self._display, _step=self._step)
         attempt._display_root = self._display_root
         return attempt
@@ -1332,15 +1338,23 @@ class ContractLogger:
         """Disclose authored execution bounds before confirmation or plan execution."""
         if budget is not None:
             self._write(
-                f"Repair budget: at most {budget.max_attempts} "
+                f"Attempts: up to {budget.max_attempts} "
                 f"{'attempt' if budget.max_attempts == 1 else 'attempts'}, "
-                f"{budget.max_seconds:g}s shared execution/check time; no model spend cap."
+                f"{budget.max_seconds:g}s total for execution and checks. "
+                "Only rejected outputs can be retried; this is not a model spending limit."
             )
 
-    def repair_finished(self, *, reason: str, record: Path) -> None:
+    def repair_finished(self, *, reason: str, record: Path, attempts: int) -> None:
         """Expose the durable link to all attempts, without another outcome decision."""
-        self._write(f"Repair controller: {reason}")
-        self._write(f"Controller record: {self._path(record)}")
+        self._write(
+            {
+                "complete": f"Accepted on attempt {attempts}.",
+                "not_retryable": "Stopped: this failure cannot be retried automatically.",
+                "no_progress": "Stopped: another attempt produced the same rejected output.",
+                "max_attempts": f"Stopped after {attempts} attempts: the output is still rejected.",
+            }[reason]
+        )
+        self._write(f"Attempts record: {self._path(record)}")
 
     def select_factory_root(self, root: Path) -> None:
         self._display_root = self._caller_root
@@ -1380,7 +1394,7 @@ class ContractLogger:
                 kind = (
                     "from an earlier step" if value in graph.inputs(contract) else "starting file"
                 )
-                self._write(f"Input: {value} ({kind})", severity="detail", detail=True)
+                self._write(f"Input: {value} ({kind})")
             for check in contract.checks:
                 self._write(f"Check {check.name}: {check.command}", severity="detail", detail=True)
         self._display.gap()
@@ -1407,15 +1421,16 @@ class ContractLogger:
 
     def confirm_package_preparation(self, package_ref: str) -> bool:
         """Authorize acquisition only; factory execution still needs its own consent."""
-        self._write(f"Package: {package_ref}", severity="heading", indent=0)
+        self._write(f"Factory source: {package_ref}", severity="heading", indent=0)
         self._write(
-            "Preparation may install dependencies using host files, network and available "
-            "logins. Run only packages you trust. No agent runs yet; inspect the factory "
-            "and confirm execution afterward.",
+            "APMX will load the factory and use APM to install its dependencies in a temporary "
+            "workspace. This can use host files, download packages and use available logins. "
+            "No agent or check runs yet; you will inspect "
+            "the steps and approve execution separately. Load only factories you trust.",
             layout=_Layout.PROSE,
             indent=0,
         )
-        return self._confirm("Prepare this package using host access? [y/N]")
+        return self._confirm("Load this factory and install its dependencies? [y/N]")
 
     def _confirm(self, prompt: str) -> bool:
         self._write(prompt, accent=prompt, indent=0)
@@ -1580,18 +1595,26 @@ class ContractLogger:
         """Report a delivered standards projection without changing recorded execution."""
         if path is None:
             self._write(
-                "Standard package: not applicable (no retained official APM inventory).",
+                "Evidence package: not applicable (no retained official APM inventory).",
                 severity="detail",
                 detail=True,
             )
             return
-        self._write(f"Standard package: {self._path(path)}")
+        self._write(f"Evidence package: {self._path(path)}")
         self._write(f"Summary: {self._path(path / 'summary.md')}")
+        self._write(f"Factory definition: {self._path(path / 'definition.json')}")
         self._write(
-            "Unsigned evidence includes project/source files. Review before sharing.",
-            severity="detail",
-            detail=True,
+            f"Production (in-toto / SLSA v1): {self._path(path / 'provenance.intoto.json')}"
         )
+        self._write(f"Dependency ABOM (CycloneDX 1.5): {self._path(path / 'abom.cdx.json')}")
+        self._write(f"Check results (in-toto): {self._path(path / 'checks')}/")
+        self._write(f"SHA-256 file index: {self._path(path / 'index.json')}")
+        self._write(
+            "SHA-256 subjects and materials bind the recorded factory, inputs, checks and outputs. "
+            "Evidence is unsigned: content binding, not authenticated builder identity.",
+            layout=_Layout.PROSE,
+        )
+        self._write("Includes project/source files. Review before sharing.")
 
     def evidence_delivery_failed(self, reason: str) -> None:
         """A failed export cannot relabel an already finalized COMPLETE record."""

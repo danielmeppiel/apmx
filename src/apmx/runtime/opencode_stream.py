@@ -10,7 +10,7 @@ class OpenCodeStreamDecoder(ContractStreamDecoder):
     """Observe terminal model steps without inventing a native exit envelope."""
 
     def __init__(self, events: EventEmitter, *, limits: ContractLimits | None = None) -> None:
-        super().__init__(events, limits=limits)
+        super().__init__(events, limits=limits, native_debug_stderr=True)
         self.session_id: str | None = None
         self._step_message: str | None = None
         self._last_reason: str | None = None
