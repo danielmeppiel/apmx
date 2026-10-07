@@ -32,6 +32,61 @@ _BUGGY_GREETING = (_EXAMPLE_ROOT / "app" / "greeting.py").read_bytes()
 _APPROVED_SIGNER_DIGEST = "a" * 40
 _UNAPPROVED_SIGNER_DIGEST = "b" * 40
 _FIXED_GREETING = make_fixture._PATCHED_GREETING.encode()
+_TEST_EXECUTION_IMAGE = (
+    "python:3.12-slim@sha256:2b4f19dae3a777dfc3b76730bda1e82e1f66ab2a2686fa93ca78edbfb4f04ffe"
+)
+
+
+def _fake_passing_execution_results(bundle_dir: Path) -> list[dict]:
+    """A canned "every case matched" execution result, used to monkeypatch
+    ``run_execution_bundle`` in tests that are not themselves about the
+    execution boundary (binding/factory/capability-revocation/signer) --
+    this is explicitly NOT a substitute for ``test_real_docker_execution_*``
+    below, which actually invokes the real container pipeline end-to-end.
+    """
+    manifest = json.loads((bundle_dir / "manifest.json").read_bytes())
+    results = []
+    for entry in manifest["checks"]:
+        if entry["candidateMissing"]:
+            results.append(
+                {
+                    "name": entry["name"],
+                    "candidateSha256": None,
+                    "imageDigestUsed": manifest["executionImage"],
+                    "cases": [],
+                }
+            )
+            continue
+        results.append(
+            {
+                "name": entry["name"],
+                "candidateSha256": entry["expectedCandidateSha256"],
+                "imageDigestUsed": manifest["executionImage"],
+                "cases": [
+                    {"ok": True, "observed": case["expectedOutput"]} for case in entry["cases"]
+                ],
+            }
+        )
+    return results
+
+
+def _fake_failing_execution_results(bundle_dir: Path) -> list[dict]:
+    """Like ``_fake_passing_execution_results`` but every case reports the
+    wrong observed value -- used to prove the signer/assessment layers
+    still reject an execution result that does not match, without
+    depending on a real container actually producing wrong output."""
+    manifest = json.loads((bundle_dir / "manifest.json").read_bytes())
+    results = []
+    for entry in manifest["checks"]:
+        results.append(
+            {
+                "name": entry["name"],
+                "candidateSha256": entry.get("expectedCandidateSha256"),
+                "imageDigestUsed": manifest["executionImage"],
+                "cases": [{"ok": True, "observed": "wrong value"} for _ in entry["cases"]],
+            }
+        )
+    return results
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -79,16 +134,16 @@ def _init_repo(tmp_path: Path, *, approved_digests: list[str]) -> Path:
     (policy_dir / "required-checks.json").write_text(
         json.dumps(
             {
+                "executionImage": _TEST_EXECUTION_IMAGE,
                 "checks": [
                     {
                         "name": "greeting-salutation",
                         "candidatePath": _APP_RELATIVE,
-                        "candidateScratchRelative": "greeting.py",
-                        "testPath": "examples/enterprise-receiver/app/checks/test_greeting.py",
-                        "testScratchRelative": "checks/test_greeting.py",
-                        "testFunction": "test_greet_uses_full_salutation",
+                        "candidateScratchRelative": "candidate_module",
+                        "entrypoint": {"module": "candidate_module", "function": "greet"},
+                        "cases": [{"input": "World", "expectedOutput": "Hello, World!"}],
                     }
-                ]
+                ],
             }
         )
     )
@@ -99,6 +154,18 @@ def _init_repo(tmp_path: Path, *, approved_digests: list[str]) -> Path:
     checks_dir.mkdir()
     (checks_dir / "test_greeting.py").write_bytes(
         (_EXAMPLE_ROOT / "app" / "checks" / "test_greeting.py").read_bytes()
+    )
+    # The container isolation scripts must themselves be readable from the
+    # trusted base ref (write_execution_bundle reads them via
+    # trusted_bytes), exactly mirroring the real repo's own layout.
+    container_dir = repo / "examples" / "enterprise-receiver" / "receiver" / "container"
+    container_dir.mkdir(parents=True)
+    (container_dir / "container_driver.py").write_bytes(
+        (_HERE / "container" / "container_driver.py").read_bytes()
+    )
+    (container_dir / "executor.py").write_bytes((_HERE / "container" / "executor.py").read_bytes())
+    (container_dir / "run_bundle.py").write_bytes(
+        (_HERE / "container" / "run_bundle.py").read_bytes()
     )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
@@ -153,6 +220,11 @@ def test_positive_case_is_accepted(tmp_path, monkeypatch, valid_evidence, schema
     head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    # This test is about binding/factory/signer policy wiring, not the
+    # execution boundary itself (covered separately below, including a real
+    # end-to-end container test); faking a passing observation here avoids
+    # requiring a docker daemon for every policy-level test.
+    monkeypatch.setattr(receiver_check, "run_execution_bundle", _fake_passing_execution_results)
     result = receiver_check.check_case(
         case="positive",
         case_dir_relative="cases/positive",
@@ -544,6 +616,7 @@ def test_assess_canonical_runs_factory_and_capability_checks(
     repo = _init_repo(tmp_path, approved_digests=[])  # not approved
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    monkeypatch.setattr(receiver_check, "run_execution_bundle", _fake_passing_execution_results)
 
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
         receiver_check.assess_canonical(valid_evidence, base_sha, schemas_dir)
@@ -560,40 +633,302 @@ def test_assess_canonical_runs_factory_and_capability_checks(
     assert summary["definitionSha256"] == digest
 
 
-def test_execute_receiver_checks_passes_for_correct_candidate(tmp_path, monkeypatch):
+def test_trusted_execution_image_requires_pinned_digest(tmp_path, monkeypatch):
+    """A floating tag (no @sha256:...) must never be accepted as
+    executionImage -- the whole container-isolation trust story depends on
+    the base image itself being pinned, not just the candidate bytes."""
     repo = _init_repo(tmp_path, approved_digests=[])
+    policy_path = repo / _POLICY_RELATIVE / "required-checks.json"
+    policy = json.loads(policy_path.read_text())
+    policy["executionImage"] = "python:3.12-slim"
+    policy_path.write_text(json.dumps(policy))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "unpin image")
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    results = receiver_check.execute_receiver_checks(base_sha, {_APP_RELATIVE: _FIXED_GREETING})
-    assert results == [
-        {"name": "greeting-salutation", "passed": True, "detail": results[0]["detail"]}
-    ]
-    receiver_check.check_execution_boundary(base_sha, results)  # must not raise
 
-
-def test_execute_receiver_checks_fails_for_incorrect_candidate(tmp_path, monkeypatch):
-    """The receiver-required test is actually re-run against the real
-    candidate bytes, not merely consulted structurally: unfixed (still
-    buggy) candidate content must fail the independent re-execution, even
-    though it would still pass every other check (integrity/factory/
-    binding/capability-revocation) that never inspects behavior."""
-    repo = _init_repo(tmp_path, approved_digests=[])
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    results = receiver_check.execute_receiver_checks(base_sha, {_APP_RELATIVE: _BUGGY_GREETING})
-    assert results[0]["passed"] is False
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_execution_boundary(base_sha, results)
+        receiver_check._trusted_execution_image(base_sha)
     assert excinfo.value.policy == "execution"
 
 
-def test_execute_receiver_checks_fails_when_candidate_bytes_missing(tmp_path, monkeypatch):
+def _write_execution_bundle_for(
+    tmp_path, monkeypatch, repo: Path, base_sha: str, candidate_bytes: bytes
+):
+    bundle_dir = tmp_path / "bundle"
+    manifest = receiver_check.write_execution_bundle(
+        base_sha, {_APP_RELATIVE: candidate_bytes}, bundle_dir
+    )
+    return bundle_dir, manifest
+
+
+def test_verify_execution_results_passes_for_matching_observation(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    results = receiver_check.execute_receiver_checks(base_sha, {})
+    bundle_dir, manifest = _write_execution_bundle_for(
+        tmp_path, monkeypatch, repo, base_sha, _FIXED_GREETING
+    )
+    results = _fake_passing_execution_results(bundle_dir)
+    receiver_check.verify_execution_results(base_sha, manifest, results)  # must not raise
+
+
+def test_verify_execution_results_rejects_wrong_observed_output(tmp_path, monkeypatch):
+    """The receiver-required test is actually held against the real
+    candidate's observed behavior, not merely consulted structurally: a
+    reported observed value that does not match policy's expectedOutput
+    must fail, even if every other check (integrity/factory/binding/
+    capability-revocation) never inspects behavior at all."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bundle_dir, manifest = _write_execution_bundle_for(
+        tmp_path, monkeypatch, repo, base_sha, _BUGGY_GREETING
+    )
+    results = _fake_failing_execution_results(bundle_dir)
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_execution_boundary(base_sha, results)
+        receiver_check.verify_execution_results(base_sha, manifest, results)
+    assert excinfo.value.policy == "execution"
+
+
+def test_verify_execution_results_rejects_missing_candidate(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bundle_dir = tmp_path / "bundle"
+    manifest = receiver_check.write_execution_bundle(base_sha, {}, bundle_dir)
+    results = _fake_passing_execution_results(bundle_dir)
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.verify_execution_results(base_sha, manifest, results)
+    assert excinfo.value.policy == "execution"
+
+
+def test_verify_execution_results_rejects_image_digest_mismatch(tmp_path, monkeypatch):
+    """A result claiming to have used a different image digest than the
+    one policy pins must never be trusted -- this is what stops a
+    compromised job B from silently substituting an unpinned/unapproved
+    execution environment."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bundle_dir, manifest = _write_execution_bundle_for(
+        tmp_path, monkeypatch, repo, base_sha, _FIXED_GREETING
+    )
+    results = _fake_passing_execution_results(bundle_dir)
+    results[0]["imageDigestUsed"] = "python:3.12-slim@sha256:" + "0" * 64
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.verify_execution_results(base_sha, manifest, results)
+    assert excinfo.value.policy == "execution"
+
+
+def test_verify_execution_results_rejects_candidate_sha_mismatch(tmp_path, monkeypatch):
+    """A result reporting a candidateSha256 that does not match the
+    independently-computed expected digest must never be trusted -- it may
+    mean the execution job never actually exercised the real candidate
+    bytes."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bundle_dir, manifest = _write_execution_bundle_for(
+        tmp_path, monkeypatch, repo, base_sha, _FIXED_GREETING
+    )
+    results = _fake_passing_execution_results(bundle_dir)
+    results[0]["candidateSha256"] = "f" * 64
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.verify_execution_results(base_sha, manifest, results)
+    assert excinfo.value.policy == "execution"
+
+
+def test_verify_execution_results_rejects_incomplete_case_set(tmp_path, monkeypatch):
+    """A result reporting fewer cases than policy declares (e.g. the
+    executor bailed out partway, or the container timed out mid-run) must
+    never be silently treated as a partial pass."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bundle_dir, manifest = _write_execution_bundle_for(
+        tmp_path, monkeypatch, repo, base_sha, _FIXED_GREETING
+    )
+    results = _fake_passing_execution_results(bundle_dir)
+    results[0]["cases"] = []
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.verify_execution_results(base_sha, manifest, results)
+    assert excinfo.value.policy == "execution"
+
+
+def test_verify_execution_results_rejects_missing_required_check(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    bundle_dir, manifest = _write_execution_bundle_for(
+        tmp_path, monkeypatch, repo, base_sha, _FIXED_GREETING
+    )
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.verify_execution_results(base_sha, manifest, [])
+    assert excinfo.value.policy == "execution"
+
+
+_CONTAINER_DIR = _HERE / "container"
+
+
+def _run_container_driver(payload: dict, timeout: float = 15.0) -> dict:
+    """Invoke the EXACT file that is shipped into the real execution
+    container, as a real OS subprocess (no docker daemon required for this
+    protocol-level regression -- the same driver/executor pair runs
+    identically whether or not the surrounding process also has
+    `--network none`/`--read-only`/cgroup namespace isolation applied by
+    `docker run`, which is a separate, orthogonal layer validated by the
+    docker-gated end-to-end test below)."""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", str(_CONTAINER_DIR / "container_driver.py")],
+        input=json.dumps(payload).encode(),
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    text = completed.stdout.decode()
+    matching = [line for line in text.splitlines() if line.startswith("CASES:")]
+    assert len(matching) == 1, text
+    return json.loads(matching[0][len("CASES:") :])
+
+
+def test_container_driver_reports_correct_observed_output():
+    source = make_fixture._PATCHED_GREETING
+    payload = {
+        "candidateSource": source,
+        "entrypoint": {"module": "candidate_module", "function": "greet"},
+        "cases": [{"input": "World"}],
+    }
+    cases = _run_container_driver(payload)
+    assert cases == [{"ok": True, "observed": "Hello, World!"}]
+
+
+def test_container_driver_treats_os_exit_bypass_as_explicit_failure():
+    """A candidate that calls os._exit(0) during import must never be
+    confused with a passing result: the executor process dies before
+    writing its RESULT line, and the driver must report this as an
+    explicit, unambiguous failure."""
+    source = "import os\nos._exit(0)\n\ndef greet(name):\n    return f'Hello, {name}!'\n"
+    payload = {
+        "candidateSource": source,
+        "entrypoint": {"module": "candidate_module", "function": "greet"},
+        "cases": [{"input": "World"}],
+    }
+    cases = _run_container_driver(payload)
+    assert cases == [{"ok": False, "error": "executor produced no RESULT line"}]
+
+
+def test_container_driver_rejects_forged_result_via_raw_fd_write():
+    """A candidate that writes a forged ``RESULT:`` line directly to raw fd
+    1 during import, hoping to be believed before the real post-call write
+    happens, must never be trusted: the executor redirects its own fd 0/1/2
+    to /dev/null BEFORE importing candidate code, so the forged write never
+    reaches the real channel."""
+    source = (
+        "import os\n"
+        'os.write(1, b\'RESULT:{"ok": true, "observed": "FORGED"}\\n\')\n'
+        "\n"
+        "def greet(name):\n"
+        "    return f'Hello, {name}!'\n"
+    )
+    payload = {
+        "candidateSource": source,
+        "entrypoint": {"module": "candidate_module", "function": "greet"},
+        "cases": [{"input": "World"}],
+    }
+    cases = _run_container_driver(payload)
+    # The forged write landed in /dev/null; only the genuine post-call
+    # result (via the saved real stdout fd) is ever observed.
+    assert cases == [{"ok": True, "observed": "Hello, World!"}]
+
+
+def test_container_driver_rejects_fd_spray_forgery_as_ambiguous():
+    """A candidate that sprays the same forged RESULT line across every
+    low file descriptor, hoping to hit whichever fd the saved real-stdout
+    duplicate landed on, must still never be trusted merely by picking the
+    first or last matching line -- any ambiguity (more than one RESULT
+    line) is treated as an explicit failure."""
+    source = (
+        "import os\n"
+        "for fd in range(10):\n"
+        "    try:\n"
+        '        os.write(fd, b\'RESULT:{"ok": true, "observed": "FORGED"}\\n\')\n'
+        "    except OSError:\n"
+        "        pass\n"
+        "\n"
+        "def greet(name):\n"
+        "    return f'Hello, {name}!'\n"
+    )
+    payload = {
+        "candidateSource": source,
+        "entrypoint": {"module": "candidate_module", "function": "greet"},
+        "cases": [{"input": "World"}],
+    }
+    cases = _run_container_driver(payload)
+    observed = cases[0]
+    # Either the spray missed the real fd entirely (single genuine RESULT
+    # line, correct observed value) or it hit it (ambiguous, explicit
+    # failure) -- a silently-accepted forged "FORGED" value is the only
+    # outcome that would indicate a real break.
+    assert observed in (
+        {"ok": True, "observed": "Hello, World!"},
+        {"ok": False, "error": "executor produced more than one RESULT line"},
+    )
+
+
+def test_container_driver_rejects_oversized_response():
+    """A candidate whose return value is too large to encode within the
+    executor's own output bound must be reported as an explicit error, not
+    silently truncated into something that happens to look like a pass."""
+    source = "def greet(name):\n    return 'x' * 100000\n"
+    payload = {
+        "candidateSource": source,
+        "entrypoint": {"module": "candidate_module", "function": "greet"},
+        "cases": [{"input": "World"}],
+    }
+    cases = _run_container_driver(payload)
+    assert cases == [{"ok": False, "error": "observed value exceeded the size bound"}]
+
+
+def _docker_daemon_reachable() -> bool:
+    import shutil
+
+    if shutil.which("docker") is None:
+        return False
+    try:
+        completed = subprocess.run(["docker", "info"], capture_output=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+@pytest.mark.skipif(
+    not _docker_daemon_reachable(), reason="no reachable docker daemon in this environment"
+)
+def test_real_docker_execution_positive_and_tampering(tmp_path, monkeypatch):
+    """The real end-to-end path: an actual `docker run` of the pinned,
+    network-isolated, read-only, non-root container image, for both a
+    correct candidate (must be accepted) and a tampered/buggy candidate
+    (must be rejected) -- not a subprocess-level mock of either outcome."""
+    repo = _init_repo(tmp_path, approved_digests=[])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+
+    positive_bundle = tmp_path / "bundle-positive"
+    manifest = receiver_check.write_execution_bundle(
+        base_sha, {_APP_RELATIVE: _FIXED_GREETING}, positive_bundle
+    )
+    results = receiver_check.run_execution_bundle(positive_bundle)
+    receiver_check.verify_execution_results(base_sha, manifest, results)  # must not raise
+
+    tampered_bundle = tmp_path / "bundle-tampered"
+    tampered_manifest = receiver_check.write_execution_bundle(
+        base_sha, {_APP_RELATIVE: _BUGGY_GREETING}, tampered_bundle
+    )
+    tampered_results = receiver_check.run_execution_bundle(tampered_bundle)
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.verify_execution_results(base_sha, tampered_manifest, tampered_results)
     assert excinfo.value.policy == "execution"
 
 

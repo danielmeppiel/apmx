@@ -1,12 +1,43 @@
 name: Receiver Candidate Check
 
-# Unprivileged gate for the enterprise-receiver demo.
+# Unprivileged gate for the enterprise-receiver demo, now split into three
+# separate jobs connected only by actions/upload-artifact and
+# actions/download-artifact -- never a shared runner, workspace, or
+# permission set:
 #
-# This MUST run as pull_request_target, not pull_request: for pull_request,
-# GitHub loads this workflow's own YAML *and* every file it executes (this
-# file, check.py, evidence-requirements.txt) from the PR's own tree, so any
-# PR could silently replace them with something that always exits 0 while
-# keeping the same required-check name.
+#   prepare (job A) -- CONTENTS:READ, checks out the PR's trusted BASE
+#     commit only, independently re-derives every digest this boundary
+#     will ever hold later jobs' self-reported claims against, and writes
+#     a self-contained execution bundle (candidate bytes + the pinned,
+#     trusted container_driver.py/executor.py/run_bundle.py scripts + a
+#     manifest of policy's declarative input/expectedOutput cases).
+#
+#   execute (job B) -- permissions: {} (NO permissions at all, not even
+#     contents:read), NO actions/checkout step of any kind. Its entire
+#     code is the ONE file job A placed in the bundle
+#     (container/run_bundle.py); it never imports check.py, never reads
+#     scripts/verify_evidence.py, never touches git. It runs each
+#     candidate inside a disposable, digest-pinned, network-isolated,
+#     read-only, non-root Docker container that only ever reports a raw,
+#     untrusted observed value per case -- it never sees expectedOutput
+#     and never decides pass/fail itself.
+#
+#   assess (job C) -- CONTENTS:READ, independently re-does every
+#     deterministic identity check (integrity/factory/binding/capability-
+#     revocation) rather than trusting job A's verdict, and independently
+#     RE-DERIVES every case's pass/fail status from job B's raw observed
+#     values against its OWN copy of expectedOutput (verify_execution_
+#     results never trusts job B's own booleans). This is the job whose
+#     check run should be configured as the required status check on the
+#     examples/enterprise-receiver base branch: if prepare or execute
+#     fails, assess's `needs:` means it never runs (reported as an
+#     unsatisfied required check, not a silent pass).
+#
+# This MUST run as pull_request_target, not pull_request: for
+# pull_request, GitHub loads this workflow's own YAML *and* every file it
+# executes (this file, check.py, evidence-requirements.txt) from the PR's
+# own tree, so any PR could silently replace them with something that
+# always exits 0 while keeping the same required-check name.
 #
 # IMPORTANT (corrected from an earlier draft of this comment): GitHub does
 # NOT load a pull_request_target workflow's own YAML from this trigger's
@@ -22,18 +53,17 @@ name: Receiver Candidate Check
 # unilaterally from an isolated branch -- see docs/security-story.md and
 # the milestone report to the creator for the explicit call-out.
 #
-# Separately, and still correctly: the actions/checkout step below pins
-# ITS OWN checkout to the PR's trusted base commit
+# Separately, and still correctly: the prepare/assess jobs' checkout steps
+# pin checkout to the PR's trusted base commit
 # (`github.event.pull_request.base.sha`) via an explicit `ref:`, never an
-# implicit/default ref -- this controls which commit's *files* this job
-# reads and executes as code, which is a different question from which
+# implicit/default ref -- this controls which commit's *files* those jobs
+# read and execute as code, which is a different question from which
 # commit the *workflow definition itself* was loaded from (always main,
 # per above). The untrusted PR head is never checked out or executed: its
 # objects are fetched (not checked out) in a separate step purely so
 # check.py can read specific candidate bytes via `git show <head_sha>:<path>`
 # for hashing/diffing, matching the PR's trust model in
-# docs/security-story.md. No secrets are used and `contents: read` is the
-# only permission granted.
+# docs/security-story.md. No secrets are used anywhere in this workflow.
 
 on:
   pull_request_target:
@@ -47,11 +77,17 @@ concurrency:
   group: receiver-candidate-check-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+env:
+  BUNDLE_ARTIFACT: receiver-bundles-${{ github.event.pull_request.number }}-${{ github.run_id }}
+  RESULTS_ARTIFACT: receiver-results-${{ github.event.pull_request.number }}-${{ github.run_id }}
+
 jobs:
-  check:
-    name: Receiver Candidate Check
+  prepare:
+    name: Receiver Candidate Check / prepare (job A)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -91,18 +127,6 @@ jobs:
           .venv-evidence/bin/python -m pip install --quiet --upgrade pip
           .venv-evidence/bin/python -m pip install --quiet -r scripts/evidence-requirements.txt
 
-      - name: Install independent execution interpreter
-        run: |
-          set -euo pipefail
-          # Deliberately a SEPARATE venv from .venv-evidence above: the
-          # interpreter that actually imports and runs candidate bytes
-          # (execute_receiver_checks in check.py) must not share a
-          # dependency set with the interpreter that verifies signed
-          # attestations. See scripts/execution-requirements.txt.
-          python3 -m venv .venv-execution
-          .venv-execution/bin/python -m pip install --quiet --upgrade pip
-          .venv-execution/bin/python -m pip install --quiet -r scripts/execution-requirements.txt
-
       - name: Fetch pinned evidence schemas (offline afterwards)
         run: |
           set -euo pipefail
@@ -127,12 +151,10 @@ jobs:
               print(f"fetched {name}")
           PY
 
-      - name: Run receiver checks for every case in this PR
+      - name: Discover cases and write trusted execution bundles
         env:
-          GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          APMX_EXECUTION_PYTHON: ${{ github.workspace }}/.venv-execution/bin/python
         run: |
           set -euo pipefail
           merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
@@ -146,18 +168,169 @@ jobs:
             echo "::error::No examples/enterprise-receiver/cases/<name> directory was added by this PR"
             exit 1
           fi
+          mkdir -p bundles
+          : > bundles/cases.txt
           status=0
           for case_dir in "${case_dirs[@]}"; do
             case_name="$(basename "$case_dir")"
-            echo "::group::case: $case_name"
+            echo "::group::prepare case: $case_name"
+            if .venv-evidence/bin/python examples/enterprise-receiver/receiver/check.py \
+              prepare-case \
+              --case-dir "$case_dir" \
+              --base-sha "$BASE_SHA" \
+              --head-sha "$HEAD_SHA" \
+              --schemas "$PWD/.schema-cache" \
+              --bundle-dir "bundles/$case_name"; then
+              # case_name<TAB>case_dir, so later jobs can reconstruct both
+              # without needing to recompute the merge-base diff themselves.
+              printf '%s\t%s\n' "$case_name" "$case_dir" >> bundles/cases.txt
+            else
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.BUNDLE_ARTIFACT }}
+          path: bundles/
+          retention-days: 1
+          if-no-files-found: error
+
+  execute:
+    name: Receiver Candidate Check / execute (job B, zero permissions)
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      # Deliberately NO actions/checkout step: this job's entire code is
+      # the one trusted file job A placed in the bundle
+      # (run_bundle.py) -- it never imports check.py, never reads
+      # scripts/verify_evidence.py, never invokes git, and has zero
+      # permissions (not even contents:read). Docker is preinstalled on
+      # GitHub-hosted ubuntu-24.04 runners.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.BUNDLE_ARTIFACT }}
+          path: bundles/
+
+      - name: Execute every prepared case's candidate inside an isolated container
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          status=0
+          while IFS=$'\t' read -r case_name _case_dir; do
+            [ -n "$case_name" ] || continue
+            echo "::group::execute case: $case_name"
+            if python3 "bundles/$case_name/run_bundle.py" \
+              --bundle-dir "bundles/$case_name" \
+              --results "results/$case_name.json"; then
+              :
+            else
+              status=1
+            fi
+            echo "::endgroup::"
+          done < bundles/cases.txt
+          exit "$status"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.RESULTS_ARTIFACT }}
+          path: results/
+          retention-days: 1
+          if-no-files-found: error
+
+  assess:
+    name: Receiver Candidate Check / assess (job C)
+    needs: [prepare, execute]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch untrusted PR head objects (never checked out or executed)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune --no-recurse-submodules origin \
+            "refs/pull/${PR_NUMBER}/head"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install independent evidence verifier
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv-evidence
+          .venv-evidence/bin/python -m pip install --quiet --upgrade pip
+          .venv-evidence/bin/python -m pip install --quiet -r scripts/evidence-requirements.txt
+
+      - name: Fetch pinned evidence schemas (offline afterwards, independently)
+        run: |
+          set -euo pipefail
+          .venv-evidence/bin/python - "$PWD/.schema-cache" <<'PY'
+          import hashlib
+          import sys
+          from pathlib import Path
+          from urllib.request import urlopen
+
+          sys.path.insert(0, "scripts")
+          import verify_evidence as ve
+
+          cache = Path(sys.argv[1])
+          cache.mkdir(parents=True, exist_ok=True)
+          for name, expected in ve.SCHEMAS.items():
+              url = f"https://raw.githubusercontent.com/CycloneDX/specification/{ve.SCHEMA_COMMIT}/schema/{name}"
+              with urlopen(url, timeout=30) as response:
+                  raw = response.read(2 * 1024 * 1024)
+              digest = hashlib.sha256(raw).hexdigest()
+              assert digest == expected, f"schema hash mismatch for {name}: {digest}"
+              (cache / name).write_bytes(raw)
+          PY
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.BUNDLE_ARTIFACT }}
+          path: bundles/
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.RESULTS_ARTIFACT }}
+          path: results/
+
+      - name: Independently re-verify every case (identity + execution + signer)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS=$'\t' read -r case_name case_dir; do
+            [ -n "$case_name" ] || continue
+            echo "::group::assess case: $case_name"
             .venv-evidence/bin/python examples/enterprise-receiver/receiver/check.py \
-              check-case \
+              assess-case \
               --case "$case_name" \
               --case-dir "$case_dir" \
               --base-sha "$BASE_SHA" \
               --head-sha "$HEAD_SHA" \
               --schemas "$PWD/.schema-cache" \
+              --bundle-dir "bundles/$case_name" \
+              --results "results/$case_name.json" \
               || status=1
             echo "::endgroup::"
-          done
+          done < bundles/cases.txt
           exit "$status"
