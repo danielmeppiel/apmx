@@ -317,20 +317,109 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          status=0
-          while IFS=$'\t' read -r case_name case_dir; do
-            [ -n "$case_name" ] || continue
-            echo "::group::assess case: $case_name"
-            .venv-evidence/bin/python examples/enterprise-receiver/receiver/check.py \
-              assess-case \
-              --case "$case_name" \
-              --case-dir "$case_dir" \
-              --base-sha "$BASE_SHA" \
-              --head-sha "$HEAD_SHA" \
-              --schemas "$PWD/.schema-cache" \
-              --bundle-dir "bundles/$case_name" \
-              --results "results/$case_name.json" \
-              || status=1
-            echo "::endgroup::"
-          done < bundles/cases.txt
-          exit "$status"
+          # Builds the "complete validated receipt" the new fail-closed gate
+          # job (below) independently checks: one entry per case job A
+          # actually prepared, each explicitly recorded as accepted or not.
+          # A case this loop never reaches for any reason (crash, early
+          # exit) is simply absent from receipt.json's "cases" list, which
+          # the gate job's own case-set comparison against bundles/cases.txt
+          # treats as a hard failure -- never a silent "nothing to check".
+          python3 - "$BASE_SHA" "$HEAD_SHA" <<'PY'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          base_sha, head_sha = sys.argv[1], sys.argv[2]
+          cases = []
+          for line in Path("bundles/cases.txt").read_text().splitlines():
+              if not line.strip():
+                  continue
+              case_name, case_dir = line.split("\t", 1)
+              cases.append((case_name, case_dir))
+
+          receipt_cases = []
+          overall_ok = True
+          for case_name, case_dir in cases:
+              print(f"::group::assess case: {case_name}")
+              completed = subprocess.run(
+                  [
+                      ".venv-evidence/bin/python",
+                      "examples/enterprise-receiver/receiver/check.py",
+                      "assess-case",
+                      "--case", case_name,
+                      "--case-dir", case_dir,
+                      "--base-sha", base_sha,
+                      "--head-sha", head_sha,
+                      "--schemas", f"{Path.cwd()}/.schema-cache",
+                      "--bundle-dir", f"bundles/{case_name}",
+                      "--results", f"results/{case_name}.json",
+                  ],
+                  check=False,
+              )
+              accepted = completed.returncode == 0
+              if not accepted:
+                  overall_ok = False
+              receipt_cases.append({"name": case_name, "accepted": accepted})
+              print("::endgroup::")
+
+          Path("receipt.json").write_text(
+              json.dumps({"accepted": overall_ok, "cases": receipt_cases}, indent=2)
+          )
+          sys.exit(0 if overall_ok else 1)
+          PY
+
+      - name: Upload the assess receipt for the gate job (even on failure)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: receiver-assess-receipt-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: receipt.json
+          retention-days: 1
+          if-no-files-found: ignore
+
+  gate:
+    # The ACTUAL required status check for the examples/enterprise-receiver
+    # base branch -- never prepare/execute/assess directly. See gate.py's
+    # module docstring for why: a downstream job's own `needs:` pointing at
+    # a failed upstream job causes GitHub to report that downstream job as
+    # "skipped", and GitHub branch protection treats skipped (and neutral)
+    # conclusions as SATISFYING a required check, not blocking it. This job
+    # instead always runs (`if: always()`) and explicitly fails closed
+    # unless prepare, execute, AND assess all genuinely succeeded AND
+    # assess's own receipt artifact proves every prepared case was actually
+    # reached and accepted.
+    name: Receiver Candidate Check / gate (required)
+    if: always()
+    needs: [prepare, execute, assess]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.BUNDLE_ARTIFACT }}
+          path: bundles/
+        continue-on-error: true
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: receiver-assess-receipt-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: receipt/
+        continue-on-error: true
+
+      - name: Evaluate the fail-closed gate
+        run: |
+          set -euo pipefail
+          python3 examples/enterprise-receiver/receiver/gate.py \
+            --job-result "prepare=${{ needs.prepare.result }}" \
+            --job-result "execute=${{ needs.execute.result }}" \
+            --job-result "assess=${{ needs.assess.result }}" \
+            --receipt receipt/receipt.json \
+            --expected-cases bundles/cases.txt

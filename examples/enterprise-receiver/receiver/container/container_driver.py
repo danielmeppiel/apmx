@@ -26,11 +26,23 @@ self-certifying a pass.
 from __future__ import annotations
 
 import json
-import selectors
 import subprocess
 import sys
-import time
 from pathlib import Path
+
+# Explicit, not relying on Python's implicit script-directory sys.path
+# prepending: this script is normally invoked as a real top-level script
+# (``python3 /harness/container_driver.py``) where that would suffice, but
+# some test/invocation contexts run it under ``-I`` (isolated mode), which
+# explicitly suppresses that automatic behavior. The explicit insert below
+# is correct and idempotent in every invocation context, and makes
+# ``bounded_io.py`` importable as long as it is shipped into the exact
+# same minimal, candidate-inaccessible harness directory as this file (see
+# ``run_bundle.py``'s harness-directory construction), never the full
+# bundle (which also holds ``manifest.json``'s ``expectedOutput`` and other
+# checks' candidate bytes).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bounded_io import BoundedReadResult, read_process_bounded  # noqa: E402
 
 _EXECUTOR_PATH = Path(__file__).resolve().parent / "executor.py"
 
@@ -38,54 +50,24 @@ _EXECUTOR_PATH = Path(__file__).resolve().parent / "executor.py"
 # compromised executor cannot force this driver to buffer an unbounded
 # amount of data before the bound is ever checked.
 _MAX_EXECUTOR_OUTPUT_BYTES = 16384
-_CHUNK_BYTES = 4096
 
 
-def _read_bounded(proc: subprocess.Popen, timeout_seconds: float) -> tuple[bytes, bool]:
-    """Read ``proc.stdout`` incrementally, stopping (and killing the
-    process) the instant either the byte bound or the deadline is hit --
-    bounding happens during the read loop itself, never only afterward."""
-    deadline = time.monotonic() + timeout_seconds
-    chunks: list[bytes] = []
-    total = 0
-    overflowed = False
-    selector = selectors.DefaultSelector()
-    assert proc.stdout is not None
-    selector.register(proc.stdout, selectors.EVENT_READ)
-    try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                proc.kill()
-                break
-            events = selector.select(timeout=min(remaining, 0.25))
-            if not events:
-                if proc.poll() is not None:
-                    break
-                continue
-            chunk = proc.stdout.read(_CHUNK_BYTES)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > _MAX_EXECUTOR_OUTPUT_BYTES:
-                overflowed = True
-                proc.kill()
-                break
-            chunks.append(chunk)
-    finally:
-        selector.close()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
-    return b"".join(chunks), overflowed
-
-
-def _parse_result(stdout: bytes, overflowed: bool) -> dict:
-    if overflowed:
+def _parse_result(result: BoundedReadResult) -> dict:
+    # A line's own content is never sufficient: a process that printed a
+    # perfectly well-formed RESULT: line and then hung past the deadline,
+    # or exited nonzero afterward, or exceeded its output bound, is exactly
+    # as untrusted as one that printed nothing -- checked BEFORE ever
+    # touching ``result.stdout``'s content.
+    if result.overflowed:
         return {"ok": False, "error": "executor output exceeded the bound"}
-    text = stdout.decode(errors="replace")
+    if result.timed_out:
+        return {"ok": False, "error": "executor did not exit before the deadline"}
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "error": f"executor exited with nonzero status {result.returncode}",
+        }
+    text = result.stdout.decode(errors="replace")
     prefix = "RESULT:"
     matching = [line for line in text.splitlines() if line.startswith(prefix)]
     if not matching:
@@ -136,8 +118,8 @@ def main() -> int:
             proc.stdin.close()
         except BrokenPipeError:
             pass
-        stdout, overflowed = _read_bounded(proc, timeout_seconds)
-        observed.append(_parse_result(stdout, overflowed))
+        result = read_process_bounded(proc, timeout_seconds, _MAX_EXECUTOR_OUTPUT_BYTES)
+        observed.append(_parse_result(result))
 
     sys.stdout.write("CASES:" + json.dumps(observed) + "\n")
     sys.stdout.flush()

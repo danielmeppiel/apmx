@@ -411,6 +411,7 @@ _CONTAINER_RELATIVE = "examples/enterprise-receiver/receiver/container"
 _CONTAINER_DRIVER_RELATIVE = f"{_CONTAINER_RELATIVE}/container_driver.py"
 _CONTAINER_EXECUTOR_RELATIVE = f"{_CONTAINER_RELATIVE}/executor.py"
 _RUN_BUNDLE_RELATIVE = f"{_CONTAINER_RELATIVE}/run_bundle.py"
+_BOUNDED_IO_RELATIVE = f"{_CONTAINER_RELATIVE}/bounded_io.py"
 
 
 def _required_checks(base_sha: str) -> list[dict]:
@@ -462,9 +463,14 @@ def write_execution_bundle(
     # standalone (no repository checkout, no permissions, no import of
     # check.py) -- see run_bundle.py's module docstring.
     run_bundle_bytes = trusted_bytes(base_sha, _RUN_BUNDLE_RELATIVE)
+    # bounded_io.py is shared, bug-for-bug-fixed-once logic used by BOTH
+    # container_driver.py (inside the container) and run_bundle.py (on the
+    # host); it must be shipped alongside both, never duplicated textually.
+    bounded_io_bytes = trusted_bytes(base_sha, _BOUNDED_IO_RELATIVE)
     (bundle_dir / "container_driver.py").write_bytes(driver_bytes)
     (bundle_dir / "executor.py").write_bytes(executor_bytes)
     (bundle_dir / "run_bundle.py").write_bytes(run_bundle_bytes)
+    (bundle_dir / "bounded_io.py").write_bytes(bounded_io_bytes)
     manifest_checks = []
     for entry in _required_checks(base_sha):
         name = entry["name"]
@@ -491,6 +497,7 @@ def write_execution_bundle(
         "containerDriverSha256": hashlib.sha256(driver_bytes).hexdigest(),
         "executorSha256": hashlib.sha256(executor_bytes).hexdigest(),
         "runBundleSha256": hashlib.sha256(run_bundle_bytes).hexdigest(),
+        "boundedIoSha256": hashlib.sha256(bounded_io_bytes).hexdigest(),
         "checks": manifest_checks,
     }
     (bundle_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
@@ -508,11 +515,17 @@ def _run_bundle_module():
     for local/test convenience (``check_case``) and is never itself part
     of the privileged attestor's trust boundary."""
     import importlib.util
+    import sys as _sys
 
     module_path = Path(__file__).resolve().parent / "container" / "run_bundle.py"
     spec = importlib.util.spec_from_file_location("_receiver_run_bundle", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    # Registered in sys.modules before exec: some stdlib machinery (e.g.
+    # dataclasses, used by the sibling bounded_io module this file
+    # imports) looks up a class's own module via sys.modules at class-
+    # definition time and fails if it isn't registered there yet.
+    _sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

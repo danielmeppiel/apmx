@@ -1,0 +1,212 @@
+name: Receiver Branch Smoke (unprivileged, feature-branch only)
+
+# Real-Docker, real-three-job validation of the candidate-execution boundary
+# (container/run_bundle.py, container/container_driver.py,
+# container/executor.py, check.py's write_execution_bundle/
+# run_execution_bundle/verify_execution_results) and of gate.py's own
+# receipt-tampering resistance -- authorized explicitly as validation
+# infrastructure for THIS implementation branch, separate from and prior to
+# any demo-branch/main integration or signing activation.
+#
+# Deliberately scoped to be as unprivileged as the real `execute` job:
+#   - Triggers ONLY on an explicit-ref push to this exact implementation
+#     branch (never workflow_dispatch, which would need default-branch
+#     registration; never pull_request/pull_request_target; never the
+#     protected examples/enterprise-receiver demo branch).
+#   - permissions: contents: read at the workflow level, and explicitly
+#     `permissions: {}` for the execute job -- no id-token, no
+#     attestations, no secrets, ever.
+#   - Uses only synthetic, already-public fixture bytes defined in
+#     receiver/smoke.py (never real/private evidence, transcripts, or
+#     credentials).
+#
+# Three real jobs connected only by actions/upload-artifact and
+# actions/download-artifact, exactly mirroring the production pipeline's
+# A -> B -> C artifact handoff:
+#   prepare  -- builds three real execution bundles (positive, tampered,
+#               early-exit) via the real write_execution_bundle.
+#   execute  -- zero permissions, runs each bundle's own trusted
+#               run_bundle.py against the real pinned Docker image.
+#   assess   -- independently re-derives accept/reject for each scenario
+#               via the real verify_execution_results, asserts the
+#               outcomes match what each scenario is supposed to produce,
+#               and separately proves gate.py's evaluate_gate rejects a
+#               forged "everything accepted" receipt.
+#   gate     -- the same fail-closed required-check aggregator pattern as
+#               the production workflows (if: always()), run here purely
+#               to prove the aggregator itself behaves correctly end to
+#               end against this branch's own real job results/receipt.
+
+on:
+  push:
+    branches:
+      - danielmeppiel-enterprise-security-gate
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  prepare:
+    name: prepare (build real execution bundles)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build the three real synthetic-fixture execution bundles
+        run: |
+          set -euo pipefail
+          python3 examples/enterprise-receiver/receiver/smoke.py prepare \
+            --bundle-root bundles/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-bundles
+          path: bundles/
+          retention-days: 1
+
+  execute:
+    name: execute (zero-permission real Docker run)
+    needs: [prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: smoke-bundles
+          path: bundles/
+
+      - name: Run each bundle's own trusted run_bundle.py against real Docker
+        run: |
+          set -euo pipefail
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            python3 "bundles/$name/run_bundle.py" "bundles/$name" || true
+          done < bundles/scenarios.txt
+        # run_bundle.py is invoked directly (not via smoke.py's own
+        # run_execution_bundle wrapper) to prove this job's ENTIRE code is
+        # the one trusted file job A placed in the bundle, exactly like
+        # the real execute job -- see receiver-candidate-check.yml. The
+        # actual result files are produced by the step below instead,
+        # which does the equivalent of run_execution_bundle per scenario
+        # using only the bundle's own trusted copy.
+
+      - name: Produce the real per-scenario results.json files
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            python3 - "$name" <<'PY'
+          import importlib.util
+          import json
+          import sys
+          from pathlib import Path
+
+          name = sys.argv[1]
+          bundle_dir = Path("bundles") / name
+          module_path = bundle_dir / "run_bundle.py"
+          spec = importlib.util.spec_from_file_location("_smoke_run_bundle", module_path)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          results = module.run_execution_bundle(bundle_dir)
+          Path(f"results/{name}.json").write_text(json.dumps(results))
+          PY
+          done < bundles/scenarios.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-results
+          path: results/
+          retention-days: 1
+
+  assess:
+    name: assess (independent re-derivation + receipt-tampering proof)
+    needs: [prepare, execute]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: smoke-bundles
+          path: bundles/
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: smoke-results
+          path: results/
+
+      - name: Independently re-derive every scenario and prove receipt-tampering is rejected
+        run: |
+          set -euo pipefail
+          python3 examples/enterprise-receiver/receiver/smoke.py assess \
+            --bundle-root bundles/ \
+            --results-root results/ \
+            --receipt receipt.json
+
+      - name: Upload the assess receipt for the gate job (even on failure)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-receipt
+          path: receipt.json
+          retention-days: 1
+          if-no-files-found: ignore
+
+  gate:
+    name: gate (required-check aggregator proof)
+    if: always()
+    needs: [prepare, execute, assess]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: smoke-bundles
+          path: bundles/
+        continue-on-error: true
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: smoke-receipt
+          path: receipt/
+        continue-on-error: true
+
+      - name: Evaluate the fail-closed gate against this branch's own real results
+        run: |
+          set -euo pipefail
+          python3 examples/enterprise-receiver/receiver/gate.py \
+            --job-result "prepare=${{ needs.prepare.result }}" \
+            --job-result "execute=${{ needs.execute.result }}" \
+            --job-result "assess=${{ needs.assess.result }}" \
+            --receipt receipt/receipt.json \
+            --expected-cases <(printf 'positive\tbundles/positive\n')
