@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -22,6 +23,8 @@ SCHEMA = "apmx-demo-kit/1"
 HARNESSES = ("copilot", "opencode")
 ROOT = Path(__file__).resolve().parents[1]
 SKIP = {"__pycache__", ".DS_Store"}
+EVIDENCE_TOOLS = ("verify_evidence.py", "check_evidence_controls.py", "evidence-requirements.txt")
+CHAIN_ID = re.compile(r"\d{8}T\d{6}Z-[a-f0-9]{12}")
 
 
 def digest(path: Path) -> str:
@@ -360,7 +363,150 @@ def status(root: Path) -> None:
         print("Presence of native CLIs is not proof of login; authenticate through each CLI.")
 
 
-def prepare(root: Path, archive_path: Path, expected: str, python: Path) -> None:
+def evidence_package(root: Path, config: dict, harness: str | None, run: str | None) -> Path:
+    """Select a recorded run explicitly; never fall back past an unfinished run."""
+    if harness is None:
+        matches = [
+            name for name in HARNESSES if Path.cwd().is_relative_to(workspace(root, config, name))
+        ]
+        if len(matches) != 1:
+            raise ValueError("Specify copilot or opencode, or run this inside its demo shell.")
+        harness = matches[0]
+    application = workspace(root, config, harness)
+    directory(application / ".apm")
+    chains = application / ".apm/chains"
+    directory(chains)
+    candidates = [path for path in chains.iterdir() if path.name not in SKIP]
+    if any(not CHAIN_ID.fullmatch(path.name) for path in candidates):
+        raise ValueError("Unrecognized factory run entry; inspect the workspace before presenting.")
+    if run is not None:
+        if not CHAIN_ID.fullmatch(run):
+            raise ValueError("Expected the exact factory run ID, not a path.")
+        selected = chains / run
+    else:
+        if not candidates:
+            raise ValueError("No recorded factory run. Run the factory first.")
+        latest = max(path.name[:16] for path in candidates)
+        matches = [path for path in candidates if path.name[:16] == latest]
+        if len(matches) != 1:
+            raise ValueError("Concurrent factory runs are ambiguous. Select one with --run ID.")
+        (selected,) = matches
+    directory(selected)
+    package = selected / "evidence"
+    if not package.is_dir():
+        raise ValueError(
+            f"Recorded run {selected.name} has no delivered evidence. "
+            "Inspect that run; an earlier success will not be substituted."
+        )
+    directory(package)
+    print(f"Recorded {harness} run: {selected.name}")
+    print("This selects a saved run, not an observation of your last terminal command.")
+    print(f"Evidence package: {package.relative_to(root)}")
+    return package
+
+
+def proof(root: Path, harness: str | None, run: str | None) -> None:
+    with locked(root, exclusive=False) as config:
+        validate(root, config)
+        package = evidence_package(root, config, harness, run)
+        documents = {}
+        for name in ("index.json", "provenance.intoto.json", "abom.cdx.json"):
+            path = package / name
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
+                raise ValueError(f"Expected an ordinary bounded evidence document: {name}")
+            documents[name] = json.loads(path.read_bytes())
+        index = documents["index.json"]
+        statement = documents["provenance.intoto.json"]
+        definition = index["definition"]["digest"]["sha256"]
+        binding = statement["predicate"]["buildDefinition"]["externalParameters"]["definition"]
+        print("Recorded claims (not yet independently verified):")
+        print(f"  Factory definition SHA-256: {json.dumps(definition, ensure_ascii=True)}")
+        print(f"  in-toto envelope: {json.dumps(statement['_type'], ensure_ascii=True)}")
+        print(f"  SLSA predicate: {json.dumps(statement['predicateType'], ensure_ascii=True)}")
+        print(f"  SLSA factory binding: {json.dumps(binding['digest'], ensure_ascii=True)}")
+        print("  ABOM: abom.cdx.json (official APM inventory, a byproduct, not a model input)")
+        print(f"  CycloneDX version: {json.dumps(documents['abom.cdx.json']['specVersion'])}")
+        print(f"  ABOM SHA-256: {json.dumps(index['inventory']['digest'], ensure_ascii=True)}")
+        print(
+            f"  Producer statements: {len(index['production'])}; check statements: {len(index['checks'])}"
+        )
+        print("  Selected outputs and their SHA-256 subjects:")
+        for subject in statement["subject"]:
+            print("    " + json.dumps(subject, ensure_ascii=True, sort_keys=True))
+        print(
+            "Hashes bind recorded bytes; this unsigned package does not authenticate its builder."
+        )
+        print(
+            "Next: demo verify (schemas, actual bytes and semantic links, independently of APMX)."
+        )
+
+
+def verify(root: Path, harness: str | None, run: str | None, *, controls: bool) -> None:
+    with locked(root, exclusive=False) as config:
+        validate(root, config)
+        package = evidence_package(root, config, harness, run)
+        verifier = config.get("verifier")
+        if not isinstance(verifier, dict):
+            raise TypeError(
+                "Prepare with --verifier-python and --schemas before presenting verification."
+            )
+        tools = root / ".demo/evidence-tools"
+        if inventory(tools) != verifier["tools"]:
+            raise ValueError("Independent verifier tools changed; prepare a fresh trusted kit.")
+        script = tools / ("check_evidence_controls.py" if controls else "verify_evidence.py")
+        entrypoint = (
+            "import runpy,sys; from pathlib import Path; "
+            "sys.path.insert(0,str(Path(sys.argv[1]).parent)); sys.argv=sys.argv[1:]; "
+            "runpy.run_path(sys.argv[0],run_name='__main__')"
+        )
+        command = [
+            verifier["python"],
+            "-I",
+            "-c",
+            entrypoint,
+            str(script),
+            str(package),
+            "--schemas",
+            verifier["schemas"],
+        ]
+        if not controls:
+            command.append("--require-capability")
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=180)
+        if result.returncode != 0:
+            raise ValueError(
+                "Independent verification failed: " + json.dumps(result.stderr.strip())
+            )
+        report = json.loads(result.stdout)
+        positive = report["positive"] if controls else report
+        if positive["status"] != "passed":
+            raise ValueError("The independent consumer did not report successful verification.")
+        if controls and (
+            report["originalUnchanged"] is not True or report["apmxImported"] is not False
+        ):
+            raise ValueError("Independent controls did not preserve the required boundary.")
+        print(
+            f"Independent verification passed: {positive['files']} files, "
+            f"{positive['statements']} statements, {positive['capabilities']} capabilities."
+        )
+        print("Verified factory definition SHA-256: " + positive["definitionSha256"])
+        if controls:
+            for item in report["controls"]:
+                print("  " + json.dumps(item["case"]) + ": " + json.dumps(item["status"]))
+            print("Original evidence unchanged; corruption controls used disposable copies.")
+        print(
+            "Verified content binding, not a signature, authenticated identity or SLSA security level."
+        )
+
+
+def prepare(
+    root: Path,
+    archive_path: Path,
+    expected: str,
+    python: Path,
+    *,
+    verifier_python: Path | None = None,
+    schemas: Path | None = None,
+) -> None:
     """Create a fresh, outside-Git kit from a trusted archive and current examples."""
     if root.exists() or root.is_symlink():
         raise ValueError(
@@ -377,6 +523,34 @@ def prepare(root: Path, archive_path: Path, expected: str, python: Path) -> None
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     (requirement,) = project["project"]["optional-dependencies"]["factory"]
     check_python(python, requirement)
+    if (verifier_python is None) != (schemas is None):
+        raise ValueError("Supply --verifier-python and --schemas together.")
+    if verifier_python is not None and schemas is not None:
+        directory(schemas)
+        preflight = (
+            "import runpy,sys; from pathlib import Path; "
+            "consumer=runpy.run_path(sys.argv[1]); "
+            "consumer['schema_validator'](Path(sys.argv[2]))"
+        )
+        try:
+            subprocess.run(
+                [
+                    str(verifier_python),
+                    "-I",
+                    "-c",
+                    preflight,
+                    str(ROOT / "scripts/verify_evidence.py"),
+                    str(schemas),
+                ],
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ValueError(
+                "Independent verifier dependencies or pinned schema cache are not ready. "
+                "Follow docs/evidence.md before preparing this kit; no dependencies were installed."
+            ) from error
     release.verify_archive(archive_path, expected)
     parent = root.parent
     directory(parent)
@@ -438,6 +612,16 @@ def prepare(root: Path, archive_path: Path, expected: str, python: Path) -> None
         "seed": inventory(private / "seed"),
         "workspaces": {},
     }
+    if verifier_python is not None:
+        tools = private / "evidence-tools"
+        tools.mkdir()
+        for name in EVIDENCE_TOOLS:
+            shutil.copy2(ROOT / "scripts" / name, tools / name)
+        config["verifier"] = {
+            "python": str(verifier_python),
+            "schemas": str(schemas),
+            "tools": inventory(tools),
+        }
     save(root, config)
     reset(root, list(HARNESSES))
 
@@ -451,6 +635,8 @@ def main() -> int:
     create.add_argument("--archive", type=Path, required=True)
     create.add_argument("--sha256", required=True, help="Trusted expected archive SHA-256")
     create.add_argument("--python", type=Path, required=True, help="Checker environment Python")
+    create.add_argument("--verifier-python", type=Path, help="Existing independent verifier Python")
+    create.add_argument("--schemas", type=Path, help="Existing offline pinned schema cache")
     for name in HARNESSES:
         commands.add_parser(name, help=f"Enter the {name} application shell")
     for name in ("reset", "clean"):
@@ -459,6 +645,16 @@ def main() -> int:
         )
         command.add_argument("harness", nargs="?", choices=HARNESSES)
     commands.add_parser("status", help="Check local kit identities and readiness")
+    for name in ("proof", "verify"):
+        command = commands.add_parser(
+            name, help="Inspect or independently verify recorded evidence"
+        )
+        command.add_argument("harness", nargs="?", choices=HARNESSES)
+        command.add_argument("--run", help="Select an exact recorded factory run ID")
+        if name == "verify":
+            command.add_argument(
+                "--controls", action="store_true", help="Test relocated and corrupted copies"
+            )
     args = parser.parse_args()
     try:
         if args.command == "prepare":
@@ -467,6 +663,10 @@ def main() -> int:
                 args.archive.absolute(),
                 args.sha256,
                 args.python.expanduser().absolute(),
+                verifier_python=(
+                    args.verifier_python.expanduser().absolute() if args.verifier_python else None
+                ),
+                schemas=args.schemas.expanduser().absolute() if args.schemas else None,
             )
         elif args.root is None:
             raise ValueError("Use the prepared kit's './demo' launcher.")
@@ -474,6 +674,10 @@ def main() -> int:
             return shell(args.root, args.command)
         elif args.command == "status":
             status(args.root)
+        elif args.command == "proof":
+            proof(args.root, args.harness, args.run)
+        elif args.command == "verify":
+            verify(args.root, args.harness, args.run, controls=args.controls)
         else:
             names = [args.harness] if args.harness else list(HARNESSES)
             (reset if args.command == "reset" else clean)(args.root, names)

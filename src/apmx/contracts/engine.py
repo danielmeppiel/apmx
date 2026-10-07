@@ -54,7 +54,7 @@ def _run_checks(
     """Run every eligible criterion against an independent captured subject."""
     for check in plan.contract.checks:
         _remaining(deadline)
-        events.emit("check_started", name=check.name)
+        events.emit("check_started", name=check.name, command=check.command)
         check_root = workspace.prepare_check_workspace(
             snapshot, artifact, store.directory, check.name
         )
@@ -231,6 +231,7 @@ def run_attempt(
             package_ref=plan.source.package_ref if plan.source else None,
             caller_root=str(plan.project_root),
             produces=plan.contract.output_label,
+            needs=plan.contract.needs,
             harness=plan.harness,
             model=plan.model,
             run_directory=str(store.directory),
@@ -238,6 +239,17 @@ def run_attempt(
         events.emit("phase", name="preflight")
         store.update("preflight")
         snapshot = workspace.capture_workspace(plan, store.directory)
+        bindings = {item.artifact.relative_path: item for item in plan.input_bindings}
+        for entry in snapshot.files:
+            if entry.relative_path in plan.contract.needs:
+                binding = bindings.get(entry.relative_path)
+                events.emit(
+                    "input_captured",
+                    entry=entry,
+                    origin="checked upstream output" if binding else "application",
+                    producer_record=str(binding.record_path) if binding else "",
+                )
+        events.emit("workspace_captured", files=len(snapshot.files))
         if repair_context is not None:
             snapshot = workspace.prepare_repair_context(plan, snapshot, repair_context)
         store.update("execution", baseline=snapshot)

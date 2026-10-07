@@ -191,21 +191,21 @@ def test_pty_streams_live_output_and_restores_terminal(
     assert record["result"]["stop_reason"] == expected_reason
     assert record["producer"]["cleanup_confirmed"] is True
     assert record["producer"]["returncode"] is not None
-    assert text.count(b"PTY actor ready") == int(verbose)
+    assert text.count(b"PTY actor ready") == 1
     assert b"PRIVATE_" not in output
     assert b"VERIFIED" not in text
     assert b"UNPROVEN" not in text
     assert (b"Contract COMPLETE" in text) is not (interrupt or fail)
-    assert (b"Copilot > PTY actor ready" in text) is verbose
+    assert b"Copilot > PTY actor ready" in text
     assert b"Copilot stderr > Native stderr ready" in text
     assert b"(untrusted)" not in text
     assert b"native-advisory" not in text
     assert (b"raw exit" in text) is (verbose and not (interrupt or fail))
     assert text.count(b"[i] Execution: local (not sandboxed)") == 1
     plain_lines = text.replace(b"\r", b"")
-    assert (b"Tool started: view" in text) is verbose
-    assert (b"\n            without losing its source or hiding\n" in plain_lines) is verbose
-    assert (b"\n            live progress.\n" in plain_lines) is verbose
+    assert b"Tool started: view" in text
+    assert b"\n            without losing its source or hiding\n" in plain_lines
+    assert b"\n            live progress.\n" in plain_lines
     if animate:
         assert b"\x1b[2;36m" in output
     else:

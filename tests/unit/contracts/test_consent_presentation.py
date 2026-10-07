@@ -109,9 +109,9 @@ def test_work_precedes_single_disclosure_and_default_no(
     assert ".contract.md" in words if verbose else ".contract.md" not in words
     assert ("check-shipping-examples" in words) is verbose
     for name in ("plan.md", "spec.md", "implementation.md"):
-        assert (f"Input: {name} (from an earlier step)" in words) is verbose
+        assert f"Input: {name} (from an earlier step)" in words
         assert f"Input: {name} (starting file)" not in words
-    assert ("Input: request.md (starting file)" in words) is verbose
+    assert "Input: request.md (starting file)" in words
     for forbidden in ("Final outputs:", "PASS", "COMPLETE", "PRIVATE_PROMPT"):
         assert forbidden not in words
     assert raw.isascii()

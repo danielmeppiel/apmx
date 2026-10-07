@@ -188,8 +188,9 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
         )
         assert output.count(phases[0]) == 1
         assert output.count(phases[1]) == 1
+    assert "Capturing files for Copilot" in result.output
+    assert "Capturing files for Copilot" in transcript
     details = (
-        "Preparing files for Copilot",
         "Running: apm install (in a temporary workspace)",
         "APM options: --only apm --target agent-skills --no-trust-bin",
         "Skill: style (SKILL.md)",
@@ -338,7 +339,11 @@ def test_local_run_without_imports_does_not_claim_apm_ran(
         assert "with APM" not in output
         assert "Running: apm install" not in output
         assert "APM >" not in output
-        assert ("Preparing files for Copilot" in output) is (output == transcript or verbose)
+        assert "Capturing files for Copilot" in output
+        assert "Needs: notes.md" in output
+        assert "Found input: notes.md (application; captured" in output
+        assert output.index("Capturing files") < output.index("Found input: notes.md")
+        assert output.index("Found input: notes.md") < output.index("Running Copilot")
 
 
 @pytest.mark.parametrize("packaged", [False, True])

@@ -704,7 +704,7 @@ def require_standard_delivery(run: Path, stdout: str, *, ambiguous_inventory: bo
         require((package / name).is_file(), f"Automatic evidence delivery missing {name}")
     index = json.loads((package / "index.json").read_bytes())
     require(index.get("schema") == "apmx-evidence-package/1", "Unexpected standard package index")
-    require("Standard package:" in stdout and "Summary:" in stdout, "Missing evidence paths")
+    require("Evidence package:" in stdout and "Summary:" in stdout, "Missing evidence paths")
     return "delivered"
 
 
