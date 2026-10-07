@@ -461,6 +461,103 @@ certification of "world-class" or accessibility compliance is claimed.
      and ContractLogger own semantics."
 
 
+## Milestone 3 implementation notes
+
+Milestone 3 wires the live `--tui` path through the real engine instead of the
+fixture-replay prototype from milestone 1. `src/apmx/commands/tui_live.py`
+hosts the bridge:
+
+- `LiveContractLogger` implements the same `ContractLogger` protocol as the
+  plain/Rich loggers. It is the only component that calls back into the
+  running `LiveFactoryApp`, and it does so exclusively via Textual's
+  `call_from_thread`, because the real chain runs on a worker thread while the
+  app's event loop owns the main thread. It never invents progress, model
+  identity or outcomes; it maps canonical `ContractLogger` calls and native
+  diagnostic events onto card status and the bounded diagnostics pane. Native
+  DEBUG/INFO plumbing still never reaches the normal activity stream, and
+  still respects the existing redaction/bounding rules in `chain.py` — the
+  bridge adds no additional filtering of its own and defers entirely to the
+  canonical logger contract.
+- `LiveFactoryApp` extends the prototype UI with a real cancel keybinding
+  (`c`). Pressing it only ever sets a cooperative, idempotent flag; it never
+  sends an OS signal directly. That flag is read by `supervise_process` via
+  the existing `cancel_requested` callable, so termination/escalation/cleanup
+  for a UI-requested cancellation reuses exactly the same SIGTERM/SIGKILL and
+  process-group reaping path already used for timeouts and KeyboardInterrupt.
+  There is no separate "UI cancellation" code path in the process supervisor.
+- `launch_live` disables local terminal echo for the duration of the run (the
+  live agent/check processes may themselves prompt for input on the real
+  TTY), drives the real `run_chain`/engine on a worker thread, and always
+  restores terminal state on exit — including on cancellation — so the UI
+  cannot leak an in-flight inference state into the restored shell.
+- Both existing default-No consent prompts (host access, unproven inputs) are
+  unchanged: they are asked before the live TUI is entered, using the same
+  governance and `--allow-*` flags as the plain path. No consent default was
+  loosened to make the TUI easier to drive non-interactively.
+- The no-`--plan` live path requires a real TTY on both ends (local terminal
+  and the underlying agent harness); when one is missing it refuses with the
+  same `UNPROVEN`/`tui_unavailable` message as the existing `--plan`+`--tui`
+  preview path, rather than attempting to launch Textual against a
+  non-interactive process.
+
+### Test coverage (hermetic/replay vs genuine proof)
+
+Per the project's established pattern (`tests/unit/contracts/test_chain.py`,
+`test_chain_sources.py`), "genuine proof" here means every part of the stack
+runs for real — real `supervise_process`, real checks, real `ContractLogger`,
+real file I/O, a real process group — except the AI harness invocation itself,
+which is swapped for a deterministic local Python script via
+`RuntimeFactory.get_runtime_by_name`. This avoids model spend while still
+proving real wiring, as distinct from fixture-replay (`src/apmx/tui/fixtures.py`,
+used only by the milestone-1 prototype's `--replay` path).
+
+- `tests/unit/tui/test_live_bridge.py` (new, 6 tests): event-to-card-status
+  mapping for a real two-node chain driven through `LiveContractLogger`;
+  cooperative cancellation requested before any leaf starts and between two
+  leaves, confirming the chain actually stops early and reports the real
+  halted outcome; native diagnostic events routed to the bounded diagnostics
+  pane and never the activity stream; the Textual cancel keybinding itself,
+  exercised through `run_test()`/`Pilot` (press `c`, confirm the cooperative
+  flag flips and a second press is a no-op); `launch_live` disabling local
+  terminal echo and actually driving the real chain to completion, called
+  directly rather than through a mocked `App.run()` (headless `App.run()`
+  works in this sandbox; verified independently before relying on it).
+- `tests/unit/tui/test_cli_flags.py`: added
+  `test_tui_live_with_factory_and_no_tty_refuses_with_unproven_message`,
+  proving the no-`--plan` live path's TTY refusal end-to-end through the real
+  CLI (`CliRunner`), real package installation via the bundled/provisioned APM
+  backend, and the real `tui_unavailable` gate — not a mocked TTY check.
+- `tests/unit/contracts/test_reliability.py`: added
+  `test_external_cancel_requested_really_reaps_a_long_running_child`, a real
+  end-to-end proof that `supervise_process`'s `cancel_requested` callable
+  actually terminates and reaps a genuinely spawned, still-running child
+  process (SIGTERM observed, cleanup confirmed, exit code non-zero, bounded
+  wall-clock), exactly mirroring the existing timeout/lingering-children tests
+  rather than asserting only on mocked state.
+- `tests/unit/test_windows_process.py`: added the Windows-job-object
+  equivalent, `test_native_cancel_requested_really_terminates_the_owned_job`
+  (skipped off-Windows, matching the file's existing `windows_only` pattern;
+  not independently run on this POSIX development host).
+
+All new and existing tests pass together: `tests/unit/tui`,
+`tests/unit/contracts/test_cli_selection.py`,
+`tests/unit/contracts/test_reliability.py` and the full `tests/unit` suite,
+run with a real APM 0.30.0 backend supplied via `APMX_APM_BACKEND` in this
+development environment (normally bundled/provisioned, not required as an
+environment variable in CI). `ruff check` is clean on all touched files.
+
+### Open items carried into milestone 4
+
+- Milestone 3 proves live wiring and cooperative cancellation; it does not yet
+  validate behavior across terminal widths, color modes, `NO_COLOR`, reduced
+  motion, screen-reader/plain fallback or output redirection — that is
+  milestone 4.
+- No genuine (real-model) run has been executed yet for this track; milestone
+  3's "genuine proof" tests all substitute a deterministic local script for
+  the AI harness call, per the standing spend/consent constraints. A bounded,
+  explicitly authorized genuine run is planned for milestone 5 validation,
+  not before.
+
 ## Milestones and acceptance
 
 1. Persist docs/textual-design.md and refine the wireframes against the real

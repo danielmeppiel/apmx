@@ -149,8 +149,12 @@ def _select_entry(
     "tui",
     is_flag=True,
     help=(
-        "Preview the factory graph in the Textual prototype (requires --plan; "
-        "see docs/textual-design.md). Proposed surface, not a claim of full capability."
+        "Show the factory graph in the Textual UI: --tui --plan previews it "
+        "without running anything; --tui alone runs the factory live through "
+        "it, with the same default-No consent prompt as a normal run (see "
+        "docs/textual-design.md). Needs a factory directory and an interactive "
+        "terminal on both ends; redirected/CI runs and single contract files "
+        "stay on the plain output."
     ),
 )
 @click.option(
@@ -177,12 +181,6 @@ def main(
     """Dispatch the selected factory or file through canonical admission."""
     if tui and no_tui:
         raise click.UsageError("Pass either --tui or --no-tui, not both.")
-    if tui and not planning:
-        raise click.UsageError(
-            "--tui currently requires --plan; live execution wiring is tracked in "
-            "docs/textual-design.md (milestone 2+). Try `--tui --plan`, or omit --tui "
-            "to run normally."
-        )
     configure_output_mode(detect_output_mode([]))
     configure_process_tls_trust()
     ctx.ensure_object(dict)

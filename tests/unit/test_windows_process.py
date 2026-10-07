@@ -645,6 +645,27 @@ def test_native_timeout_kills_owned_job():
 
 
 @windows_only
+def test_native_cancel_requested_really_terminates_the_owned_job():
+    polls = []
+
+    def cancel_after_first_poll():
+        requested = len(polls) > 0
+        polls.append(requested)
+        return requested
+
+    observation = windows.supervise_process(
+        native_request("import time; time.sleep(60)", timeout=30),
+        on_bytes=lambda *args: None,
+        cancel_requested=cancel_after_first_poll,
+        limits=ContractLimits(cleanup_seconds=2),
+    )
+    assert observation.stop_reason == "cancelled"
+    assert observation.cleanup_confirmed
+    assert observation.elapsed_seconds < 4
+    assert any(polls)
+
+
+@windows_only
 def test_native_leader_exit_with_descendant_is_cleaned():
     observation = windows.supervise_process(
         native_request(

@@ -130,12 +130,31 @@ def invoke_contract(
                         return None
                     logger.render_chain_plan(closure)
                     return None
-                chain_result = run_chain(
-                    closure,
-                    logger=logger,
-                    allow_advisory=allow_advisory,
-                    consent_source=consent_source,
-                )
+                if tui:
+                    from ..tui.entry import tui_eligible
+
+                    if not tui_eligible():
+                        raise ContractError(
+                            "The live TUI needs an interactive terminal on both ends; "
+                            "omit --tui for a normal run.",
+                            code="tui_unavailable",
+                            outcome=Outcome.UNPROVEN,
+                        )
+                    from .tui_live import launch_live
+
+                    chain_result = launch_live(
+                        closure,
+                        logger=logger,
+                        allow_advisory=allow_advisory,
+                        consent_source=consent_source,
+                    )
+                else:
+                    chain_result = run_chain(
+                        closure,
+                        logger=logger,
+                        allow_advisory=allow_advisory,
+                        consent_source=consent_source,
+                    )
                 completion.capture(chain_result)
                 return chain_result
             plan = frontend.plan_contract(
@@ -149,14 +168,14 @@ def invoke_contract(
             )
             inventory = workspace.inspect_workspace(plan)
             logger.stop_activity()
+            if tui:
+                raise ContractError(
+                    "The TUI needs a factory directory; pass a factory directory, not "
+                    "a single contract file.",
+                    code="tui_requires_factory",
+                    outcome=Outcome.UNPROVEN,
+                )
             if planning:
-                if tui:
-                    raise ContractError(
-                        "The TUI preview needs a factory directory; pass a factory "
-                        "directory, not a single contract file.",
-                        code="tui_requires_factory",
-                        outcome=Outcome.UNPROVEN,
-                    )
                 logger.render_plan(plan, inventory)
                 return
             logger.on_preparation(ImportsSelectedEvent(plan.imported_skills))
