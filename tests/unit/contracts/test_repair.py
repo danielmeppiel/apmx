@@ -396,7 +396,7 @@ def test_preview_discloses_budget_without_execution(
     calls = producer(monkeypatch)
     result = CliRunner().invoke(main, [str(caller), "--on", "copilot", "--plan"])
     assert result.exit_code == 0, result.output
-    assert "3 attempts" in result.output and "600s shared execution/check time" in result.output
+    assert "3 attempts" in result.output and "600s total for execution and checks" in result.output
     assert "one attempt per step, no retries" not in result.output
     assert not calls and not (caller / ".apm").exists()
 

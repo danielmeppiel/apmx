@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -71,6 +72,140 @@ def test_reset_preserves_evidence_and_recreates_identical_consumers(kit: Path) -
     assert (kit / "checkout-copilot/src/app.py").read_text() == "value = 1\n"
     assert (kit / "checkout-opencode").stat().st_ino == other
     assert demo.load(kit)["workspaces"]["copilot"]["ready"] is True
+
+
+def recorded_package(kit: Path, run: str = "20261007T120000Z-abcdef123456") -> Path:
+    package = kit / "checkout-copilot/.apm/chains" / run / "evidence"
+    package.mkdir(parents=True)
+    definition = {"name": "definition.json", "digest": {"sha256": "d" * 64}}
+    documents = {
+        "index.json": {
+            "definition": definition,
+            "inventory": {"name": "abom.cdx.json", "digest": {"sha256": "b" * 64}},
+            "production": [{"name": "provenance/producer.intoto.json"}],
+            "checks": [{"name": "checks/check.intoto.json"}],
+        },
+        "provenance.intoto.json": {
+            "_type": "https://in-toto.io/Statement/v1",
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {"buildDefinition": {"externalParameters": {"definition": definition}}},
+            "subject": [{"name": "code.patch", "digest": {"sha256": "c" * 64}}],
+        },
+        "abom.cdx.json": {"specVersion": "1.5"},
+    }
+    for name, value in documents.items():
+        (package / name).write_text(json.dumps(value))
+    return package
+
+
+def test_proof_shows_real_fields_but_does_not_claim_verification(kit, monkeypatch, capsys):
+    package = recorded_package(kit)
+    monkeypatch.chdir(kit / "checkout-copilot")
+    demo.proof(kit, None, None)
+    output = capsys.readouterr().out
+    for value in (
+        package.parent.name,
+        "d" * 64,
+        "c" * 64,
+        "code.patch",
+        "CycloneDX",
+        "ABOM",
+        "not yet independently verified",
+        "unsigned",
+    ):
+        assert value in output
+    for label, hostname, path in (
+        ("in-toto envelope", "in-toto.io", "/Statement/v1"),
+        ("SLSA predicate", "slsa.dev", "/provenance/v1"),
+    ):
+        (line,) = [line for line in output.splitlines() if line.startswith(f"  {label}: ")]
+        parsed = urlparse(json.loads(line.split(": ", 1)[1]))
+        assert (parsed.scheme, parsed.hostname, parsed.path) == ("https", hostname, path)
+    assert "verification passed" not in output
+
+
+def test_failed_latest_run_never_falls_back_to_older_evidence(kit):
+    old = recorded_package(kit)
+    failed = old.parent.parent / "20261007T120001Z-abcdef123457"
+    failed.mkdir()
+    with pytest.raises(ValueError, match="earlier success will not be substituted"):
+        demo.evidence_package(kit, demo.load(kit), "copilot", None)
+    assert demo.evidence_package(kit, demo.load(kit), "copilot", old.parent.name) == old
+
+
+def test_concurrent_runs_require_explicit_selection(kit):
+    old = recorded_package(kit)
+    recorded_package(kit, "20261007T120000Z-abcdef123457")
+    with pytest.raises(ValueError, match="ambiguous"):
+        demo.evidence_package(kit, demo.load(kit), "copilot", None)
+    assert demo.evidence_package(kit, demo.load(kit), "copilot", old.parent.name) == old
+
+
+@pytest.mark.parametrize("run", ["../outside", "/tmp/outside", "last", ""])
+def test_proof_selection_refuses_paths_and_ambiguous_aliases(kit, run):
+    recorded_package(kit)
+    with pytest.raises(ValueError, match="exact factory run ID"):
+        demo.evidence_package(kit, demo.load(kit), "copilot", run)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("controls", [False, True])
+def test_verification_executes_pinned_independent_consumer_offline(
+    kit, monkeypatch, capsys, failure, controls
+):
+    package = recorded_package(kit)
+    tools = kit / ".demo/evidence-tools"
+    tools.mkdir()
+    (tools / "verify_evidence.py").write_text("# fixture independent tool\n")
+    (tools / "check_evidence_controls.py").write_text("# fixture controls\n")
+    config = demo.load(kit)
+    config["verifier"] = {
+        "python": sys.executable,
+        "schemas": str(kit / "schemas"),
+        "tools": demo.inventory(tools),
+    }
+    demo.save(kit, config)
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert "--fetch-schemas" not in argv
+        assert ("--require-capability" in argv) is not controls
+        assert argv[0] == sys.executable and argv[1] == "-I"
+        script = "check_evidence_controls.py" if controls else "verify_evidence.py"
+        assert str(tools / script) in argv and str(package) in argv
+        report = {
+            "status": "passed",
+            "files": 17,
+            "statements": 3,
+            "capabilities": 1,
+            "definitionSha256": "d" * 64,
+        }
+        if controls:
+            report = {
+                "positive": report,
+                "originalUnchanged": True,
+                "apmxImported": False,
+                "controls": [{"case": "artifact-corruption", "status": "rejected"}],
+            }
+        return subprocess.CompletedProcess(
+            argv,
+            int(failure),
+            json.dumps(report),
+            '{"status":"failed","error":"changed bytes"}' if failure else "",
+        )
+
+    monkeypatch.setattr(demo.subprocess, "run", run)
+    if failure:
+        with pytest.raises(ValueError, match="Independent verification failed"):
+            demo.verify(kit, "copilot", None, controls=controls)
+        assert "verification passed" not in capsys.readouterr().out
+    else:
+        demo.verify(kit, "copilot", None, controls=controls)
+        output = capsys.readouterr().out
+        assert "Independent verification passed: 17 files" in output
+        assert ("artifact-corruption" in output) is controls
+    assert len(calls) == 1
 
 
 def test_clean_archives_without_deleting_and_reset_relaunches(kit: Path) -> None:
@@ -341,6 +476,38 @@ def test_prepare_verifies_archive_before_creating_owned_kit(
         )
         assert result.returncode == 0, result.stderr
         assert "copilot" in result.stdout and "reset" in result.stdout
+
+
+@pytest.mark.parametrize("kind", ["missing-interpreter", "unready-consumer", "timeout"])
+def test_unready_verifier_refuses_before_creating_the_kit(
+    kit: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    destination = kit.parent / "unready-verification"
+    schemas = kit.parent / "schemas"
+    schemas.mkdir()
+
+    def fail(argv, **kwargs):
+        assert argv[1:3] == ["-I", "-c"]
+        assert "schema_validator" in argv[3]
+        assert argv[-1] == str(schemas)
+        assert "--fetch-schemas" not in argv
+        if kind == "missing-interpreter":
+            raise FileNotFoundError("Missing interpreter")
+        if kind == "timeout":
+            raise subprocess.TimeoutExpired(argv, 30)
+        raise subprocess.CalledProcessError(1, argv, stderr=b"Missing pinned schema")
+
+    monkeypatch.setattr(demo.subprocess, "run", fail)
+    with pytest.raises(ValueError, match="pinned schema cache are not ready"):
+        demo.prepare(
+            destination,
+            kit.parent / "unused.tar.gz",
+            "0" * 64,
+            Path(sys.executable),
+            verifier_python=Path(sys.executable),
+            schemas=schemas,
+        )
+    assert not destination.exists()
 
 
 def test_unknown_file_in_unregistered_workspace_is_never_overwritten(kit: Path) -> None:

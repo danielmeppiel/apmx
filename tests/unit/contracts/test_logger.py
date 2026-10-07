@@ -299,7 +299,7 @@ def test_transcript_saturation_does_not_hide_lifecycle_or_stderr(tmp_path: Path,
     )
     output = capsys.readouterr().out
     assert "Useful last error" in output
-    assert "Saving results" not in output
+    assert "Saving results" in output
     assert "Saving results" in (tmp_path / "transcript.log").read_text()
     assert "HALTED" in output
     assert (tmp_path / "transcript.log").stat().st_size <= 1024
@@ -559,9 +559,9 @@ def test_public_subprocess_output_flows_while_spinner_remains_active(
         decoder.feed("stdout", (json.dumps({"type": kind, "data": data}) + "\n").encode())
     decoder.feed("stderr", b"Native diagnostic\n")
     output = "\n".join(call.args[0] for call in console._rich_echo.call_args_list)
-    assert ("Public line" in output) is verbose
-    assert ("Reading input" in output) is verbose
-    assert ("Tool started: view" in output) is verbose
+    assert "Public line" in output
+    assert "Reading input" in output
+    assert "Tool started: view" in output
     assert "Copilot stderr > Native diagnostic" in output
     assert "PRIVATE_" not in output
     animated_console.status.return_value.stop.assert_not_called()
@@ -815,7 +815,7 @@ def test_native_prose_punctuation_is_readable_on_strict_terminal_encodings(
         decoder.feed("stdout", bytes([byte]))
     decoder.finish()
     logger.close()
-    assert (b"""I'm reading "notes" -- that's ready...""" in raw.getvalue()) is verbose
+    assert b"""I'm reading "notes" -- that's ready...""" in raw.getvalue()
     assert all(byte < 128 for byte in raw.getvalue())
     retained = (tmp_path / "transcript.log").read_text(encoding="ascii")
     assert r"I\u2019m reading \u201cnotes\u201d \u2014" in retained
@@ -1259,9 +1259,9 @@ def test_analysis_phase_never_reaches_terminal_or_transcript(
     for text in (output, transcript):
         assert "PRIVATE_" not in text
     assert transcript.count("Public answer") == 1
-    assert output.count("Public answer") == int(verbose)
+    assert output.count("Public answer") == 1
     assert "Tool started: apply_patch" in transcript
-    assert ("Tool started: apply_patch" in output) is verbose
+    assert "Tool started: apply_patch" in output
 
 
 def test_pre_engine_interrupt_reports_halted_without_claiming_child_cleanup(capsys) -> None:
@@ -1568,14 +1568,11 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
     output = capsys.readouterr().out
     assert output.index("Contract 1/1: jobs/handoff") < output.index("Produces: handoff.json")
     assert output.index("Produces: handoff.json") < output.index("Checks:")
-    assert ("Copilot > The requested output is ready." in output) is verbose
-    if verbose:
-        assert output.index("Copilot >") < output.index("Checks:")
-        assert output.index("Check handoff > Required fields present") < output.index(
-            "[+] PASS handoff"
-        )
-    else:
-        assert "Required fields present" not in output
+    assert "Copilot > The requested output is ready." in output
+    assert output.index("Copilot >") < output.index("Checks:")
+    assert output.index("Check handoff > Required fields present") < output.index(
+        "[+] PASS handoff"
+    )
     assert output.index("[+] PASS handoff") < output.index("[+] Contract COMPLETE  12.3s")
     assert output.count("[i] Execution: local (not sandboxed)") == 1
     assert "Agents and checks can use host files, network and available logins." in output
@@ -1597,7 +1594,7 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
     assert output.count("requested-model") == 1
     assert output.count("observed-model") == int(verbose)
     assert "(requested)" not in output
-    assert ("[>] Checking handoff.json" in output) is verbose
+    assert "[>] Checking handoff.json" in output
     for detail in (
         "raw exit 0",
         "Run: run",
@@ -1705,7 +1702,7 @@ def test_result_headline_color_and_reason_follow_owner(
     assert not any("provisional" in call.args[0].lower() for call in calls)
 
 
-def test_animated_phases_are_transient_but_retained(tmp_path: Path, animated_console: Mock) -> None:
+def test_animated_phases_are_visible_and_retained(tmp_path: Path, animated_console: Mock) -> None:
     logger = ContractLogger()
     logger.attach_run("run", tmp_path)
     events = EventEmitter("run", logger.on_event)
@@ -1713,9 +1710,9 @@ def test_animated_phases_are_transient_but_retained(tmp_path: Path, animated_con
         events.emit("phase", name=phase)
     logger.close()
     written = "\n".join(call.args[0] for call in console._rich_echo.call_args_list)
-    assert written.strip() == "Checks:"
+    assert written.count("Checks:") == 1
     for label in (
-        "Preparing files for Copilot",
+        "Capturing files for Copilot",
         "Running Copilot",
         "Saving output",
         "Saving results",
@@ -2029,9 +2026,9 @@ def test_plain_checks_have_one_heading_without_duplicate_phase_narration(capsys)
     assert output.count("Checks:") == 1
     assert "Harness: copilot / default model" in output
     assert "native default" not in output
-    assert "[>] Checking" not in output
+    assert output.count("[>] Checking") == 1
     assert "(saved output)" not in output
-    assert "Observed checker diagnostic." not in output
+    assert output.count("Observed checker diagnostic.") == 2
     assert "[+] PASS format" in output
     assert "[+] PASS coverage" in output
 

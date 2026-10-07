@@ -102,6 +102,9 @@ def supervise_process(
         )
     if os.name != "posix":
         return ProcessObservation(None, error="Unsupported process execution platform.")
+    from .native_logs import NativeLogStream
+
+    native_logs = NativeLogStream(request.log_directory, events)
     if request.timeout_seconds <= 0:
         return ProcessObservation(None, stop_reason="timeout")
     try:
@@ -140,6 +143,7 @@ def supervise_process(
         while True:
             try:
                 now = time.monotonic()
+                native_logs.poll()
                 returncode = child.poll()
                 group_alive = _group_exists(pgid)
                 if returncode is not None and leader_exited_at is None:
@@ -220,6 +224,7 @@ def supervise_process(
         for pipe in (child.stdout, child.stderr):
             if pipe is not None:
                 pipe.close()
+    native_logs.finish()
     if events is not None and stop_reason is not None:
         events.emit("stop_observed", confirmed=cleanup_confirmed, reason=stop_reason)
     return ProcessObservation(

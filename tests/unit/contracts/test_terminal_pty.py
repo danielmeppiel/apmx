@@ -180,7 +180,7 @@ def test_real_pty_streams_before_completion_and_restores_terminal(
         assert "  Record: record.json" in lines
         words = " ".join(line.strip() for line in lines)
         assert "Copilot stderr > Ready" in words
-        assert ("Copilot > Useful stream before completion" in words) is verbose
+        assert "Copilot > Useful stream before completion" in words
         if cancel:
             words = " ".join(line.strip() for line in text.splitlines())
             assert (

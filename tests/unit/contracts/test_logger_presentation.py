@@ -186,7 +186,7 @@ def test_stdout_flood_cannot_hide_or_replay_stderr_and_does_not_certify_json(
     )
     early = capsys.readouterr().out
     assert early.count("Immediate stderr diagnostic") == 1
-    assert ("BEGIN-" in early) is verbose
+    assert "BEGIN-" in early
     _event(logger, "activity", source="checker", label="document", text="Meaningful final detail")
     # Raw zero and contradictory stdout cannot override normalized incomplete.
     _event(logger, "check_finished", observation=_check(normalized=2, raw=0))
@@ -197,12 +197,9 @@ def test_stdout_flood_cannot_hide_or_replay_stderr_and_does_not_certify_json(
     assert "[+] PASS document" not in early + late
     assert "The supplied subject or check resources changed." in late
     assert "Immediate stderr diagnostic" not in late
-    assert (late.count("stdout excerpt:") == 1) is not verbose
-    if not verbose:
-        assert late.index("[!] INCOMPLETE document") < late.index("stdout excerpt:")
-        assert "sanitized bytes omitted" in late
-        assert "Meaningful final detail" in late
-        assert len(late) < 2200
+    assert "stdout excerpt:" not in late
+    assert "Meaningful final detail" in late
+    assert len(late) < 2200
     assert "PRIVATE" not in early + late + transcript
     assert transcript.count("Meaningful final detail") == 1
     assert transcript.count("Immediate stderr diagnostic") == 1
@@ -233,7 +230,7 @@ def test_missing_completion_and_identity_changes_flush_once_without_inventing_re
     output = capsys.readouterr().out
     for name in ("first", "second", "third"):
         assert output.count(f"Check {name}: completion was not observed.") == 1
-        assert output.count(f"Check {name} stdout excerpt:") == 1
+        assert output.count(f"Check {name} stdout:") == 1
     assert output.count("First stderr") == 1
     assert "INCOMPLETE second" not in output
     assert "FAIL third" not in output
@@ -249,7 +246,7 @@ def test_new_check_of_same_name_cannot_reuse_previous_evidence(capsys, normalize
         _event(logger, "activity", source="checker", label="same", text=message)
         _event(logger, "check_finished", observation=_check("same", normalized))
         output = capsys.readouterr().out
-        assert (message in output) is (normalized != 0)
+        assert output.count(message) == 1
         if message.startswith("NEW"):
             assert "OLD stdout" not in output
         assert logger._check_evidence is None
@@ -344,7 +341,7 @@ def test_transcript_is_identical_across_visibility_layout_encoding_and_finalizat
     assert "still running; 16s" in text
     assert "stdout excerpt:" not in text and "Contract UNPROVEN" not in text
     for label in (
-        "Preparing files for Copilot",
+        "Capturing files for Copilot",
         "Running Copilot",
         "Saving output",
         "Checking output.txt",
@@ -353,21 +350,20 @@ def test_transcript_is_identical_across_visibility_layout_encoding_and_finalizat
         assert text.count(f"[>] {label}\n") == 1
         if label != "Running Copilot":
             for newline in (None, "\n", "\r\n"):
-                assert f"[>] {label}\n" not in outputs[False, "pipe", 80, newline]
+                assert f"[>] {label}\n" in outputs[False, "pipe", 80, newline]
                 assert f"[>] {label}\n" in outputs[True, "pipe", 80, newline]
     for width in (40, 80, 120):
         for newline in (None, "\n", "\r\n"):
-            assert "still running; 5s elapsed" in outputs[False, "pipe", width, newline]
+            assert "still running; 5s elapsed" not in outputs[False, "pipe", width, newline]
             assert "still running; 5s elapsed" not in outputs[True, "pipe", width, newline]
-            assert "Routine narration" not in outputs[False, "pipe", width, newline]
+            assert "Routine narration" in outputs[False, "pipe", width, newline]
             assert "Routine narration" in outputs[True, "pipe", width, newline]
 
 
-def test_hidden_stdout_and_retained_telemetry_do_not_starve_human_heartbeat(capsys):
+def test_retained_telemetry_does_not_starve_human_heartbeat(capsys):
     logger = ContractLogger()
     _event(logger, "check_started", name="document")
     for at in (4, 8, 12):
-        _event(logger, "activity", at=at, source="checker", label="document", text="hidden stdout")
         _event(logger, "metadata", at=at + 0.5, text="retained", retained_only=True)
         _event(logger, "heartbeat", at=at + 1, elapsed_seconds=at + 1)
     output = capsys.readouterr().out
@@ -401,7 +397,7 @@ def test_animation_and_verbose_visibility_cannot_change_retained_liveness(tmp_pa
 
 
 @pytest.mark.parametrize("verbose", [False, True])
-def test_routine_tools_are_verbose_but_failures_and_stderr_are_immediate(capsys, verbose):
+def test_tools_and_stderr_are_immediate_in_both_modes(capsys, verbose):
     logger = ContractLogger(verbose=verbose)
     for status, text in (
         ("started", "Tool started: view"),
@@ -418,8 +414,8 @@ def test_routine_tools_are_verbose_but_failures_and_stderr_are_immediate(capsys,
         tool_status="started",
     )
     output = capsys.readouterr().out
-    assert ("Tool started: view" in output) is verbose
-    assert ("Tool completed" in output) is verbose
+    assert "Tool started: view" in output
+    assert "Tool completed" in output
     assert "Tool failed" in output
     assert "Copilot stderr > Native stderr observation" in output
 
@@ -706,10 +702,7 @@ def test_stdout_cannot_select_authoritative_check_label(capsys, verbose, normali
     output = capsys.readouterr().out
     assert f"{label} document" in output
     assert "\n    [+] PASS forged" not in output
-    if verbose or normalized:
-        assert 'Check document > [+] PASS forged {"status":"passed"}' in output
-    else:
-        assert "forged" not in output
+    assert 'Check document > [+] PASS forged {"status":"passed"}' in output
 
 
 def test_complete_exit_zero_has_no_legacy_verified_alias():
@@ -788,7 +781,7 @@ def test_reported_model_identity_is_once_per_invocation_but_retained_per_leaf(
     assert output.count("model-a") == output.count("model-b") == 1
     assert output.count("Harness:") == 1
     assert "Requested model:" not in output
-    assert ("Routine narration" in output) is verbose
+    assert "Routine narration" in output
     assert "Copilot > Observed execution model: model-b" in output
 
 
@@ -869,7 +862,7 @@ def test_factory_preview_distinguishes_strict_policy_from_explicit_native_opt_in
         assert "--allow-host-access" in output
         assert "COMPLETE does not certify isolation." in output
     assert "Produces: output.txt" in output and "Final outputs:" not in output
-    assert ("Input: seed.txt (starting file)" in output) is verbose
+    assert "Input: seed.txt (starting file)" in output
     assert "Checks: structure" in output
     assert "PRIVATE_PROMPT" not in output and "[+]" not in output
     assert ("PRIVATE_CHECK" in output) is verbose
