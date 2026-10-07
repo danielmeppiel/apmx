@@ -98,41 +98,18 @@ jobs:
       - name: Run each bundle's own trusted run_bundle.py against real Docker
         run: |
           set -euo pipefail
-          while IFS= read -r name; do
-            [ -n "$name" ] || continue
-            python3 "bundles/$name/run_bundle.py" "bundles/$name" || true
-          done < bundles/scenarios.txt
-        # run_bundle.py is invoked directly (not via smoke.py's own
-        # run_execution_bundle wrapper) to prove this job's ENTIRE code is
-        # the one trusted file job A placed in the bundle, exactly like
-        # the real execute job -- see receiver-candidate-check.yml. The
-        # actual result files are produced by the step below instead,
-        # which does the equivalent of run_execution_bundle per scenario
-        # using only the bundle's own trusted copy.
-
-      - name: Produce the real per-scenario results.json files
-        run: |
-          set -euo pipefail
           mkdir -p results
           while IFS= read -r name; do
             [ -n "$name" ] || continue
-            python3 - "$name" <<'PY'
-          import importlib.util
-          import json
-          import sys
-          from pathlib import Path
-
-          name = sys.argv[1]
-          bundle_dir = Path("bundles") / name
-          module_path = bundle_dir / "run_bundle.py"
-          spec = importlib.util.spec_from_file_location("_smoke_run_bundle", module_path)
-          module = importlib.util.module_from_spec(spec)
-          sys.modules[spec.name] = module
-          spec.loader.exec_module(module)
-          results = module.run_execution_bundle(bundle_dir)
-          Path(f"results/{name}.json").write_text(json.dumps(results))
-          PY
+            python3 "bundles/$name/run_bundle.py" \
+              --bundle-dir "bundles/$name" \
+              --results "results/$name.json"
           done < bundles/scenarios.txt
+        # run_bundle.py's own CLI (--bundle-dir/--results) is invoked
+        # directly -- the exact same entry point and argument contract
+        # production's execute job uses in receiver-candidate-check.yml --
+        # to prove this job's ENTIRE code is the one trusted file job A
+        # placed in the bundle, with no reimplementation in this harness.
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
