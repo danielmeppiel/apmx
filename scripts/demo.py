@@ -278,12 +278,16 @@ def install(root: Path, name: str) -> None:
         )
 
 
-def preview(root: Path, name: str) -> None:
-    argv = [str(bundle(root) / "apmx"), "--from", "../factory", ".", "--on", name, "--plan"]
+def factory_command(name: str) -> list[str]:
+    argv = ["apmx", "--from", "../factory"]
     if name == "opencode":
-        argv += ["--model", "github-copilot/gpt-5.6-sol"]
+        argv += ["--on", name, "--model", "github-copilot/gpt-5.6-sol"]
+    return argv
+
+
+def preview(root: Path, name: str) -> None:
     subprocess.run(
-        argv,
+        [str(bundle(root) / "apmx"), *factory_command(name)[1:], "--plan"],
         cwd=root / f"checkout-{name}",
         env=environment(root),
         check=True,
@@ -329,10 +333,10 @@ def shell(root: Path, name: str) -> int:
         env = environment(root)
         env["PS1"] = f"{name} $ "
         env["BASH_SILENCE_DEPRECATION_WARNING"] = "1"
-        model = " --model github-copilot/gpt-5.6-sol" if name == "opencode" else ""
+        command = shlex.join(factory_command(name))
         print(f"\nApplication: {path}")
-        print(f"Preview: apmx --from ../factory . --on {name}{model} --plan")
-        print(f"Run:     apmx --from ../factory . --on {name}{model}")
+        print(f"Preview: {command} --plan")
+        print(f"Run:     {command}")
         print("APMX requests interactive consent. No permissions or models are injected.")
         print("Use 'exit' before resetting. Keep runs in the foreground.\n", flush=True)
         return subprocess.run(

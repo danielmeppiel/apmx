@@ -20,18 +20,20 @@ in your editor.
 **"Make delivery free from fifty dollars. Here are the deliverables and checks."**
 
 ```sh
-apmx --from ../factory . --on copilot --plan
+apmx --from ../factory --plan
 ```
 
 Expect five stages, seven outputs and nine checks. Preview performs no model
 calls. The application is the implicit workspace; source files need no inventory
 in the contract. The factory supplies contracts, checks and the pinned testing
-capability. The dot selects the whole factory package.
+capability. The package root is the default entrypoint; Copilot is the default
+harness. Preview is optional: the execution command also displays the factory
+before asking for execution consent.
 
 **"Let Copilot operate this factory."**
 
 ```sh
-apmx --from ../factory . --on copilot
+apmx --from ../factory
 ```
 
 First confirm package preparation, then inspect the displayed factory and confirm
@@ -58,7 +60,7 @@ Open a second terminal in the kit directory:
 Then run:
 
 ```sh
-apmx --from ../factory . --on opencode --model github-copilot/gpt-5.6-sol
+apmx --from ../factory --on opencode --model github-copilot/gpt-5.6-sol
 ```
 
 This is the explicitly tested OpenCode provider/model selection. It requires
@@ -130,7 +132,8 @@ Requirements: Git, authenticated Copilot/OpenCode CLIs, Bash, a checker Python
 and a trusted native APMX archive plus its checksum sidecar. Python is the
 checker's runtime; the PyInstaller binary has its own embedded APMX runtime.
 Use a candidate built from this checkout's committed source, including the
-two-step packaged-factory consent flow; older published binaries require flags.
+package-root shorthand and two-step packaged-factory consent flow. Older
+published binaries do not necessarily support these commands.
 
 Use the existing native release builder when creating a candidate:
 
