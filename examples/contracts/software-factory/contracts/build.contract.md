@@ -19,6 +19,9 @@ Implement the admitted checkout specification. Read the request, specification,
 source, existing tests and supplied feature. The request and supplied acceptance
 remain authoritative if generated specification text conflicts with them.
 The project files are already captured; needs is not a source-file inventory.
+Before opening existing project files, inspect the relevant directories with
+the permitted read tool. Use the returned paths rather than guessing conventional
+filenames that may not exist.
 Read the common and Implementation report formats in checks/document-formats.md.
 
 Edit the actual private working copies of src/pricing.py and src/checkout.py.

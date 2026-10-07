@@ -63,6 +63,10 @@ Default output still shows stderr and explicit diagnostics. A failed or
 incomplete check shows its normalized result and a bounded stdout excerpt;
 the saved transcript provides the retained detail. Check output is evidence
 from an external program, not the authority for a green or red status.
+Checker stdout retains sanitized logical lines up to the existing 16 KiB stream
+limit, independently of the 4 KiB terminal excerpt. This keeps bounded JSON
+subject reports usable for evidence delivery. The total transcript budget,
+redaction and refusal of missing or malformed reports remain unchanged.
 
 An interactive `NO_COLOR` terminal keeps hanging indentation without ANSI.
 Redirected output keeps logical lines, without animation or application-inserted

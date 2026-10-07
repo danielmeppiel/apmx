@@ -30,7 +30,7 @@ from apmx.contracts.models import (
     RunResult,
     artifact_files,
 )
-from apmx.contracts.stream import safe_text
+from apmx.contracts.stream import TEXT_LINE_BYTES, safe_text
 from apmx.utils import console
 from apmx.utils.paths import portable_link_relpath, portable_relpath
 
@@ -598,6 +598,7 @@ class ContractLogger:
         display_message: str | None = None,
         display: _DisplayLine | None = None,
         layout: _Layout = _Layout.LITERAL,
+        retained_limit: int | None = None,
     ) -> None:
         """Retain the canonical logical line before any human-only transformation."""
         text = safe_text(message)
@@ -606,7 +607,8 @@ class ContractLogger:
         marker = self._display.marker(role, source)
         if not self._closed:
             retained_prefix = f"{source} (untrusted) > " if source else ""
-            self._transcript.append(" " * indent + marker + retained_prefix + text)
+            retained = text if retained_limit is None else safe_text(message, limit=retained_limit)
+            self._transcript.append(" " * indent + marker + retained_prefix + retained)
         visibility = (
             _Visibility.RETAINED
             if retained_only
@@ -914,6 +916,7 @@ class ContractLogger:
             display_message=displayed,
             detail=not stderr and tool_status != "failed",
             layout=_Layout.PROSE if not tool_status else _Layout.LITERAL,
+            retained_limit=TEXT_LINE_BYTES if checker_stdout else None,
             display=(
                 _DisplayLine(
                     safe_text(text),

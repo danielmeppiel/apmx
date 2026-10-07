@@ -9,7 +9,7 @@ import pytest
 from apmx.contracts import check_subjects
 from apmx.contracts.events import EventEmitter
 from apmx.contracts.models import ContractError
-from apmx.contracts.stream import ContractStreamDecoder
+from apmx.contracts.stream import TEXT_LINE_BYTES, ContractStreamDecoder
 from apmx.core.contract_logger import ContractLogger
 
 
@@ -43,11 +43,16 @@ def test_only_exact_checker_attribution_can_supply_a_report() -> None:
 
 @pytest.mark.parametrize("ending", [b"\n", b"\r\n"])
 @pytest.mark.parametrize("chunk_size", [1, 7, 4096])
+@pytest.mark.parametrize("reference_count", [0, 40, 100])
 def test_checker_report_survives_native_line_framing(
-    tmp_path: Path, ending: bytes, chunk_size: int
+    tmp_path: Path, capsys, ending: bytes, chunk_size: int, reference_count: int
 ) -> None:
     report = document_report()
-    logger = ContractLogger()
+    report["references"] = {
+        f"docs/reference-{index}.md": {"sha256": "a" * 64, "size": index}
+        for index in range(reference_count)
+    }
+    logger = ContractLogger(verbose=True)
     logger.attach_run("fixture", tmp_path)
     decoder = ContractStreamDecoder(
         EventEmitter("fixture", logger.on_event),
@@ -62,6 +67,30 @@ def test_checker_report_survives_native_line_framing(
     logger.close()
     transcript = (tmp_path / "transcript.log").read_text(encoding="utf-8")
     assert check_subjects.read_report(transcript, "exact") == report
+    displayed = capsys.readouterr().out
+    assert len(displayed) < 6000
+    if reference_count:
+        assert len(wire) > 4096
+        assert "[text truncated]" in displayed
+
+
+def test_checker_report_over_stream_limit_remains_explicitly_omitted(tmp_path: Path) -> None:
+    report = document_report()
+    report["scope"] = "x" * TEXT_LINE_BYTES
+    logger = ContractLogger()
+    logger.attach_run("fixture", tmp_path)
+    decoder = ContractStreamDecoder(
+        EventEmitter("fixture", logger.on_event),
+        source="checker",
+        label="exact",
+        json_stdout=False,
+    )
+    decoder.feed("stdout", json.dumps(report).encode("ascii") + b"\n")
+    decoder.finish()
+    logger.close()
+    transcript = (tmp_path / "transcript.log").read_text(encoding="ascii")
+    assert check_subjects.read_report(transcript, "exact") is None
+    assert "Oversized native text lines omitted" in transcript
 
 
 @pytest.mark.parametrize("fault", ["duplicate", "malformed", "unknown-schema", "duplicate-key"])

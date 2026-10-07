@@ -106,6 +106,14 @@ def test_only_build_declares_a_shared_repair_budget() -> None:
         )
 
 
+def test_build_discovers_files_without_relaxing_tool_error_stop() -> None:
+    body = load_frontmatter_document(EXAMPLE / "contracts/build.contract.md").body
+    assert "inspect the relevant directories with" in body
+    assert "Use the returned paths rather than guessing" in body
+    assert "If any tool reports an\nerror, stop" in body
+    assert "Do not run commands/checks, install packages or delegate." in body
+
+
 def test_contracts_name_handoffs_not_a_source_inventory() -> None:
     expected = {
         "planning.contract.md": "request.md",
