@@ -1,23 +1,7 @@
-"""Milestone 2 feasibility prototype: a genuine stdin consent widget.
+"""Default-No source preparation and cancel/quit decisions.
 
-Scope: this module does not call into apmx.contracts.engine/chain/process
-and does not grant or compute any execution outcome itself; consent and
-outcome semantics stay owned by the canonical engine and ContractLogger
-(see docs/textual-design.md). What this proves, genuinely (not as an
-estimate): a real interactive consent prompt that defaults to declining and
-only proceeds on an explicit keypress selecting "Yes" -- never
-auto-accepted, matching the existing CLI's default-No --allow-host-access
-gate. Wiring this screen to the real admission flow
-(logger.confirm_factory()) is tracked separately as live-execution wiring,
-not done by this module.
-
-A real supervised-child cancellation mechanism was prototyped alongside
-this screen and deliberately removed from shipping source after review: it
-was POSIX-only with no Windows path, and duplicated lifecycle ownership
-that belongs to apmx.contracts.process's canonical supervisor (including
-descendant/process-group cleanup). Real cancellation for live runs must
-extend that canonical supervisor, not add a second one here. See
-docs/textual-design.md's milestone 2 log for the full note.
+The command bridge supplies canonical prompts and consumes the answer. Widgets
+never execute a source, decide acceptance or supervise a process.
 """
 
 from __future__ import annotations
@@ -26,12 +10,12 @@ from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
 
-class ConsentScreen(ModalScreen[bool]):
+class ConsentScreen(ModalScreen[bool | None]):
     """Default-No consent prompt. Declining (default focus, Escape, or 'n')
     dismisses with False and never arms anything. Only an explicit "Yes"
     selection dismisses with True."""
@@ -39,10 +23,13 @@ class ConsentScreen(ModalScreen[bool]):
     DEFAULT_CSS = """
     ConsentScreen {
         align: center middle;
+        background: $background 70%;
     }
     #consent-box {
-        width: 60;
+        width: 90%;
+        max-width: 76;
         height: auto;
+        max-height: 90%;
         border: round $warning;
         padding: 1 2;
         background: $surface;
@@ -52,23 +39,36 @@ class ConsentScreen(ModalScreen[bool]):
         padding-top: 1;
         align: center middle;
     }
+    #consent-buttons Button { min-width: 12; width: 1fr; }
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "decline", "Decline", show=False),
         Binding("n", "decline", "No", show=False),
+        Binding("y", "accept", "Yes", show=False),
+        Binding("r", "inspect", "Inspect", show=False),
     ]
 
-    def __init__(self, prompt: str) -> None:
+    def __init__(
+        self,
+        prompt: str,
+        *,
+        accept_label: str = "Yes, allow this run",
+        allow_inspect: bool = False,
+    ) -> None:
         super().__init__()
         self._prompt = prompt
+        self.accept_label = accept_label
+        self.allow_inspect = allow_inspect
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="consent-box"):
+        with VerticalScroll(id="consent-box"):
             yield Static(self._prompt, markup=False)
-            with Vertical(id="consent-buttons"):
+            with Horizontal(id="consent-buttons"):
                 yield Button("No (default)", id="decline", variant="error")
-                yield Button("Yes, allow this run", id="accept", variant="warning")
+                yield Button(self.accept_label, id="accept", variant="warning")
+                if self.allow_inspect:
+                    yield Button("Inspect (r)", id="inspect")
 
     def on_mount(self) -> None:
         # Default focus sits on decline; accept requires an explicit
@@ -76,7 +76,14 @@ class ConsentScreen(ModalScreen[bool]):
         self.query_one("#decline", Button).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "accept")
+        self.dismiss(None if event.button.id == "inspect" else event.button.id == "accept")
 
     def action_decline(self) -> None:
         self.dismiss(False)
+
+    def action_accept(self) -> None:
+        self.dismiss(True)
+
+    def action_inspect(self) -> None:
+        if self.allow_inspect:
+            self.dismiss(None)

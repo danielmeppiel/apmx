@@ -44,6 +44,27 @@ access host files, network and available logins; this is not a sandbox. Model
 usage can cost money. Copilot keeps its configured model. The helper supplies
 neither model overrides nor permission flags.
 
+For an interactive, persistent factory workspace instead of the plain stream:
+
+```sh
+apmx --from ../factory --tui
+```
+
+Approve preparation first, inspect the resolved graph, then approve execution;
+both decisions default to No. Select a card to pin its activity, checks, outputs
+and evidence while other contracts run. `s` changes scope, `f` toggles follow,
+`/` searches, and Ctrl+p opens the action palette. Running-card motion represents
+actual running/checking state, not estimated model progress. Use
+`APMX_REDUCED_MOTION=1` for static indicators; `NO_COLOR` preserves useful labels.
+
+After Finalizing, the workspace stays open on retained Outputs. Execution and
+evidence delivery are shown separately, including delivery failure (exit 23).
+Use `p` for a safe read-only preview, `y` to copy the selected path, `l` to open
+its location, `b` for the delivered evidence location and `g` to revisit the graph.
+`c` cancels and leaves results inspectable; `q` during work requires confirmation
+and cleanup, while `q` after completion closes with the canonical exit code.
+Nothing automatically applies a patch or reruns a contract.
+
 Public agent activity and checker stdout/stderr stream by default. `--verbose`
 also mirrors full native debug diagnostics, with safety bounds; omit it for a
 more readable presentation without hiding the actual work. Inspect debug output

@@ -179,6 +179,11 @@ def can_confirm_factory() -> bool:
     return not os.environ.get("CI") and sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def tui_reduced_motion() -> bool:
+    """Explicit APMX UI preference; not a claim to detect OS accessibility settings."""
+    return os.environ.get("APMX_REDUCED_MOTION", "").strip().casefold() in {"1", "true", "yes"}
+
+
 def silence_broken_pipe() -> None:
     """Prevent shutdown from retrying writes to an already-broken human descriptor."""
     stream = sys.stderr if _console_stderr else sys.stdout

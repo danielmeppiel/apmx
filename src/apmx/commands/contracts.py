@@ -1,5 +1,7 @@
 """Shared command boundary for explicit contracts, never script fallback."""
 
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import click
@@ -25,6 +27,7 @@ def invoke_contract(
     factory_root: Path | None = None,
     allow_unproven_inputs: bool = False,
     tui: bool = False,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> ChainResult | RunResult | None:
     """Plan or execute a local factory or one explicit leaf through shared admission."""
     from ..contracts import frontend, workspace
@@ -42,6 +45,13 @@ def invoke_contract(
         root = Path.cwd().resolve()
         graph = None
         consent_source = "flag"
+        interactive_workspace = (
+            logger.presentation is not None
+            and not planning
+            and not allow_advisory
+            and not allow_unproven_inputs
+            and logger.can_confirm_factory()
+        )
         if factory_root is not None:
             from ..contracts.resolution import resolve_factory, select_factory_root
 
@@ -59,11 +69,20 @@ def invoke_contract(
                 (item.path for item in graph.order if item.imports),
                 graph.order[0].path,
             )
+            if interactive_workspace and source is None:
+                logger.render_factory_work(graph, project_root=root, harness=harness)
+                if not logger.confirm_package_preparation(str(factory_root)):
+                    raise ContractError(
+                        "Factory preparation was declined; nothing executed.",
+                        code="consent_declined",
+                        outcome=Outcome.UNPROVEN,
+                    )
             if (
                 not planning
                 and not allow_advisory
                 and not allow_unproven_inputs
                 and logger.can_confirm_factory()
+                and logger.presentation is None
             ):
                 logger.render_factory_work(graph, project_root=root, harness=harness)
                 if not logger.confirm_factory():
@@ -81,7 +100,7 @@ def invoke_contract(
                     )
             if not planning:
                 logger.execution_context(factory=True)
-        if not planning and not allow_advisory:
+        if not planning and not allow_advisory and not interactive_workspace:
             raise ContractError(
                 f"{ContractLogger._harness_label(harness)}, APM and checks can use host files, "
                 "network and available login details. "
@@ -98,6 +117,7 @@ def invoke_contract(
             limits=limits,
             on_preparation=logger.on_preparation,
             verbose=verbose,
+            **({"cancel_requested": cancel_requested} if cancel_requested else {}),
         ) as (imports_root, backend):
             if graph is not None:
                 from ..contracts.chain import run_chain
@@ -115,6 +135,29 @@ def invoke_contract(
                     allow_unproven_inputs=allow_unproven_inputs,
                 )
                 logger.stop_activity()
+                if logger.presentation is not None:
+                    logger.render_factory_work(closure.graph, project_root=root, harness=harness)
+                    if planning:
+                        logger.render_chain_plan(closure)
+                        return None
+                    if interactive_workspace:
+                        if not logger.confirm_factory():
+                            raise ContractError(
+                                "Factory execution was declined; no agent or check ran.",
+                                code="consent_declined",
+                                outcome=Outcome.UNPROVEN,
+                            )
+                        allow_advisory = allow_unproven_inputs = True
+                        closure = replace(closure, allow_unproven_inputs=True)
+                        consent_source = "interactive"
+                        if resolve_factory(factory_root, caller=root, limits=limits) != graph:
+                            raise ContractError(
+                                "Factory changed during confirmation. Preview it again.",
+                                code="plan_changed",
+                            )
+                    if cancel_requested is not None and cancel_requested():
+                        raise ContractError("Factory cancelled before execution.", code="cancelled")
+                    logger.presentation.phase("Run")
                 if planning:
                     if tui:
                         from ..tui.entry import launch_preview, tui_eligible
@@ -154,7 +197,11 @@ def invoke_contract(
                         logger=logger,
                         allow_advisory=allow_advisory,
                         consent_source=consent_source,
+                        cancel_requested=cancel_requested,
                     )
+                if logger.presentation is not None:
+                    logger.presentation.phase("Finalizing")
+                    logger.presentation.result(chain_result)
                 completion.capture(chain_result)
                 return chain_result
             plan = frontend.plan_contract(

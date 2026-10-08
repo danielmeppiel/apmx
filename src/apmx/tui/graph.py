@@ -25,6 +25,7 @@ class ContractNode:
     produces: tuple[str, ...]
     checks: tuple[str, ...]
     path: Path
+    attempt_limit: int = 1
 
 
 def contract_identity(root: Path, contract: LeafContract, catalog: tuple[LeafContract, ...]) -> str:
@@ -44,6 +45,7 @@ def build_nodes(graph: Graph) -> tuple[ContractNode, ...]:
             produces=contract.outputs,
             checks=tuple(check.name for check in contract.checks),
             path=contract.path,
+            attempt_limit=contract.budget.max_attempts if contract.budget else 1,
         )
         for contract in graph.order
     )

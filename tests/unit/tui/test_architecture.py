@@ -28,6 +28,7 @@ FORBIDDEN_MODULE_PREFIXES = (
 ALLOWED_CONTRACTS_IMPORTS = {
     "apmx.contracts.models",
     "apmx.contracts.resolution",
+    "apmx.contracts.stream",  # canonical bounded redaction/terminal escaping
 }
 
 

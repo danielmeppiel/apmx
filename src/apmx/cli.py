@@ -2,6 +2,7 @@
 
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -39,6 +40,9 @@ def _finish_result(
     """Delivery failure is separate from the already-finalized execution outcome."""
     from apmx.contracts.evidence import export_completed
 
+    if logger.presentation is not None:
+        logger.presentation.phase("Finalizing")
+        logger.presentation.result(result)
     completion.validate(result)
     logger.render_result(result)
     if result.outcome is not Outcome.COMPLETE:
@@ -185,6 +189,81 @@ def main(
     configure_process_tls_trust()
     ctx.ensure_object(dict)
     logger = ContractLogger(verbose=verbose)
+    if tui:
+        from apmx.tui.entry import tui_eligible
+
+        try:
+            entry, source_ref, factory = _select_entry(contract, package_ref)
+            if factory is None and (source_ref is None or entry.endswith(".contract.md")):
+                raise ContractError(
+                    "The TUI needs a factory directory, not a single contract file.",
+                    code="tui_requires_factory",
+                    outcome=Outcome.UNPROVEN,
+                )
+            if not tui_eligible():
+                raise ContractError(
+                    "The TUI needs an interactive terminal on both ends; omit --tui.",
+                    code="tui_unavailable",
+                    outcome=Outcome.UNPROVEN,
+                )
+            from apmx.commands.tui_live import launch_workspace
+
+            def command(presentation, cancel_requested):
+                logger.presentation = presentation
+                logger._display.disable()
+                with ctx:
+                    _invoke(
+                        ctx,
+                        contract,
+                        package_ref,
+                        harness,
+                        model,
+                        planning,
+                        allow_advisory,
+                        verbose,
+                        allow_unproven_inputs,
+                        logger,
+                        cancel_requested,
+                    )
+
+            code = launch_workspace(
+                source=source_ref or str(factory),
+                entry=entry,
+                planning=planning,
+                command=command,
+            )
+        except ContractError as exc:
+            logger.render_error(exc)
+            code = int(exc.outcome)
+        ctx.exit(code)
+    _invoke(
+        ctx,
+        contract,
+        package_ref,
+        harness,
+        model,
+        planning,
+        allow_advisory,
+        verbose,
+        allow_unproven_inputs,
+        logger,
+    )
+
+
+def _invoke(
+    ctx: click.Context,
+    contract: str | None,
+    package_ref: str | None,
+    harness: str,
+    model: str | None,
+    planning: bool,
+    allow_advisory: bool,
+    verbose: bool,
+    allow_unproven_inputs: bool,
+    logger: ContractLogger,
+    cancel_requested: Callable[[], bool] | None = None,
+) -> None:
+    """Canonical command, including acquisition teardown and evidence delivery."""
     caller_root = Path.cwd().resolve()
     limits = ContractLimits()
     result = None
@@ -209,7 +288,7 @@ def main(
                 logger=logger,
                 factory_root=factory_root,
                 allow_unproven_inputs=allow_unproven_inputs,
-                tui=tui,
+                cancel_requested=cancel_requested,
             )
             if result is not None:
                 ctx.exit(_finish_result(result, completion, logger))
@@ -244,6 +323,7 @@ def main(
             factory=package_factory,
             on_preparation=logger.on_preparation,
             verbose=verbose,
+            **({"cancel_requested": cancel_requested} if cancel_requested else {}),
         ) as source:
             logger.stop_activity()
             result = invoke_contract(
@@ -259,7 +339,7 @@ def main(
                 logger=logger,
                 factory_root=source.root / contract if package_factory else None,
                 allow_unproven_inputs=allow_unproven_inputs,
-                tui=tui,
+                cancel_requested=cancel_requested,
             )
         if result is not None:
             ctx.exit(_finish_result(result, completion, logger))

@@ -366,6 +366,16 @@ class ChainResult:
 
 
 @dataclass(frozen=True)
+class EventContext:
+    """Immutable logger-source attribution, independent of presentation selection."""
+
+    contract: Path | None = None
+    contract_index: int | None = None
+    attempt: int = 1
+    attempt_limit: int = 1
+
+
+@dataclass(frozen=True)
 class RunEvent:
     """Small internal event; never the native harness's public protocol."""
 
@@ -375,6 +385,7 @@ class RunEvent:
     kind: str
     source: Literal["engine", "harness", "checker"]
     data: Mapping[str, object] = field(default_factory=dict)
+    context: EventContext = field(default_factory=EventContext)
 
 
 EventSink = Callable[[RunEvent], None]

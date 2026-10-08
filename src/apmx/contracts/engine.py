@@ -372,6 +372,7 @@ def run_attempt(
     except (OSError, KeyboardInterrupt) as exc:
         store.fail_finalization(result, exc)
     result = store.finalize(plan, result)
+    events.emit("attempt_finished", result=result)
     if announce_result:
         events.emit("finished", result=result)
     return result

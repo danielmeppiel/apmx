@@ -1,7 +1,7 @@
 """Prepare package sources through the bundled official APM CLI."""
 
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -170,6 +170,7 @@ def prepare_contract_source(
     factory: bool = False,
     on_preparation: PreparationSink | None = None,
     verbose: bool = False,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> Iterator[ContractSource]:
     """Never run APM from the real caller or package checkout."""
     admit_caller_policy(caller_root, limits=limits)
@@ -291,6 +292,7 @@ def prepare_contract_source(
                     limits=limits,
                     on_preparation=on_preparation,
                     verbose=verbose,
+                    **({"cancel_requested": cancel_requested} if cancel_requested else {}),
                 )
                 installed_lock, _ = read_lock(stage, limits)
                 apm_backend.require_preserved_pins(established, installed_lock)
@@ -305,6 +307,7 @@ def prepare_contract_source(
                     limits=limits,
                     on_preparation=on_preparation,
                     verbose=verbose,
+                    **({"cancel_requested": cancel_requested} if cancel_requested else {}),
                 )
             _, _, current_manifest = read_project_manifest(caller_root, limits, allow_missing=True)
             _, current_lock = read_lock(caller_root, limits)
@@ -351,6 +354,7 @@ def prepare_imports(
     limits: ContractLimits,
     on_preparation: PreparationSink | None = None,
     verbose: bool = False,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> Iterator[tuple[Path, dict[str, str] | None]]:
     """The consumer manifest/lock wins over a packaged contract's dependencies."""
     admit_caller_policy(caller_root, limits=limits)
@@ -391,6 +395,7 @@ def prepare_imports(
             on_preparation=on_preparation,
             scope="consumer",
             verbose=verbose,
+            **({"cancel_requested": cancel_requested} if cancel_requested else {}),
         )
         if _original_bytes(caller_root, limits) != before:
             raise ContractError(

@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, ClassVar
+from typing import TYPE_CHECKING, BinaryIO, ClassVar, Protocol
 
 from apmx.contracts.events import (
     HEARTBEAT_SECONDS,
@@ -22,6 +22,7 @@ from apmx.contracts.models import (
     CheckObservation,
     ContractError,
     ContractLimits,
+    EventContext,
     FileEntry,
     LeafPlan,
     Outcome,
@@ -491,6 +492,18 @@ class _CheckEvidence:
         )
 
 
+class ContractPresentation(Protocol):
+    """Optional read-only command surface; admission and evidence stay with their owners."""
+
+    def event(self, event: RunEvent) -> None: ...
+    def message(self, text: str) -> None: ...
+    def confirm(self, prompt: str) -> bool: ...
+    def graph(self, graph: Graph) -> None: ...
+    def phase(self, phase: str) -> None: ...
+    def result(self, result: ChainResult | RunResult) -> None: ...
+    def delivery(self, path: Path | None, error: str | None = None) -> None: ...
+
+
 class ContractLogger:
     """Semantic/evidence owner, composing the invocation's human presenter.
 
@@ -504,10 +517,14 @@ class ContractLogger:
         *,
         _display: _ContractDisplay | None = None,
         _step: _StepContext | None = None,
+        presentation: ContractPresentation | None = None,
+        _context: EventContext | None = None,
     ) -> None:
         self.verbose = verbose
         self._display = _display if _display is not None else _ContractDisplay()
         self._step = _step
+        self.presentation = presentation
+        self._event_context = _context or EventContext()
         self._check_evidence: _CheckEvidence | None = None
         self._chain_stop: _StopContext | None = None
         self._transcript = _Transcript(ContractLimits().transcript_bytes)
@@ -536,6 +553,8 @@ class ContractLogger:
         if self._closed:
             return
         self._activity_label = message
+        if self.presentation is not None and self._step is None:
+            self.presentation.phase(message)
         animate = self._display.animates()
         if announce:
             self._write(message, severity="start", detail=animate)
@@ -631,6 +650,8 @@ class ContractLogger:
             visibility=visibility,
             verbose=self.verbose,
         )
+        if self.presentation is not None and self._step is None and not retained_only:
+            self.presentation.message(text)
 
     def _retained_gap(self) -> None:
         """Preserve existing transcript separators; screen spacing is deduplicated."""
@@ -647,6 +668,7 @@ class ContractLogger:
 
     def on_event(self, event: RunEvent) -> None:
         """Consume the conductor's ordered stream; never derive an outcome."""
+        event = replace(event, context=self._event_context)
         handlers = {
             "selected": self._selected,
             "input_captured": self._input_captured,
@@ -675,6 +697,8 @@ class ContractLogger:
                     self._last_evidence_activity = event.elapsed_seconds
                 if self._display.revision != revision:
                     self._last_human_activity = event.elapsed_seconds
+        if self.presentation is not None:
+            self.presentation.event(event)
 
     def on_preparation(self, event: PreparationEvent) -> None:
         """Retain pre-run facts in the same bounded transcript later attached by the engine."""
@@ -1323,6 +1347,8 @@ class ContractLogger:
             verbose=self.verbose,
             _display=self._display,
             _step=_StepContext(index, count, contract),
+            presentation=self.presentation,
+            _context=EventContext(contract=contract, contract_index=index),
         )
         leaf._display_root = self._display_root
         return leaf
@@ -1330,7 +1356,13 @@ class ContractLogger:
     def new_attempt(self, *, index: int, count: int) -> ContractLogger:
         """Give each attempt a private transcript while retaining the factory step."""
         self._write(f"Attempt {index} of {count}", severity="info")
-        attempt = ContractLogger(verbose=self.verbose, _display=self._display, _step=self._step)
+        attempt = ContractLogger(
+            verbose=self.verbose,
+            _display=self._display,
+            _step=self._step,
+            presentation=self.presentation,
+            _context=replace(self._event_context, attempt=index, attempt_limit=count),
+        )
         attempt._display_root = self._display_root
         return attempt
 
@@ -1373,6 +1405,8 @@ class ContractLogger:
     ) -> None:
         self.stop_activity()
         self._harness = self._harness_label(harness)
+        if self.presentation is not None:
+            self.presentation.graph(graph)
         count = self._factory_contract_count = len(graph.order)
         artifacts = sum(len(contract.outputs) for contract in graph.order)
         checks = sum(len(contract.checks) for contract in graph.order)
@@ -1434,6 +1468,8 @@ class ContractLogger:
 
     def _confirm(self, prompt: str) -> bool:
         self._write(prompt, accent=prompt, indent=0)
+        if self.presentation is not None:
+            return self.presentation.confirm(prompt)
         if not self._display.enabled:
             return False
         try:
@@ -1593,6 +1629,8 @@ class ContractLogger:
 
     def evidence_package(self, path: Path | None) -> None:
         """Report a delivered standards projection without changing recorded execution."""
+        if self.presentation is not None:
+            self.presentation.delivery(path)
         if path is None:
             self._write(
                 "Evidence package: not applicable (no retained official APM inventory).",
@@ -1618,6 +1656,8 @@ class ContractLogger:
 
     def evidence_delivery_failed(self, reason: str) -> None:
         """A failed export cannot relabel an already finalized COMPLETE record."""
+        if self.presentation is not None:
+            self.presentation.delivery(None, reason)
         self._write("Evidence delivery failed (command exit 23).", severity="error", indent=0)
         self._write(reason)
         self._write(

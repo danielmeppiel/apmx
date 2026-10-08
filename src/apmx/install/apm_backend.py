@@ -7,7 +7,7 @@ import json
 import os
 import platform
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -143,7 +143,11 @@ def backend_child_env(environ: dict[str, str]) -> dict[str, str]:
 
 
 def _check_backend_version(
-    executable: Path, stage: Path, env: Mapping[str, str], limits: ContractLimits
+    executable: Path,
+    stage: Path,
+    env: Mapping[str, str],
+    limits: ContractLimits,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> None:
     """Share the pinned native version check across install and inventory export."""
     version_output = bytearray()
@@ -163,8 +167,13 @@ def _check_backend_version(
         ProcessRequest((str(executable), "--version"), stage, 15, env=env),
         on_bytes=receive_version,
         limits=limits,
+        **({"cancel_requested": cancel_requested} if cancel_requested else {}),
     )
     expected = expected_version_output()
+    if version.stop_reason == "cancelled":
+        raise ContractError(
+            "APM preparation cancelled; managed cleanup completed.", code="cancelled"
+        )
     if (
         version.returncode != 0
         or version.stop_reason
@@ -189,6 +198,7 @@ def install(
     on_preparation: PreparationSink | None = None,
     scope: PreparationScope = "package",
     verbose: bool = False,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> dict[str, str]:
     """Run in an owned source/deploy root with normal APM auth/config semantics.
 
@@ -222,7 +232,13 @@ def install(
     for name in ("FORCE_COLOR", "CLICOLOR_FORCE", "PY_COLORS"):
         env.pop(name, None)
     env.update(NO_COLOR="1", TERM="dumb", COLUMNS="4096")
-    _check_backend_version(executable, stage, env, limits)
+    _check_backend_version(
+        executable,
+        stage,
+        env,
+        limits,
+        **({"cancel_requested": cancel_requested} if cancel_requested else {}),
+    )
     if on_preparation is not None:
         on_preparation(
             ApmInstallEvent(
@@ -242,9 +258,15 @@ def install(
             ProcessRequest(tuple(argv), stage, limits.attempt_seconds, env=env),
             on_bytes=decoder.feed,
             limits=limits,
+            **({"cancel_requested": cancel_requested} if cancel_requested else {}),
         )
     finally:
         decoder.finish()
+    if observed.stop_reason == "cancelled":
+        raise ContractError(
+            "APM preparation cancelled. No producer was launched.",
+            code="cancelled",
+        )
     if (
         observed.returncode != 0
         or observed.stop_reason

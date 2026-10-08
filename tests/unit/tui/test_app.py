@@ -81,28 +81,29 @@ def test_apply_card_status_updates_card_and_open_detail_pane(tmp_path):
 
 
 def test_detail_pane_is_scrollable_when_narrow_terminal_clips_content(tmp_path):
-    """At a narrow/short terminal (e.g. 80x24) the detail pane's six fields
-    can be taller than the space it's given, especially once a dependency
-    list wraps; the pane must stay scrollable rather than silently clipping
-    fields off the bottom with no way to reach them."""
+    """At the narrow supported size, details use a keyboard-accessible drilldown."""
+    from textual.widgets import TextArea
+
+    from apmx.tui.inspection import InspectionScreen
+
     graph = _branched_graph(tmp_path)
     app = FactoryApp(graph)
 
     async def scenario():
-        async with app.run_test(size=(30, 5)) as pilot:
+        async with app.run_test(size=(60, 20)) as pilot:
             await pilot.pause()
             card = app.query(ContractCard).first()
             card.focus()
             await pilot.pause()
-            detail = app.query_one(DetailPane)
-            assert detail.can_focus, "DetailPane must be keyboard-focusable to scroll"
-            assert detail.virtual_size.height > detail.size.height, (
-                "test terminal too generous to exercise overflow; shrink size"
-            )
-            assert detail.max_scroll_y > 0
-            detail.scroll_end(animate=False)
+            await pilot.press("i")
             await pilot.pause()
-            assert detail.scroll_y == pytest.approx(detail.max_scroll_y)
+            assert isinstance(app.screen, InspectionScreen)
+            detail = app.screen.query_one(TextArea)
+            assert "Checks:" in detail.text
+            assert "PACKAGE / SKILL IMPORTS" in detail.text
+            await pilot.press("ctrl+end")
+            await pilot.press("escape")
+            assert not isinstance(app.screen, InspectionScreen)
 
     _run(scenario())
 

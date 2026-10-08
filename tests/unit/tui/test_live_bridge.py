@@ -220,6 +220,35 @@ def test_native_diagnostic_goes_to_the_bounded_diagnostics_pane_not_activity(
     assert app.events == []
 
 
+def test_delayed_dispatch_keeps_leaf_and_attempt_identity(
+    caller: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dispatch after a later leaf starts must not relabel earlier observations."""
+    import apmx.commands.tui_live as bridge
+
+    pending = []
+    monkeypatch.setattr(
+        bridge, "_fire_and_forget", lambda app, callback, *args: pending.append((callback, args))
+    )
+    app = _FakeApp()
+    logger = _attach_live(
+        ContractLogger(), identities=("first", "second"), app=app, state={"current": None}
+    )
+    first = logger.new_leaf(index=1, count=2, contract=caller / "first.contract.md")
+    attempt = first.new_attempt(index=2, count=3)
+    attempt.on_event(RunEvent("first-run", 1, 0, "phase", "engine", {"name": "checks"}))
+    logger.chain_node(2, 2, caller / "second.contract.md")
+    second = logger.new_leaf(index=2, count=2, contract=caller / "second.contract.md")
+    second.on_event(RunEvent("second-run", 1, 0, "phase", "engine", {"name": "execution"}))
+    for callback, args in pending:
+        callback(*args)
+    earlier, later = app.events
+    assert earlier.context.contract == caller / "first.contract.md"
+    assert (earlier.context.attempt, earlier.context.attempt_limit) == (2, 3)
+    assert later.context.contract == caller / "second.contract.md"
+    assert later.context.attempt == 1
+
+
 def test_live_factory_app_cancel_binding_sets_the_cooperative_flag(
     caller: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -5,6 +5,43 @@ Repository: https://github.com/danielmeppiel/apmx
 Starting baseline: ac21f4c9b5a999b7d320186ff43bc9ef52a2d723.
 Parallel companion: security-story.md.
 
+## Persistent workspace implementation
+
+Explicit `--tui` now opens before source preparation, including `--from`.
+Source approval defaults to No; unresolved sources are not presented as a resolved
+graph. Authorized preparation resolves the real artifact graph. Execution approval
+defaults to No in a bounded panel beside the visible graph. Existing host-access,
+unproven-input and planning semantics remain authoritative; `--plan` does not run
+agents or download unresolved packages. `--no-tui` and noninteractive output retain
+the plain path.
+
+The command owns preparation, checks, cancellation, record validation, source
+cleanup and evidence delivery. The workspace remains in Finalizing until that
+whole command finishes, then opens Outputs and stays available until `q`.
+Execution outcome and evidence delivery are separate: export failure remains exit
+23 even when execution was COMPLETE. Local records remain unsigned.
+
+Cards show observed versus declared checks/outputs, attempt allowance and actual
+running/checking state. ASCII motion and elapsed time indicate an active process,
+not model progress. Set `APMX_REDUCED_MOTION=1` or use the Motion palette action for
+a static indicator; `NO_COLOR` preserves labels and the `*` selection marker.
+At narrow widths, compact rows and an Inspect drilldown replace the side inspector.
+
+Select a contract to pin Activity, Checks, Outputs and grouped Evidence to its
+immutable contract/attempt identity. `s` switches whole-factory/selected scope and
+`f` toggles follow-running independently of keyboard focus and log tail-follow.
+`/` filters the current scope; Escape restores focus. `g` returns to the graph,
+`p` previews the selected retained output, `y` copies its path and `l` opens its
+location where supported. `b` opens the exported evidence location. Ctrl+p exposes
+these actions plus retained record/transcript inspection. Preview is bounded,
+read-only and control-character sanitized; produced does not mean passed or applied.
+
+Activity storage is bounded to 1,200 UI events; retained transcripts remain
+accessible separately. `c` cancels through the canonical supervisor and leaves
+results inspectable. During work, `q` asks whether to cancel and waits for cleanup.
+There is no embedded shell, automatic application, rerun or suspension feature.
+The historical milestones below describe earlier implementation stages.
+
 ## Outcome
 
 Provide a real interactive terminal application, not another stream of styled

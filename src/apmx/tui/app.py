@@ -1,72 +1,115 @@
-"""Textual prototype: inspect and follow the real resolved contract graph.
-
-Scope (docs/textual-design.md): a selectable card per contract, grouped into
-DAG levels from real producer/consumer edges and explicitly labeled with the
-real dependency that connects them; a detail pane showing declared
-needs/produces/checks plus those same real dependencies for the selected
-contract; separate Activity/Checks/Evidence/Diagnostics views built only from
-canonical ``RunEvent`` payloads the real engine already emits. No contract
-runs here and no outcome is ever computed here; cards carry only the status
-an external caller (``tui_live.py``, or the design-review fixture harness)
-hands them through ``apply_card_status``/``append_event``.
-"""
+"""Persistent read-only factory workspace, driven by canonical observations."""
 
 from __future__ import annotations
 
+import time
+from collections import deque
+from collections.abc import Iterable
+from pathlib import Path
 from typing import ClassVar, Literal
 
-from textual.app import App, ComposeResult
+from rich.text import Text
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.css.query import NoMatches
 from textual.events import Key
 from textual.message import Message
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Input, Log, Static, TabbedContent, TabPane
+from textual.screen import Screen
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Input,
+    Log,
+    Static,
+    TabbedContent,
+    TabPane,
+    Tree,
+)
 
-from ..contracts.models import RunEvent, artifact_files
+from ..contracts.models import ChainResult, CheckObservation, RunEvent, artifact_files
 from ..contracts.resolution import Graph
-from ..utils.console import STATUS_SYMBOLS
 from .graph import ContractNode, DependencyEdge, build_nodes, dependencies_of, levels
+from .inspection import InspectionScreen, display_text, read_preview
+from .state import EVENT_LIMIT, AttemptView, Observations, OutputItem
 
-# Card status is presentation-only. It is never computed here from a real
-# run; either it stays "pending" (declared-only milestone-1 preview) or it
-# is driven by an external caller (chain-level engine wiring, or the
-# design-review fixture harness in scripts/termviz) via apply_card_status.
 CardStatus = Literal[
     "pending", "running", "checking", "retrying", "passed", "failed", "blocked", "cancelled"
 ]
-
-_STATUS_SYMBOL: dict[CardStatus, str] = {
+ACTIVE = ("running", "checking", "retrying")
+_STATUS_SYMBOL = {
     "pending": "[ ]",
-    "running": STATUS_SYMBOLS["running"],
-    "checking": STATUS_SYMBOLS["running"],
-    "retrying": STATUS_SYMBOLS["warning"],
-    "passed": STATUS_SYMBOLS["check"],
-    "failed": STATUS_SYMBOLS["error"],
-    "blocked": STATUS_SYMBOLS["warning"],
-    "cancelled": STATUS_SYMBOLS["warning"],
+    "running": "[>]",
+    "checking": "[>]",
+    "retrying": "[~]",
+    "passed": "[+]",
+    "failed": "[x]",
+    "blocked": "[!]",
+    "cancelled": "[-]",
 }
-
-_STATUS_LABEL: dict[CardStatus, str] = {
-    "pending": "pending",
-    "running": "running",
-    "checking": "checking",
-    "retrying": "retrying",
-    "passed": "passed",
-    "failed": "failed",
-    "blocked": "blocked",
-    "cancelled": "cancelled",
+_PHASE_LABEL = {
+    "preflight": "Capturing inputs",
+    "execution": "Producer",
+    "capture": "Saving output",
+    "checks": "Independent checks",
+    "record": "Saving records",
 }
 
 
 def _display_name(identity: str) -> str:
-    """A human label for a contract identity: strip the suffix, title-case
-    the words. ``node.identity`` (the real file-derived identity) is always
-    used for matching/lookups; this is presentation text only."""
-    stem = identity.removesuffix(".contract.md")
-    words = stem.replace("_", " ").replace("-", " ").split()
-    return " ".join(word.capitalize() for word in words) if words else identity
+    return identity.removesuffix(".contract.md").replace("_", " ").replace("-", " ").title()
+
+
+def _check_finished_fields(event: RunEvent) -> tuple[object, str]:
+    observation = event.data.get("observation")
+    if isinstance(observation, CheckObservation):
+        status = {0: "pass", 1: "fail"}.get(observation.normalized, "incomplete")
+        return observation.name, status
+    return event.data.get("name"), str(event.data.get("status", "incomplete"))
+
+
+def _format_check_event(event: RunEvent) -> str:
+    if event.kind == "check_started":
+        return f"[>] {event.data.get('name')}: started - {event.data.get('command', '')}"
+    name, status = _check_finished_fields(event)
+    return f"{'[+]' if status == 'pass' else '[!]'} {name}: {status.upper()}"
+
+
+def _format_event(event: RunEvent) -> str:
+    data = event.data
+    if event.kind == "phase":
+        name = str(data.get("name", "unknown"))
+        return _PHASE_LABEL.get(name, name)
+    if event.kind == "selected":
+        return f"Selected {data.get('contract_relative_path') or data.get('contract')} / {data.get('harness')} / {data.get('model') or 'default model'}"
+    if event.kind == "activity":
+        return f"{event.source}/{data.get('label') or 'output'}: {data.get('text', '')}"
+    if event.kind in ("diagnostic", "native_diagnostic"):
+        return str(data.get("message", data.get("text", "")))
+    if event.kind == "metadata":
+        return str(data.get("text", ""))
+    if event.kind == "heartbeat":
+        return f"Still running; {event.elapsed_seconds:.0f}s elapsed (not model progress)"
+    if event.kind.startswith("check_"):
+        return _format_check_event(event)
+    if event.kind in ("finished", "attempt_finished"):
+        result = data.get("result")
+        return f"Recorded attempt: {getattr(getattr(result, 'outcome', None), 'name', 'unknown')}"
+    if event.kind == "process_started":
+        return f"Managed process started: pid={data.get('pid')} pgid={data.get('pgid')}"
+    if event.kind == "stop_observed":
+        return "Managed processes stopped" if data.get("confirmed") else "Process stop UNCONFIRMED"
+    if event.kind == "stop_requested":
+        return f"Stop requested: {data.get('reason')}"
+    if event.kind == "skill_loaded":
+        return f"Selected skill: {data.get('name')} (not proof of consumption)"
+    if event.kind == "input_captured":
+        entry = data.get("entry")
+        return f"Captured input: {getattr(entry, 'relative_path', '?')} / {data.get('origin')}"
+    if event.kind == "workspace_captured":
+        return f"Captured working copy: {data.get('files')} files"
+    return f"{event.kind} ({event.source})"
 
 
 class CardSelected(Message):
@@ -76,506 +119,421 @@ class CardSelected(Message):
 
 
 class ContractCard(Static, can_focus=True):
-    """One selectable contract card: human label and explicit status word.
-    Real upstream dependencies are never invented here -- they are named on
-    the connector line above the card's level and in full in the detail
-    pane once selected, so the card itself stays compact enough for a wide,
-    short DAG overview rather than a tall column of verbose text."""
-
     DEFAULT_CSS = """
-    ContractCard {
-        border: round $panel-lighten-2;
-        padding: 0 1;
-        width: auto;
-        min-width: 22;
-        height: auto;
-        min-height: 4;
-        content-align: left top;
-    }
-    ContractCard:focus {
-        border: heavy $accent;
-        background: $boost;
-    }
+    ContractCard { border: solid $panel-lighten-2; padding: 0 1; width: 1fr;
+        min-width: 21; height: 5; }
+    ContractCard:focus { border: heavy $accent; }
+    ContractCard.-selected { background: $boost; }
     ContractCard.-running { border: heavy $warning; }
     ContractCard.-passed { border: solid $success; }
     ContractCard.-failed { border: double $error; }
     """
-
     status: reactive[CardStatus] = reactive("pending")
 
     def __init__(self, node: ContractNode, dependencies: tuple[DependencyEdge, ...] = ()) -> None:
         super().__init__(markup=False)
         self.node = node
-        self._dependencies = dependencies
+        self.dependencies = dependencies
+        self.attempt: AttemptView | None = None
+        self.started: float | None = None
+        self.frame = 0
+        self.motion = True
         self._refresh_text()
 
     def on_focus(self) -> None:
         self.post_message(CardSelected(self.node.identity))
 
+    def on_click(self) -> None:
+        self.post_message(CardSelected(self.node.identity))
+
     def watch_status(self, status: CardStatus) -> None:
-        self._refresh_text()
-        self.set_class(status in ("running", "checking", "retrying"), "-running")
+        if status in ACTIVE and self.started is None:
+            self.started = time.monotonic()
+        elif status not in ACTIVE:
+            self.started = None
+        self.set_class(status in ACTIVE, "-running")
         self.set_class(status == "passed", "-passed")
         self.set_class(status in ("failed", "blocked", "cancelled"), "-failed")
+        self._refresh_text()
+
+    def tick(self) -> None:
+        if self.status in ACTIVE:
+            self.frame += 1
+            self._refresh_text()
 
     def _refresh_text(self) -> None:
         symbol = _STATUS_SYMBOL[self.status]
-        label = _STATUS_LABEL[self.status]
-        name = _display_name(self.node.identity)
-        self.update(f"{symbol} {name}\n{label}")
+        if self.status in ACTIVE and self.motion:
+            symbol = f"[{'|/-\\'[self.frame % 4]}]"
+        attempt = self.attempt
+        elapsed = max(
+            attempt.elapsed if attempt else 0,
+            time.monotonic() - self.started if self.started is not None else 0,
+        )
+        state = self.status
+        if self.status in ACTIVE:
+            phase = _PHASE_LABEL.get(attempt.phase, attempt.phase) if attempt else "Starting"
+            state = f"{phase} {elapsed:.0f}s"
+        checks = sum(value is not None for value in attempt.checks.values()) if attempt else 0
+        passed = (
+            sum(value is not None and value.normalized == 0 for value in attempt.checks.values())
+            if attempt
+            else 0
+        )
+        produced = len(artifact_files(attempt.result.artifact)) if attempt and attempt.result else 0
+        index = f"{attempt.index}/{attempt.limit}" if attempt else f"-/{self.node.attempt_limit}"
+        selected = "* " if self.has_class("-selected") else ""
+        if self.is_mounted and self.app.size.width < 100:
+            self.update(
+                display_text(
+                    f"{selected}{symbol} {_display_name(self.node.identity)} | {state}\n"
+                    f"Checks {passed}/{checks}/{len(self.node.checks)} | Try {index} | Out {produced}/{len(self.node.produces)}"
+                )
+            )
+            return
+        self.update(
+            display_text(
+                f"{selected}{symbol} {_display_name(self.node.identity)} | {state}\n"
+                f"Checks {passed} pass / {checks} seen / {len(self.node.checks)} declared\n"
+                f"Attempt {index} | Outputs {produced}/{len(self.node.produces)} captured"
+            )
+        )
 
 
 class GraphView(VerticalScroll):
-    """Left-to-right DAG levels built from real graph edges, with an explicit
-    connector line naming what each level actually depends on -- never a
-    dependency implied only by card placement."""
-
-    def __init__(self, graph: Graph) -> None:
-        super().__init__()
-        self._graph = graph
+    def __init__(self, graph: Graph | None) -> None:
+        super().__init__(id="graph")
+        self.graph = graph
 
     def compose(self) -> ComposeResult:
-        all_levels = levels(self._graph)
-        dependencies = dependencies_of(self._graph)
-        for index, level in enumerate(all_levels):
-            row = Horizontal(classes="graph-level")
-            with row:
+        if self.graph is None:
+            yield Static(
+                "Source not loaded.\nNo resolved graph or captured inventory yet.",
+                id="unresolved",
+                markup=False,
+            )
+            return
+        dependencies = dependencies_of(self.graph)
+        for depth, level in enumerate(levels(self.graph)):
+            if depth:
+                for node in level:
+                    edges = dependencies.get(node.identity, ())
+                    for edge in edges:
+                        yield Static(
+                            display_text(
+                                f"To {_display_name(edge.consumer)}: {edge.name} <- {_display_name(edge.producer)}"
+                            ),
+                            classes="graph-connector",
+                            markup=False,
+                        )
+            with Horizontal(classes="graph-level"):
                 for node in level:
                     yield ContractCard(node, dependencies.get(node.identity, ()))
-            yield row
-            if index < len(all_levels) - 1:
-                text = _connector_text(all_levels[index + 1], dependencies)
-                if text:
-                    yield Static(text, classes="graph-connector", markup=False)
 
     def card(self, identity: str) -> ContractCard | None:
-        for widget in self.query(ContractCard):
-            if widget.node.identity == identity:
-                return widget
-        return None
+        return next(
+            (card for card in self.query(ContractCard) if card.node.identity == identity), None
+        )
 
 
-def _connector_text(
-    next_level: tuple[ContractNode, ...], dependencies: dict[str, tuple[DependencyEdge, ...]]
-) -> str:
-    """Explicit real edges feeding the next level, named by the declared
-    file each one carries. Renders nothing for roots with no producers."""
-    lines = []
-    for node in next_level:
-        edges = dependencies.get(node.identity, ())
-        if not edges:
-            continue
-        parts = ", ".join(f"{edge.name} \u2190 {_display_name(edge.producer)}" for edge in edges)
-        lines.append(f"\u21b3 {_display_name(node.identity)} needs {parts}")
-    return "\n".join(lines)
+class DetailPane(VerticalScroll):
+    selected: reactive[ContractNode | None] = reactive(None)
 
+    def __init__(self, *, dependencies: dict[str, tuple[DependencyEdge, ...]], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.dependencies = dependencies
 
-def _check_finished_fields(event: RunEvent) -> tuple[object, str]:
-    """Read the check name/outcome from a ``check_finished`` event.
+    def compose(self) -> ComposeResult:
+        yield Static(id="detail-body", markup=False)
 
-    The real engine (``contracts/engine.py``) emits this event with an
-    ``observation`` ``CheckObservation`` (see ``core/contract_logger.py``'s
-    own ``_check_finished``), not flat ``name``/``status`` keys. Fixture
-    replay (``tui/fixtures.py``) still uses the flat shape, so both are
-    read here; the outcome is never recomputed, only unwrapped.
-    """
-    observation = event.data.get("observation")
-    if observation is not None:
-        name = getattr(observation, "name", None)
-        status = "pass" if getattr(observation, "normalized", None) == 0 else "fail"
-        return name, status
-    return event.data.get("name"), event.data.get("status")
+    def watch_selected(self, node: ContractNode | None) -> None:
+        self.query_one("#detail-body", Static).update(self.text())
 
-
-# Phase names the real engine emits (contracts/engine.py / core/contract_logger.py
-# "_phase"), mapped to the same human wording ContractLogger already uses.
-_PHASE_LABEL: dict[str, str] = {
-    "preflight": "Capturing files",
-    "execution": "Running the producer",
-    "capture": "Saving output",
-    "checks": "Running checks",
-    "record": "Saving results",
-}
-
-
-def _format_event(event: RunEvent) -> str:
-    """Render one RunEvent as a readable narration line, using the same
-    canonical fields ContractLogger already reads -- never a reinterpreted
-    outcome, and never a bare ``kind (source)`` fallback for a known shape."""
-    source = event.source
-    kind = event.kind
-    if kind == "selected":
-        identity = event.data.get("contract_relative_path") or event.data.get("contract")
-        harness = event.data.get("harness", "copilot")
-        model = event.data.get("model", "default model")
-        return f"{STATUS_SYMBOLS['running']} Selected {identity} \u2014 {harness} / {model}"
-    if kind == "phase":
-        name = event.data.get("name")
-        label = _PHASE_LABEL.get(name, name) if isinstance(name, str) else "unknown phase"
-        return f"{STATUS_SYMBOLS['running']} {label}"
-    if kind == "activity":
-        text = event.data.get("text", "")
-        label = event.data.get("label")
-        attribution = {"harness": "Producer", "checker": "Check"}.get(source, source)
-        if label:
-            attribution = f"{attribution}/{label}"
-        return f"{STATUS_SYMBOLS['running']} {attribution}: {text}"
-    if kind == "metadata":
-        return f"{STATUS_SYMBOLS['default']} {event.data.get('text', '')}"
-    if kind == "process_started":
-        pid = event.data.get("pid", "unknown")
-        pgid = event.data.get("pgid", "unknown")
-        return f"{STATUS_SYMBOLS['default']} Managed child started (pid={pid}, pgid={pgid})"
-    if kind == "skill_loaded":
-        return f"{STATUS_SYMBOLS['default']} Loaded skill: {event.data.get('name', '')}"
-    if kind == "diagnostic":
-        return f"{STATUS_SYMBOLS['warning']} {event.data.get('message', '')}"
-    if kind == "input_captured":
-        return _format_evidence_event(event)
-    if kind == "workspace_captured":
-        return _format_evidence_event(event)
-    if kind == "check_started":
-        return _format_check_event(event)
-    if kind == "check_finished":
-        return _format_check_event(event)
-    if kind == "stop_requested":
-        return f"{STATUS_SYMBOLS['warning']} Stop requested ({event.data.get('reason', 'unknown')})"
-    if kind == "stop_observed":
-        if event.data.get("confirmed") is True:
-            return f"{STATUS_SYMBOLS['check']} Managed processes stopped"
-        return f"{STATUS_SYMBOLS['warning']} Stop unconfirmed; a child may still be running"
-    if kind == "finished":
-        result = event.data.get("result")
-        outcome = getattr(result, "outcome", None)
-        label = getattr(outcome, "name", "unknown")
-        return f"{STATUS_SYMBOLS['check']} Finished: {label}"
-    if kind == "heartbeat":
-        elapsed = event.data.get("elapsed_seconds", event.elapsed_seconds)
-        elapsed = elapsed if isinstance(elapsed, (int, float)) else event.elapsed_seconds
-        return f"{STATUS_SYMBOLS['default']} Still running; {elapsed:.0f}s elapsed"
-    return f"{STATUS_SYMBOLS['default']} {kind} ({source})"
-
-
-def _format_check_event(event: RunEvent) -> str:
-    """Check command/outcome text for the dedicated Checks view."""
-    if event.kind == "check_started":
-        name = event.data.get("name", "unknown")
-        command = event.data.get("command", "")
-        suffix = f" \u2014 {command}" if command else ""
-        return f"{STATUS_SYMBOLS['running']} {name} started{suffix}"
-    name, status = _check_finished_fields(event)
-    symbol = STATUS_SYMBOLS["check"] if status == "pass" else STATUS_SYMBOLS["error"]
-    label = {"pass": "PASS", "fail": "FAIL"}.get(status, "INCOMPLETE")
-    return f"{symbol} {name}: {label}"
-
-
-def _format_evidence_event(event: RunEvent) -> str:
-    """Captured-input text for the dedicated Evidence view."""
-    if event.kind == "input_captured":
-        entry = event.data.get("entry")
-        origin = event.data.get("origin", "unknown origin")
-        if entry is not None:
-            relative = getattr(entry, "relative_path", "?")
-            size = getattr(entry, "size", "?")
-            return f"Input: {relative} ({origin}; {size} bytes)"
-        return f"Input captured ({origin})"
-    if event.kind == "workspace_captured":
-        files = event.data.get("files", "?")
-        return f"Working copy: {files} captured files"
-    return f"{STATUS_SYMBOLS['default']} {event.kind}"
-
-
-def _format_finished_evidence(event: RunEvent) -> str:
-    """The saved-artifact listing for a finished run, read straight from the
-    recorded ``RunResult`` -- never a path this module invents."""
-    result = event.data.get("result")
-    if result is None:
-        return "Finished: no recorded result."
-    outcome = getattr(getattr(result, "outcome", None), "name", "unknown")
-    files = artifact_files(getattr(result, "artifact", None))
-    lines = [f"Outcome: {outcome}", f"Artifacts: {len(files)} file(s)"]
-    for item in files:
-        lines.append(f"  {item.relative_path}")
-    directory = getattr(result, "run_directory", None)
-    if directory is not None:
-        lines.append(f"Record directory: {directory}")
-    return "\n".join(lines)
+    def text(self) -> str:
+        node = self.selected
+        if node is None:
+            return "Select a contract to inspect its declared requirements."
+        card = self.app.query_one(GraphView).card(node.identity)
+        upstream = self.dependencies.get(node.identity, ())
+        lines = [
+            f"Contract: {node.identity}",
+            f"Status: {card.status if card else 'pending'}",
+            "",
+            "DECLARED",
+            "Needs: " + (", ".join(node.needs) or "none"),
+            "Produces: " + ", ".join(node.produces),
+            "Checks: " + (", ".join(node.checks) or "none"),
+            "",
+            "ARTIFACT DEPENDENCIES",
+        ]
+        lines.extend(f"{e.producer} --{e.name}--> this" for e in upstream)
+        if not upstream:
+            lines.append("Entry point (no producer dependencies)")
+        graph = self.app.query_one(GraphView).graph
+        if graph:
+            for edges in dependencies_of(graph).values():
+                lines.extend(
+                    f"this --{e.name}--> {e.consumer}" for e in edges if e.producer == node.identity
+                )
+            contract = next(item for item in graph.order if item.path == node.path)
+            lines += ["", "PACKAGE / SKILL IMPORTS (not graph edges)"]
+            lines.extend(str(item) for item in contract.imports)
+            if not contract.imports:
+                lines.append("None declared")
+        if card and card.attempt:
+            attempt = card.attempt
+            lines += [
+                "",
+                f"OBSERVED attempt {attempt.index}/{attempt.limit}",
+                f"Captured inputs: {len(attempt.inputs)}",
+                f"Check observations: {sum(v is not None for v in attempt.checks.values())}",
+            ]
+        return display_text("\n".join(lines))
 
 
 class _FilterableLogPane(Vertical):
-    """A titled Log that keeps full history so a search filter can narrow
-    the view and later fully restore it, instead of discarding scrollback."""
-
-    PANE_TITLE: ClassVar[str] = "Pane"
-    LOG_ID: ClassVar[str] = "log"
-    # Explicit empty-state text, never a bare heading. This is never claimed
-    # as a pass/fail outcome -- an empty pane means nothing has been
-    # observed yet, which stays distinct from an observed-and-passed state.
+    PANE_TITLE: ClassVar[str] = "Activity"
+    LOG_ID: ClassVar[str] = "activity-log"
     EMPTY_TEXT: ClassVar[str] = "No observations yet."
+    TAIL: ClassVar[bool] = True
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)
-        self._history: list[str] = []
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._history: deque[str] = deque(maxlen=EVENT_LIMIT)
         self._query = ""
 
     def compose(self) -> ComposeResult:
-        yield Static(self.PANE_TITLE, classes="pane-title")
-        yield Log(id=self.LOG_ID, max_lines=2000, auto_scroll=True)
+        yield Static(self.PANE_TITLE, classes="pane-title", markup=False)
+        yield Log(id=self.LOG_ID, max_lines=EVENT_LIMIT, auto_scroll=self.TAIL)
 
     def on_mount(self) -> None:
-        self.query_one(f"#{self.LOG_ID}", Log).write_line(self.EMPTY_TEXT)
+        self.replace_lines(())
 
     def append(self, line: str) -> None:
-        if not self._history:
-            self.query_one(f"#{self.LOG_ID}", Log).clear()
-        self._history.append(line)
+        self._history.append(display_text(line))
         if not self._query or self._query in line.lower():
-            self.query_one(f"#{self.LOG_ID}", Log).write_line(line)
+            self.query_one(Log).write_line(display_text(line))
+
+    def replace_lines(self, lines: Iterable[str]) -> None:
+        self._history.clear()
+        self._history.extend(display_text(line) for line in lines)
+        self.apply_filter(self._query)
 
     def apply_filter(self, query: str) -> None:
         self._query = query.lower()
-        log = self.query_one(f"#{self.LOG_ID}", Log)
+        log = self.query_one(Log)
+        old_scroll = log.scroll_y
         log.clear()
-        if not self._history:
-            log.write_line(self.EMPTY_TEXT)
-            return
-        for line in self._history:
-            if not self._query or self._query in line.lower():
-                log.write_line(line)
-
-
-class ActivityPane(_FilterableLogPane):
-    """Readable narration stream: phases, producer/checker text, diagnostics
-    and the final outcome line. Auto-follows until the user scrolls up;
-    pressing End resumes following, matching plain-mode habits of not
-    losing place in output you were reading."""
-
-    PANE_TITLE = "Activity"
-    LOG_ID = "activity-log"
+        visible = [line for line in self._history if not self._query or self._query in line.lower()]
+        log.write_lines(
+            visible or [self.EMPTY_TEXT if not self._query else "No matching observations."]
+        )
+        if not log.auto_scroll:
+            log.scroll_to(y=old_scroll, animate=False)
+        else:
+            log.call_after_refresh(log.scroll_end, animate=False)
 
     def on_key(self, event: Key) -> None:
-        log = self.query_one(f"#{self.LOG_ID}", Log)
-        if event.key in ("up", "pageup"):
+        log = self.query_one(Log)
+        if event.key in ("up", "pageup", "home"):
             log.auto_scroll = False
         elif event.key == "end":
             log.auto_scroll = True
             log.scroll_end()
 
 
+class ActivityPane(_FilterableLogPane):
+    pass
+
+
 class ChecksPane(_FilterableLogPane):
-    """Check command/outcome stream, separate from general narration."""
-
-    PANE_TITLE = "Checks"
+    PANE_TITLE = "Observed checks by attempt | i inspect checks"
     LOG_ID = "checks-log"
-    EMPTY_TEXT = "No checks observed yet."
+    EMPTY_TEXT = "No checks observed. Declared checks are not a pass."
+    TAIL = False
 
 
-class EvidencePane(_FilterableLogPane):
-    """Captured inputs and saved artifacts, as the engine actually recorded
-    them -- never an invented output path."""
+class EvidencePane(Vertical):
+    """Expandable read model; hashes and long paths appear on explicit inspection."""
 
-    PANE_TITLE = "Evidence"
-    LOG_ID = "evidence-log"
-    EMPTY_TEXT = "No evidence captured yet -- status remains unknown, not verified."
-
-
-class DetailPane(VerticalScroll):
-    """Declared needs/produces/checks and real dependencies for the selected
-    card; status reflects whatever the card currently shows, never a second
-    computation of it.
-
-    A narrow terminal (e.g. 80x24) can squeeze this pane below the height
-    the six detail lines need, especially once a dependency list wraps;
-    ``VerticalScroll`` (same base `GraphView` already uses) keeps every
-    field keyboard-reachable instead of silently clipping it."""
-
-    selected: reactive[ContractNode | None] = reactive(None)
-
-    def __init__(
-        self, *args: object, dependencies: dict[str, tuple[DependencyEdge, ...]], **kwargs: object
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        self._dependencies = dependencies
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.groups = ()
+        self._query = ""
+        self._rendered = None
 
     def compose(self) -> ComposeResult:
-        yield Static(id="detail-body", markup=False)
+        yield Static("Evidence | arrows expand / Enter inspect | unsigned", classes="pane-title")
+        yield Tree("No captured evidence", id="evidence-tree")
 
-    def watch_selected(self, node: ContractNode | None) -> None:
-        body = self.query_one("#detail-body", Static)
-        if node is None:
-            body.update("Select a contract card to inspect it.")
+    def replace_groups(self, groups) -> None:
+        self.groups = tuple((title, tuple(items)) for title, items in groups)
+        self.apply_filter(self._query)
+
+    def apply_filter(self, query: str) -> None:
+        self._query = query.lower()
+        current = self.groups, self._query
+        if current == self._rendered:
             return
-        status = "pending"
-        try:
-            card = self.app.query_one(GraphView).card(node.identity)
-        except NoMatches:
-            card = None
-        if card is not None:
-            status = _STATUS_LABEL[card.status]
-        edges = self._dependencies.get(node.identity, ())
-        depends_on = (
-            ", ".join(f"{_display_name(e.producer)} (needs {e.name})" for e in edges)
-            if edges
-            else "nothing (entry point)"
-        )
-        lines = [
-            f"Contract: {node.identity}",
-            f"Status: {status}",
-            f"Depends on: {depends_on}",
-            f"Needs: {', '.join(node.needs) if node.needs else 'no declared input files'}",
-            f"Produces: {', '.join(node.produces)}",
-            f"Checks: {', '.join(node.checks) if node.checks else 'none declared'}",
-        ]
-        body.update("\n".join(lines))
+        self._rendered = current
+        tree = self.query_one(Tree)
+        expanded = {str(node.label) for node in tree.root.children if node.is_expanded}
+        selected = str(tree.cursor_node.label) if tree.cursor_node else None
+        tree.clear()
+        tree.root.set_label("Recorded evidence (inventory != consumption)")
+        tree.root.expand()
+        for title, items in self.groups:
+            matching = [
+                (label, detail)
+                for label, detail in items
+                if not self._query or self._query in (title + label + detail).lower()
+            ]
+            if not matching:
+                continue
+            group = tree.root.add(
+                Text(display_text(title)), expand=title in expanded or bool(self._query)
+            )
+            for label, detail in matching:
+                node = group.add_leaf(Text(display_text(label)), data=(label, detail))
+                if str(node.label) == selected:
+                    tree.call_after_refresh(tree.move_cursor, node)
+            if str(group.label) == selected:
+                tree.call_after_refresh(tree.move_cursor, group)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        if event.node.data:
+            title, text = event.node.data
+            self.app.push_screen(InspectionScreen(title, text))
 
 
-class DiagnosticsPane(Vertical):
-    """Bounded, separate debug stream. Never part of any saved transcript."""
+class DiagnosticsPane(_FilterableLogPane):
+    PANE_TITLE = "Diagnostics (not retained)"
+    LOG_ID = "diagnostics-log"
 
+
+class OutputsPane(Vertical):
     def compose(self) -> ComposeResult:
-        yield Static("Diagnostics (not retained)", classes="pane-title")
-        yield Log(id="diagnostics-log", max_lines=200, auto_scroll=True)
-
-    def append(self, line: str) -> None:
-        self.query_one("#diagnostics-log", Log).write_line(line)
+        yield Static("Retained deliverables | produced != passed != applied", classes="pane-title")
+        yield DataTable(id="output-table", cursor_type="row", zebra_stripes=True)
+        yield Static("No output captured yet.", id="output-path", markup=False)
 
 
 class FactoryApp(App[None]):
-    """Inspect-only prototype for a resolved factory graph.
-
-    ``apply_card_status``/``append_event``/``append_diagnostic`` exist so an
-    external driver (future chain-level engine wiring, or the
-    scripts/termviz design-review fixture harness) can present status
-    without this module ever computing outcomes itself.
-    """
-
-    TITLE = "APMX factory (preview)"
+    TITLE = "APMX"
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("tab", "focus_next", "Navigate", show=True),
-        Binding("shift+tab", "focus_previous", "Navigate back", show=False),
-        Binding("a", "show_tab('activity-tab')", "Activity", show=True),
-        Binding("k", "show_tab('checks-tab')", "Checks", show=True),
-        Binding("e", "show_tab('evidence-tab')", "Evidence", show=True),
-        Binding("slash", "toggle_search", "Search", show=True),
-        Binding("escape", "clear_search", "Clear search", show=False),
-        Binding("d", "toggle_diagnostics", "Diagnostics", show=True),
-        Binding("q", "quit", "Quit", show=True),
+        Binding("a", "show_tab('activity-tab')", "Activity"),
+        Binding("k", "show_tab('checks-tab')", "Checks"),
+        Binding("o", "show_tab('outputs-tab')", "Outputs"),
+        Binding("e", "show_tab('evidence-tab')", "Evidence"),
+        Binding("s", "toggle_scope", "Scope", show=False),
+        Binding("f", "toggle_follow", "Follow", show=False),
+        Binding("g", "toggle_graph", "Graph"),
+        Binding("i", "inspect", "Inspect", show=False),
+        Binding("p", "preview_output", "Preview"),
+        Binding("y", "copy_path", "Copy path", show=False),
+        Binding("l", "open_location", "Location", show=False),
+        Binding("b", "evidence_location", "Evidence location", show=False),
+        Binding("slash", "toggle_search", "Search"),
+        Binding("escape", "clear_search", "Back", show=False),
+        Binding("d", "toggle_diagnostics", "Diagnostics", show=False),
+        Binding("m", "toggle_motion", "Motion", show=False),
+        Binding("x", "expand_activity", "Expand", show=False),
+        Binding("q", "quit", "Quit"),
     ]
-
     CSS = """
-    .graph-level {
-        height: auto;
-        margin-bottom: 1;
-    }
-    .graph-connector {
-        color: $text-muted;
-        padding: 0 1;
-        height: auto;
-    }
-    .pane-title {
-        color: $text-muted;
-        padding: 0 1;
-    }
-    Header {
-        text-style: bold;
-    }
-    GraphView {
-        width: 2fr;
-        min-width: 28;
-        height: 1fr;
-    }
-    #graph-row {
-        height: 1fr;
-        min-height: 9;
-        /* Without this cap, Textual's over-constrained min-height
-        resolution (graph-row's min 9 + lower-tabs' min 10 exceeds the
-        body space a 60x20 terminal has left after Header/Footer) gives
-        graph-row *all* remaining rows instead of its 1fr share, leaving
-        zero visible rows for #lower-tabs -- the Activity/Checks/Evidence
-        tabs silently become unreachable rather than merely cramped. A
-        60% cap is well above graph-row's natural height at every size
-        already validated (80x24, 120x40, ...) so it only engages at the
-        narrow 60x20 floor this product declares supported. */
-        max-height: 60%;
-    }
-    #detail-pane {
-        width: 1fr;
-        min-width: 22;
-        border-top: solid $panel;
-        border-left: solid $panel;
-        height: 1fr;
-        min-height: 9;
-        padding: 0 1;
-    }
-    #lower-tabs {
-        border-top: solid $panel;
-        height: 2fr;
-        min-height: 10;
-    }
-    #activity-pane, #checks-pane, #evidence-pane {
-        height: 1fr;
-        min-height: 4;
-    }
-    #diagnostics-pane {
-        border-top: solid $error;
-        height: 1fr;
-        min-height: 3;
-        display: none;
-    }
-    #diagnostics-pane.-visible {
-        display: block;
-    }
-    #search-input {
-        display: none;
-        border: round $accent;
-    }
-    #search-input.-visible {
-        display: block;
-    }
-    #fixture-banner {
-        background: $warning;
-        color: $text;
-        text-align: center;
-        display: none;
-    }
-    #fixture-banner.-visible {
-        display: block;
-    }
+    Screen { background: $background; }
+    #workspace-header { height: 1; background: $panel; text-style: bold; padding: 0 1; }
+    #selection-bar { height: 2; color: $text-muted; padding: 0 1; }
+    #result-summary { height: auto; max-height: 5; padding: 0 1; display: none; background: $panel; }
+    #result-summary.-visible { display: block; }
+    #approval { height: auto; max-height: 8; border-top: solid $warning; display: none; }
+    #approval.-visible { display: block; }
+    #approval-text { height: auto; max-height: 4; padding: 0 1; }
+    #approval-buttons { height: 3; }
+    #approval-buttons Button { height: 3; width: 1fr; min-width: 12; }
+    Screen.-approving #lower-tabs { display: none; }
+    Screen.-approving #graph-row { height: 1fr; max-height: 100%; }
+    #review-banner { height: auto; max-height: 5; padding: 0 1; border-bottom: solid $panel; }
+    #review-banner.-hidden { display: none; }
+    #fixture-banner { height: 1; background: $warning; display: none; }
+    #fixture-banner.-visible { display: block; }
+    #graph-row { height: 2fr; min-height: 5; max-height: 70%; }
+    GraphView { width: 2fr; min-width: 25; height: 1fr; }
+    .graph-level { height: auto; }
+    .graph-connector { height: auto; max-height: 2; color: $text-muted; padding: 0 1; }
+    #detail-pane { width: 1fr; min-width: 22; height: 1fr; border-left: solid $panel; padding: 0 1; }
+    #lower-tabs { height: 1fr; min-height: 7; border-top: solid $panel; }
+    .pane-title { height: 1; color: $text-muted; }
+    ActivityPane, ChecksPane, EvidencePane, OutputsPane { height: 1fr; }
+    #output-table { height: 1fr; min-height: 2; }
+    #output-path { height: auto; max-height: 3; color: $text-muted; }
+    #evidence-tree { height: 1fr; }
+    #diagnostics-pane { height: 7; display: none; border-top: solid $warning; }
+    #diagnostics-pane.-visible { display: block; }
+    #search-input { display: none; height: 3; }
+    #search-input.-visible { display: block; }
+    Screen.-compact ContractCard { height: 4; }
+    Screen.-compact .graph-level { layout: vertical; }
+    Screen.-compact ContractCard { width: 1fr; }
+    Screen.-compact .graph-connector { display: none; }
+    Screen.-narrow #detail-pane { display: none; }
+    Screen.-narrow GraphView { width: 1fr; }
+    Screen.-narrow .graph-level { layout: vertical; }
+    Screen.-narrow ContractCard { width: 1fr; height: 4; }
+    Screen.-explore #graph-row { display: none; }
+    Screen.-expanded #graph-row { display: none; }
     """
 
-    def __init__(self, graph: Graph, *, fixture_label: str | None = None) -> None:
+    def __init__(
+        self,
+        graph: Graph | None = None,
+        *,
+        fixture_label: str | None = None,
+        reduced_motion: bool = False,
+        source: str = "",
+    ) -> None:
         super().__init__()
         self._graph = graph
-        self._by_identity = {node.identity: node for node in build_nodes(graph)}
-        self._dependencies = dependencies_of(graph)
         self._fixture_label = fixture_label
-        self._total_contracts = len(self._by_identity)
-        self._passed_count = 0
-        self._failed_count = 0
-        self._counted: set[str] = set()
-        self._phase_name: str | None = None
-        self._harness_name: str | None = None
-        self._model_name: str | None = None
-        self._elapsed: float = 0.0
+        self._by_identity = {n.identity: n for n in build_nodes(graph)} if graph else {}
+        self._dependencies = dependencies_of(graph) if graph else {}
+        self.observations = Observations()
+        self.selected_identity: str | None = None
+        self.active_identity: str | None = None
+        self.whole_factory = True
         self._auto_follow = True
-        # Identity of a card `_follow()` is programmatically focusing. `Widget.focus()`
-        # defers the actual focus change via `app.call_later`, so the resulting
-        # `CardSelected` message always arrives on a *later* message-pump tick --
-        # comparing identities here (rather than a boolean reset synchronously
-        # around `card.focus()`) is what correctly distinguishes our own
-        # auto-follow focus change from a real manual one, regardless of that
-        # deferral.
-        self._programmatic_focus: str | None = None
+        self.reduced_motion = reduced_motion
+        self.lifecycle = "Declared preview" if graph else "Review source"
+        self.source = source or str(graph.root if graph else "")
+        self.messages: deque[str] = deque(maxlen=200)
+        self.outputs: list[OutputItem] = []
+        self.selected_output: OutputItem | None = None
+        self.final_result: ChainResult | None = None
+        self.command_code: int | None = None
+        self.delivery_path: Path | None = None
+        self.delivery_state = "Not delivered yet"
+        self._return_focus = None
+        self._initial_focus = True
+        self._views_dirty = True
+        self._mounted_ready = False
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        banner = Static(
-            f"FIXTURE REPLAY \u2014 {self._fixture_label} \u2014 not a real run",
-            id="fixture-banner",
+        yield Static("APMX | " + self.lifecycle, id="workspace-header", markup=False)
+        yield Static(id="selection-bar", markup=False)
+        yield Static(id="result-summary", markup=False)
+        yield Static(
+            display_text(
+                f"Source: {self.source}\nGraph unresolved; inputs not captured. Preparation may install packages.\nNo agent or check runs before execution approval."
+            ),
+            id="review-banner",
+            markup=False,
+            classes="-hidden" if self._graph else "",
         )
-        if self._fixture_label:
-            banner.add_class("-visible")
-        yield banner
+        yield Static(
+            f"FIXTURE REPLAY - {self._fixture_label} - not a real run",
+            id="fixture-banner",
+            classes="-visible" if self._fixture_label else "",
+        )
         with Horizontal(id="graph-row"):
             yield GraphView(self._graph)
             yield DetailPane(id="detail-pane", dependencies=self._dependencies)
@@ -584,155 +542,587 @@ class FactoryApp(App[None]):
                 yield ActivityPane(id="activity-pane")
             with TabPane("Checks", id="checks-tab"):
                 yield ChecksPane(id="checks-pane")
+            with TabPane("Outputs", id="outputs-tab"):
+                yield OutputsPane(id="outputs-pane")
             with TabPane("Evidence", id="evidence-tab"):
                 yield EvidencePane(id="evidence-pane")
-        # ``can_focus=False`` while hidden: Textual's initial-auto-focus picks
-        # the first focusable descendant in DOM order regardless of
-        # ``display: none``, so an unconditionally-focusable hidden search
-        # box can silently steal focus (and swallow every subsequent key as
-        # text) before the user ever opens it -- exactly what toggling it
-        # focusable in lockstep with "-visible" here prevents.
-        search_input = Input(
-            placeholder="Search current view (type to filter, Esc to clear)",
-            id="search-input",
-        )
-        search_input.can_focus = False
-        yield search_input
+        with Vertical(id="approval"):
+            yield Static(id="approval-text", markup=False)
+            with Horizontal(id="approval-buttons"):
+                yield Button(
+                    Text("No [n] (default)"), id="execution-no", variant="error", disabled=True
+                )
+                yield Button(
+                    Text("Yes, execute [y]"), id="execution-yes", variant="warning", disabled=True
+                )
+        search = Input(placeholder="Filter current scope; Esc restores focus", id="search-input")
+        search.can_focus = False
+        yield search
         yield DiagnosticsPane(id="diagnostics-pane")
         yield Footer()
 
     def on_mount(self) -> None:
-        nodes = build_nodes(self._graph)
-        if nodes:
-            self.query_one(DetailPane).selected = nodes[0]
-            # Explicit initial focus rather than relying on Textual's
-            # first-focusable-descendant heuristic, whose candidate can
-            # change with unrelated layout/DOM-nesting edits -- a real
-            # bug this surfaced once already (see commit history).
-            card = self.query_one(GraphView).card(nodes[0].identity)
-            if card is not None:
-                # Must register as programmatic, exactly like `_follow()`,
-                # or the deferred `CardSelected` this schedules is
-                # indistinguishable from a real manual pick once it lands
-                # and incorrectly turns auto-follow off before the run ever
-                # starts moving.
-                self._programmatic_focus = nodes[0].identity
+        if self._mounted_ready:
+            return
+        self._mounted_ready = True
+        self.query_one("#output-table", DataTable).add_columns(
+            "File", "Producer", "Attempt", "Outcome", "Bytes"
+        )
+        if self._by_identity:
+            self.select(next(iter(self._by_identity)), manual=False)
+            card = self.query_one(GraphView).card(self.selected_identity)
+            if card:
                 card.focus()
+        self._refresh_header()
+        self.set_interval(1 / 3, self._tick)
+        self.on_resize()
+
+    def on_resize(self) -> None:
+        self.screen_stack[0].set_class(self.size.width < 100, "-compact")
+        self.screen_stack[0].set_class(self.size.width < 72, "-narrow")
+        for card in self.query(ContractCard):
+            card._refresh_text()
+
+    async def set_graph(self, graph: Graph) -> None:
+        if self._graph == graph:
+            return
+        self._graph = graph
+        self._by_identity = {n.identity: n for n in build_nodes(graph)}
+        self._dependencies = dependencies_of(graph)
+        old = self.query_one(GraphView)
+        await old.remove()
+        await self.query_one("#graph-row").mount(GraphView(graph), before=0)
+        self.query_one(DetailPane).dependencies = self._dependencies
+        self.query_one("#review-banner").add_class("-hidden")
+        if self._by_identity:
+            self.select(next(iter(self._by_identity)), manual=False)
         self._refresh_header()
 
     def on_card_selected(self, message: CardSelected) -> None:
-        self.query_one(DetailPane).selected = self._by_identity.get(message.identity)
-        if self._programmatic_focus == message.identity:
-            self._programmatic_focus = None
-        else:
+        self.select(message.identity, manual=not self._initial_focus)
+        self._initial_focus = False
+
+    def select(self, identity: str, *, manual: bool = True) -> None:
+        if identity not in self._by_identity:
+            return
+        self.selected_identity = identity
+        if manual:
             self._auto_follow = False
+            self.whole_factory = False
+        for card in self.query(ContractCard):
+            card.set_class(card.node.identity == identity, "-selected")
+            card._refresh_text()
+        self.query_one(DetailPane).selected = self._by_identity[identity]
+        self._views_dirty = True
+        self._refresh_views()
+        self._refresh_header()
+
+    def _refresh_header(self) -> None:
+        passed = sum(card.status == "passed" for card in self.query(ContractCard))
+        code = f" | exit {self.command_code}" if self.command_code is not None else ""
+        self.query_one("#workspace-header", Static).update(
+            display_text(
+                f"APMX | {self.lifecycle} | {passed}/{len(self._by_identity)} passed{code}"
+            )
+        )
+        selected = _display_name(self.selected_identity) if self.selected_identity else "none"
+        active = _display_name(self.active_identity) if self.active_identity else "none"
+        self.query_one("#selection-bar", Static).update(
+            display_text(
+                f"Active: {active} | Selected: {selected}\n"
+                f"Scope: {'Whole factory' if self.whole_factory else 'Selected contract'} [s] | "
+                f"Follow: {'on' if self._auto_follow else 'off / pinned'} [f] | * Selected | Ctrl+p"
+            )
+        )
+
+    def _tick(self) -> None:
+        for card in self.query(ContractCard):
+            card.motion = not self.reduced_motion
+            card.tick()
+        if self._views_dirty:
+            self._refresh_views()
+
+    def set_phase(self, phase: str) -> None:
+        self.lifecycle = phase
+        self._refresh_header()
+
+    def append_message(self, text: str) -> None:
+        self.messages.append(display_text(text))
+        self._views_dirty = True
+
+    def apply_card_status(self, identity: str, status: CardStatus) -> None:
+        card = self.query_one(GraphView).card(identity)
+        if card:
+            card.motion = not self.reduced_motion
+            card.status = status
+        if status in ACTIVE:
+            self.active_identity = identity
+            if self._auto_follow:
+                # Selection is not keyboard focus, viewport position or log tail-follow.
+                self.select(identity, manual=False)
+        elif self.active_identity == identity:
+            self.active_identity = None
+        detail = self.query_one(DetailPane)
+        if detail.selected:
+            detail.watch_selected(detail.selected)
+        self._refresh_header()
+
+    def append_event(self, event: RunEvent) -> None:
+        identity = next(
+            (n.identity for n in self._by_identity.values() if n.path == event.context.contract),
+            None,
+        )
+        attempt = self.observations.append(identity, event)
+        if identity and attempt:
+            card = self.query_one(GraphView).card(identity)
+            if card:
+                card.attempt = attempt
+                card._refresh_text()
+            detail = self.query_one(DetailPane)
+            if detail.selected and detail.selected.identity == identity:
+                detail.watch_selected(detail.selected)
+        self._views_dirty = True
+
+    def append_diagnostic(self, line: str) -> None:
+        self.query_one(DiagnosticsPane).append(line)
+
+    def _attempts(self) -> list[AttemptView]:
+        return [
+            a
+            for a in self.observations.attempts.values()
+            if self.whole_factory or a.identity == self.selected_identity
+        ]
+
+    def _check_lines(self, *, details: bool = False) -> list[str]:
+        lines = []
+        for attempt in self._attempts():
+            lines.append(f"{attempt.identity} | Attempt {attempt.index}/{attempt.limit}")
+            for name, check in attempt.checks.items():
+                if check is None:
+                    lines.append(f"  [>] {name}: running; no result observed")
+                else:
+                    status = {0: "PASS", 1: "FAIL"}.get(check.normalized, "INCOMPLETE")
+                    lines.append(
+                        f"  {name}: {status} | exit {check.process.returncode} | {check.reason}"
+                    )
+                    if details:
+                        lines.append(f"    Command: {check.command}")
+                        lines.append(
+                            f"    Cleanup: {'confirmed' if check.process.cleanup_confirmed else 'UNCONFIRMED'}"
+                        )
+            if not attempt.checks:
+                lines.append("  No checks observed.")
+        return lines
+
+    def _evidence_groups(self) -> list[tuple[str, list[tuple[str, str]]]]:
+        groups = []
+        if self.whole_factory:
+            groups += [
+                (
+                    "Factory definition",
+                    [
+                        (
+                            "Source and declared graph",
+                            "\n".join(
+                                [
+                                    self.source,
+                                    "Artifact edges are separate from package/skill dependencies.",
+                                ]
+                                + [
+                                    f"{n.identity}: needs {n.needs}; produces {n.produces}; checks {n.checks}"
+                                    for n in self._by_identity.values()
+                                ]
+                            ),
+                        )
+                    ],
+                ),
+                (
+                    "Outcome / delivery / signature",
+                    [
+                        (
+                            "Execution: "
+                            + (
+                                self.final_result.outcome.name
+                                if self.final_result
+                                else "not finalized"
+                            ),
+                            str(self.final_result.record_path)
+                            if self.final_result
+                            else self.lifecycle,
+                        ),
+                        (
+                            "Delivery: " + self.delivery_state,
+                            str(self.delivery_path or "No exported package"),
+                        ),
+                        (
+                            "Signature: unsigned local records",
+                            "No authenticated builder identity or model-consumption claim. Produced != passed != applied.",
+                        ),
+                    ],
+                ),
+            ]
+        for a in self._attempts():
+            prefix = f"{_display_name(a.identity)} / attempt {a.index}/{a.limit}"
+            groups.append(
+                (
+                    f"{prefix} / Inputs ({len(a.inputs)} captured)",
+                    [
+                        (
+                            entry.relative_path,
+                            f"Origin: {origin}\nBytes: {entry.size}\nSHA-256: {entry.sha256}",
+                        )
+                        for entry, origin in a.inputs
+                    ]
+                    or [
+                        ("Not captured yet", "Declared requirements are not captured observations.")
+                    ],
+                )
+            )
+            groups.append(
+                (
+                    f"{prefix} / Checks ({len(a.checks)} observed)",
+                    [
+                        (
+                            name
+                            + ": "
+                            + (
+                                "running"
+                                if check is None
+                                else {0: "PASS", 1: "FAIL"}.get(check.normalized, "INCOMPLETE")
+                            ),
+                            "No result yet."
+                            if check is None
+                            else f"Command: {check.command}\nExit: {check.process.returncode}\nReason: {check.reason}\nCleanup confirmed: {check.process.cleanup_confirmed}\nSubject: {check.subject_digest}\nResources: {check.resources_digest}",
+                        )
+                        for name, check in a.checks.items()
+                    ]
+                    or [("No check observations", "No pass or failure observed.")],
+                )
+            )
+            if a.result:
+                result = a.result
+                groups.append(
+                    (
+                        f"{prefix} / Artifacts ({len(artifact_files(result.artifact))})",
+                        [
+                            (
+                                f.relative_path,
+                                f"Retained: {f.path}\nBytes: {f.size}\nSHA-256: {f.sha256}\nOutcome: {result.outcome.name}; never automatically applied",
+                            )
+                            for f in artifact_files(result.artifact)
+                        ]
+                        or [
+                            (
+                                "No complete output captured",
+                                "Inspect records for partial/unassessed work.",
+                            )
+                        ],
+                    )
+                )
+                groups.append(
+                    (
+                        f"{prefix} / Records and capabilities",
+                        [
+                            (
+                                "Record / transcript paths",
+                                f"{result.run_directory / 'record.json'}\n{result.run_directory / 'transcript.log'}\nUse Ctrl+p: Read retained record / transcript.",
+                            ),
+                            (
+                                "Execution observations",
+                                f"Outcome: {result.outcome.name}\nStop: {result.stop_reason or 'none'}\nRequested model: {result.requested_model or 'default'}\nObserved models: {result.observed_models}\nConsent: {result.consent_source}; handoff: {result.handoff_policy}",
+                            ),
+                            (
+                                "Retained source/capability inventory (not proof of use)",
+                                "\n".join(
+                                    f"{f.relative_path}\n  {f.size} bytes / SHA-256:{f.sha256}"
+                                    for f in result.retained_provenance
+                                )
+                                or "No retained capability inventory",
+                            ),
+                        ],
+                    )
+                )
+        return groups
+
+    def _refresh_views(self) -> None:
+        self._views_dirty = False
+        lines = list(self.messages) if self.whole_factory else []
+        for identity, event in self.observations.events:
+            if event.kind == "finished":
+                continue
+            if self.whole_factory or (identity is not None and identity == self.selected_identity):
+                prefix = f"{identity or 'factory'} / a{event.context.attempt}"
+                lines.append(f"{prefix}: {_format_event(event)}")
+        if self.observations.omitted:
+            lines.insert(
+                0,
+                f"[{self.observations.omitted} older UI events omitted; full retained transcripts in Evidence]",
+            )
+        self.query_one(ActivityPane).replace_lines(lines)
+        self.query_one(ChecksPane).replace_lines(self._check_lines())
+        self.query_one(EvidencePane).replace_groups(self._evidence_groups())
+        items = [
+            OutputItem(a.identity, a.index, artifact, a.result)
+            for a in self._attempts()
+            if a.result
+            for artifact in artifact_files(a.result.artifact)
+        ]
+        if items != self.outputs:
+            prior = self.selected_output.key if self.selected_output else None
+            self.outputs = items
+            table = self.query_one("#output-table", DataTable)
+            table.clear()
+            for item in items:
+                table.add_row(
+                    display_text(item.artifact.relative_path),
+                    _display_name(item.identity),
+                    str(item.attempt),
+                    item.result.outcome.name,
+                    str(item.artifact.size),
+                )
+            if items:
+                index = next((i for i, item in enumerate(items) if item.key == prior), 0)
+                table.move_cursor(row=index)
+                self._select_output(index)
+            else:
+                self.selected_output = None
+                self.query_one("#output-path", Static).update("No output captured in this scope.")
+
+    def _select_output(self, index: int) -> None:
+        if 0 <= index < len(self.outputs):
+            self.selected_output = self.outputs[index]
+            self.query_one("#output-path", Static).update(
+                display_text(
+                    f"{self.selected_output.artifact.path}\np preview | y copy path | l open location"
+                )
+            )
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        self._select_output(event.cursor_row)
+
+    def show_result(self, result: ChainResult) -> None:
+        self.final_result = result
+        for card in self.query(ContractCard):
+            if card.status == "pending":
+                self.apply_card_status(card.node.identity, "blocked")
+            elif card.status in ACTIVE:
+                self.apply_card_status(
+                    card.node.identity,
+                    "cancelled" if result.stop_reason == "cancelled" else "failed",
+                )
+        self.active_identity = None
+        self._views_dirty = True
+
+    def finish_command(self, code: int, *, planning: bool = False) -> None:
+        self.command_code = code
+        self.lifecycle = "Explore plan" if planning and code == 0 else "Explore results"
+        if not planning:
+            self.screen_stack[0].add_class("-explore")
+            self.whole_factory = True
+            self.action_show_tab("outputs-tab" if self.final_result else "activity-tab")
+            outcome = (
+                self.final_result.outcome.name if self.final_result else "No completed execution"
+            )
+            summary = self.query_one("#result-summary", Static)
+            summary.add_class("-visible")
+            summary.update(
+                display_text(
+                    f"Execution: {outcome} | Evidence: {self.delivery_state}\n"
+                    f"Package: {self.delivery_path or 'none delivered'}\n"
+                    "g Graph / select contracts | p Preview output | b Evidence location | Ctrl+p actions"
+                )
+            )
+        self._refresh_views()
+        self._refresh_header()
+
+    def action_toggle_scope(self) -> None:
+        self.whole_factory = not self.whole_factory
+        self._refresh_views()
+        self._refresh_header()
+
+    def action_toggle_follow(self) -> None:
+        self._auto_follow = not self._auto_follow
+        if self._auto_follow and self.active_identity:
+            self.select(self.active_identity, manual=False)
+        self._refresh_header()
+
+    def action_toggle_graph(self) -> None:
+        self.screen_stack[0].toggle_class("-explore")
+
+    def action_toggle_motion(self) -> None:
+        self.reduced_motion = not self.reduced_motion
+        self.notify("Reduced motion: " + ("on" if self.reduced_motion else "off"))
+
+    def action_expand_activity(self) -> None:
+        self.screen_stack[0].toggle_class("-expanded")
+
+    def action_show_tab(self, tab_id: str) -> None:
+        self.query_one("#lower-tabs", TabbedContent).active = tab_id
 
     def action_toggle_diagnostics(self) -> None:
         self.query_one("#diagnostics-pane").toggle_class("-visible")
 
-    def action_show_tab(self, tab_id: str) -> None:
-        self.query_one(TabbedContent).active = tab_id
-
     def action_toggle_search(self) -> None:
         search = self.query_one("#search-input", Input)
-        search.toggle_class("-visible")
-        visible = search.has_class("-visible")
-        search.can_focus = visible
-        if visible:
-            search.focus()
-        else:
-            search.value = ""
-            self._apply_search("")
+        if search.has_class("-visible"):
+            self.action_clear_search()
+            return
+        self._return_focus = self.focused
+        search.add_class("-visible")
+        search.can_focus = True
+        search.focus()
 
     def action_clear_search(self) -> None:
         search = self.query_one("#search-input", Input)
-        if search.has_class("-visible"):
-            search.remove_class("-visible")
-            search.can_focus = False
-            search.value = ""
-            self._apply_search("")
+        search.remove_class("-visible")
+        search.can_focus = False
+        search.value = ""
+        for pane in self.query(_FilterableLogPane):
+            pane.apply_filter("")
+        self.query_one(EvidencePane).apply_filter("")
+        if self._return_focus is not None:
+            self._return_focus.focus()
 
     def on_input_changed(self, message: Input.Changed) -> None:
         if message.input.id == "search-input":
-            self._apply_search(message.value)
+            for pane in self.query(_FilterableLogPane):
+                pane.apply_filter(message.value)
+            self.query_one(EvidencePane).apply_filter(message.value)
 
-    def _apply_search(self, query: str) -> None:
-        pane_by_tab = {
-            "activity-tab": ActivityPane,
-            "checks-tab": ChecksPane,
-            "evidence-tab": EvidencePane,
-        }
-        active = self.query_one(TabbedContent).active
-        pane_cls = pane_by_tab.get(active)
-        if pane_cls is not None:
-            self.query_one(pane_cls).apply_filter(query)
-
-    def _follow(self, identity: str) -> None:
-        """Keep the detail pane and keyboard focus on whatever contract is
-        currently active, unless the user has already focused a card
-        themselves -- a manual selection always wins over auto-follow."""
-        if not self._auto_follow:
-            return
-        card = self.query_one(GraphView).card(identity)
-        if card is None or card.has_focus:
-            return
-        self._programmatic_focus = identity
-        card.focus()
-
-    def _refresh_header(self) -> None:
-        harness = self._harness_name or "engine"
-        phase = _PHASE_LABEL.get(self._phase_name, self._phase_name) if self._phase_name else None
-        parts = [
-            f"{harness}",
-            f"{self._passed_count}/{self._total_contracts} passed",
-        ]
-        if self._failed_count:
-            parts.append(f"{self._failed_count} failed")
-        parts.append(f"phase: {phase or 'starting'}")
-        parts.append(f"{self._elapsed:.0f}s")
-        self.sub_title = " \u00b7 ".join(parts)
-
-    def apply_card_status(self, identity: str, status: CardStatus) -> None:
-        card = self.query_one(GraphView).card(identity)
-        if card is not None:
-            card.status = status
-        detail = self.query_one(DetailPane)
-        if detail.selected is not None and detail.selected.identity == identity:
-            detail.watch_selected(detail.selected)
-        if status in ("running", "checking", "retrying"):
-            self._follow(identity)
-        if status in ("passed", "failed", "blocked", "cancelled") and identity not in self._counted:
-            self._counted.add(identity)
-            if status == "passed":
-                self._passed_count += 1
-            else:
-                self._failed_count += 1
-        self._refresh_header()
-
-    def append_event(self, event: RunEvent) -> None:
-        if event.elapsed_seconds:
-            self._elapsed = max(self._elapsed, event.elapsed_seconds)
-        if event.kind == "selected":
-            harness = event.data.get("harness")
-            model = event.data.get("model")
-            if isinstance(harness, str):
-                self._harness_name = harness
-            if isinstance(model, str):
-                self._model_name = model
-        elif event.kind == "phase":
-            name = event.data.get("name")
-            if isinstance(name, str):
-                self._phase_name = name
-        if event.kind in ("check_started", "check_finished"):
-            self.query_one(ChecksPane).append(_format_check_event(event))
-        elif event.kind in ("input_captured", "workspace_captured"):
-            self.query_one(EvidencePane).append(_format_evidence_event(event))
-        elif event.kind == "finished":
-            self.query_one(ActivityPane).append(_format_event(event))
-            self.query_one(EvidencePane).append(_format_finished_evidence(event))
+    def action_inspect(self) -> None:
+        active = self.query_one("#lower-tabs", TabbedContent).active
+        if active == "outputs-tab":
+            self.action_preview_output()
+        elif active == "checks-tab":
+            self.push_screen(
+                InspectionScreen(
+                    "Checks / current scope", "\n".join(self._check_lines(details=True))
+                )
+            )
+        elif active == "evidence-tab":
+            self.query_one("#evidence-tree", Tree).focus()
         else:
-            self.query_one(ActivityPane).append(_format_event(event))
-        self._refresh_header()
+            self.push_screen(
+                InspectionScreen("Selected contract", self.query_one(DetailPane).text())
+            )
 
-    def append_diagnostic(self, line: str) -> None:
-        self.query_one(DiagnosticsPane).append(line)
+    def action_preview_output(self) -> None:
+        if self.selected_output is None:
+            self.notify("No retained output selected.", severity="warning")
+            return
+        item = self.selected_output
+        try:
+            text = read_preview(item.artifact.path, root=item.result.run_directory)
+        except OSError as exc:
+            self.notify(display_text(str(exc)), severity="error")
+            return
+        self.push_screen(
+            InspectionScreen(
+                f"{item.artifact.relative_path} | {item.identity} / attempt {item.attempt} | {item.result.outcome.name}\n{item.artifact.path}",
+                text,
+            )
+        )
+
+    def action_inspect_record(self, *, transcript: bool = False) -> None:
+        attempts = self._attempts()
+        if not transcript and self.whole_factory and self.final_result:
+            path = self.final_result.record_path
+            root = path.parent
+        elif attempts and attempts[-1].directory:
+            root = attempts[-1].directory
+            path = root / ("transcript.log" if transcript else "record.json")
+        else:
+            self.notify("No retained record in this scope yet.", severity="warning")
+            return
+        try:
+            text = read_preview(path, root=root)
+        except OSError as exc:
+            self.notify(display_text(str(exc)), severity="error")
+            return
+        self.push_screen(InspectionScreen(str(path), text))
+
+    def action_copy_path(self) -> None:
+        if self.selected_output:
+            self.copy_to_clipboard(str(self.selected_output.artifact.path))
+            self.notify("Path sent to terminal clipboard (OSC 52); terminal support required.")
+        else:
+            self.notify("Select a retained output first.", severity="warning")
+
+    def action_open_location(self) -> None:
+        if self.selected_output:
+            self.open_url(self.selected_output.artifact.path.parent.as_uri())
+            self.notify("Location requested in the system opener; external support required.")
+        else:
+            self.notify("Select a retained output first.", severity="warning")
+
+    def action_evidence_location(self) -> None:
+        if self.delivery_path:
+            self.open_url(self.delivery_path.as_uri())
+            self.notify("Evidence location requested in system opener; support required.")
+        else:
+            self.notify(
+                "No evidence package delivered. Inspect Evidence for its separate status.",
+                severity="warning",
+            )
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        yield from super().get_system_commands(screen)
+        yield SystemCommand(
+            "Inspect factory source",
+            "Full source and entry identity",
+            lambda: self.push_screen(InspectionScreen("Factory source", self.source)),
+        )
+        yield SystemCommand(
+            "Open evidence package location",
+            "Actual exported package, not a retained deliverable",
+            self.action_evidence_location,
+        )
+        for node in self._by_identity.values():
+            yield SystemCommand(
+                f"Select {_display_name(node.identity)}",
+                node.identity,
+                lambda identity=node.identity: self.select(identity),
+            )
+        for title, help_text, action in [
+            ("Toggle scope", "Whole factory / Selected contract", self.action_toggle_scope),
+            (
+                "Follow running",
+                "Selection follows; keyboard focus stays put",
+                self.action_toggle_follow,
+            ),
+            ("Inspect selected", "Contract, checks, evidence or output", self.action_inspect),
+            ("Preview output", "Bounded safe read-only preview", self.action_preview_output),
+            ("Copy output path", "Terminal clipboard support required", self.action_copy_path),
+            (
+                "Open output location",
+                "System opener, never runs the output",
+                self.action_open_location,
+            ),
+            ("Search observations", "Filter current scope", self.action_toggle_search),
+            (
+                "Show graph / results",
+                "Return to graph without losing selection",
+                self.action_toggle_graph,
+            ),
+            (
+                "Expand / collapse activity",
+                "Temporarily use the main workspace",
+                self.action_expand_activity,
+            ),
+            (
+                "Read retained record",
+                "Bounded preview of actual capabilities and record fields",
+                self.action_inspect_record,
+            ),
+            (
+                "Read retained transcript",
+                "Selected scope, latest attempt; bounded preview of fuller retained log",
+                lambda: self.action_inspect_record(transcript=True),
+            ),
+            (
+                "Reduce motion",
+                "Static running indicator with phase and elapsed time",
+                self.action_toggle_motion,
+            ),
+        ]:
+            yield SystemCommand(title, help_text, action)
