@@ -14,6 +14,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, TextArea
 
 from ..contracts.stream import safe_text
+from ..utils.file_capture import open_readonly_nofollow
 from ..utils.path_security import has_symlink_component
 
 PREVIEW_BYTES = 24 * 1024
@@ -29,7 +30,7 @@ def read_preview(path: Path, *, root: Path | None = None) -> str:
     """No symlink/special-file following or interpretation of terminal escape bytes."""
     if has_symlink_component(root or path.parent, path):
         raise OSError("Preview refused: the retained path is now a symbolic link.")
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = open_readonly_nofollow(path)
     with os.fdopen(descriptor, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise OSError("Preview refused: not a regular retained file.")

@@ -435,6 +435,35 @@ def test_wrong_backend_version_refuses_before_install(tmp_path, monkeypatch):
     assert not events
 
 
+@pytest.mark.parametrize("phase", ["--version", "install"])
+@pytest.mark.parametrize("cleanup_confirmed", [True, False])
+def test_workspace_preparation_cancel_preserves_cleanup_observation(
+    tmp_path, monkeypatch, phase, cleanup_confirmed
+):
+    from apmx.contracts.models import ContractLimits, ProcessObservation
+    from apmx.install import apm_backend
+
+    _unit_backend(tmp_path, monkeypatch)
+    original = apm_backend.supervise_process
+
+    def cancelled():
+        return True
+
+    def supervise(request, *, on_bytes, limits, cancel_requested):
+        assert cancel_requested is cancelled
+        if request.argv[1] == phase:
+            return ProcessObservation(
+                None, stop_reason="cancelled", cleanup_confirmed=cleanup_confirmed
+            )
+        return original(request, on_bytes=on_bytes, limits=limits)
+
+    monkeypatch.setattr(apm_backend, "supervise_process", supervise)
+    with pytest.raises(ContractError) as error:
+        apm_backend.install(tmp_path, limits=ContractLimits(), cancel_requested=cancelled)
+    assert error.value.code == "cancelled"
+    assert ("UNCONFIRMED" in str(error.value)) is not cleanup_confirmed
+
+
 @pytest.mark.parametrize(
     "scope,frozen,package_ref",
     [

@@ -201,7 +201,6 @@ def invoke_contract(
                     )
                 if logger.presentation is not None:
                     logger.presentation.phase("Finalizing")
-                    logger.presentation.result(chain_result)
                 completion.capture(chain_result)
                 return chain_result
             plan = frontend.plan_contract(

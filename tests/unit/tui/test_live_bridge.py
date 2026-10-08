@@ -24,8 +24,10 @@ from apmx.commands.tui_live import LiveFactoryApp, _attach_live, _fire_and_forge
 from apmx.contracts import resolution
 from apmx.contracts.chain import run_chain
 from apmx.contracts.models import ChainResult, Outcome, ProcessRequest, RunEvent
+from apmx.contracts.stream import ContractStreamDecoder, EventEmitter
 from apmx.core.contract_logger import ContractLogger
 from apmx.runtime.factory import RuntimeFactory
+from apmx.tui.app import _format_event
 from apmx.tui.graph import build_nodes
 
 pytestmark = pytest.mark.component
@@ -109,6 +111,30 @@ class _FakeApp:
 
     def append_diagnostic(self, line: str) -> None:
         self.diagnostics.append(line)
+
+
+def test_native_skill_receipt_stays_an_unverified_observation(caller):
+    app = _FakeApp()
+    logger = _attach_live(ContractLogger(), identities=("first",), app=app)
+    leaf = logger.new_leaf(index=1, count=1, contract=caller / "first.contract.md")
+    decoder = ContractStreamDecoder(EventEmitter("run", leaf.on_event))
+    decoder.feed(
+        "stdout",
+        json.dumps(
+            {
+                "type": "skill.invoked",
+                "data": {"name": "handoff-style", "content": "PRIVATE_BODY"},
+            }
+        ).encode()
+        + b"\n",
+    )
+    decoder.finish()
+    receipt = next(event for event in app.events if event.kind == "skill_loaded")
+    assert receipt.context.contract == caller / "first.contract.md"
+    assert _format_event(receipt) == (
+        "Native-reported skill invocation: handoff-style (unverified)"
+    )
+    assert "PRIVATE_BODY" not in str(app.events)
 
 
 def test_live_run_drives_both_cards_to_passed_and_returns_the_real_result(

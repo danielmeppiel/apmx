@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
+from contextlib import contextmanager
 
+import click
 import pytest
 from click.testing import CliRunner
 from test_live_bridge import _closure, _producer, caller
@@ -189,6 +192,14 @@ def test_preview_refuses_replaced_parent_link(tmp_path):
         read_preview(root / "artifacts" / "secret", root=root)
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="Named FIFO creation is POSIX-only")
+def test_preview_refuses_special_files_without_waiting_for_a_writer(tmp_path):
+    fifo = tmp_path / "output"
+    os.mkfifo(fifo)
+    with pytest.raises(OSError, match="regular"):
+        read_preview(fifo)
+
+
 @pytest.mark.parametrize("delivery_failure", [False, True])
 def test_canonical_completion_finishes_before_persistent_results(
     caller, monkeypatch, delivery_failure
@@ -235,7 +246,7 @@ def test_canonical_completion_finishes_before_persistent_results(
                 assert "Evidence:" in summary
                 if delivery_failure:
                     assert "FAILED (exit 23)" in summary
-                assert app.check_action("cancel_run", ()) is None
+                assert app.check_action("cancel_run", ()) is False
                 observed["record"] = app.final_result.record_path
                 observed["delivery"] = app.delivery_state
                 await pilot.press("q")
@@ -360,3 +371,118 @@ def test_background_dispatch_creates_consent_in_textual_context(caller):
             thread.join(1)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["record_changed", "source_cleanup"])
+def test_teardown_or_validation_failure_never_publishes_factory_complete(
+    caller, monkeypatch, failure
+):
+    from apmx.contracts.records import CompletionBoundary
+    from apmx.install import contract_source
+
+    _producer(monkeypatch)
+    monkeypatch.setattr("apmx.tui.entry.tui_eligible", lambda: True)
+    original_prepare = contract_source.prepare_imports
+    original_capture = CompletionBoundary.capture
+    original_validate = CompletionBoundary.validate
+    counts = {"capture": 0, "validate": 0, "export": 0}
+    records = []
+
+    def capture(boundary, result):
+        counts["capture"] += 1
+        original_capture(boundary, result)
+
+    def validate(boundary, result):
+        counts["validate"] += 1
+        original_validate(boundary, result)
+
+    def export(result):
+        counts["export"] += 1
+        raise AssertionError("Invalid completion must not reach export")
+
+    @contextmanager
+    def prepare(*args, **kwargs):
+        with original_prepare(*args, **kwargs) as prepared:
+            yield prepared
+        record = next((caller / ".apm/chains").glob("*/record.json"))
+        records.append(record)
+        data = json.loads(record.read_text())
+        assert data["result"]["outcome"]["name"] == "COMPLETE"
+        if failure == "record_changed":
+            data["unexpected_teardown_write"] = True
+            record.write_text(json.dumps(data))
+        else:
+            raise ContractError("Preparation cleanup failed", code="source_cleanup")
+
+    monkeypatch.setattr(contract_source, "prepare_imports", prepare)
+    monkeypatch.setattr(CompletionBoundary, "capture", capture)
+    monkeypatch.setattr(CompletionBoundary, "validate", validate)
+    monkeypatch.setattr("apmx.contracts.evidence.export_completed", export)
+
+    def launch(**kwargs):
+        app = LiveFactoryApp(command=kwargs["command"])
+        app.animation_level = "none"
+
+        async def scenario():
+            async with app.run_test() as pilot:
+                await eventually(lambda: app.command_code is not None, pilot)
+                assert app.command_code == 22
+                assert app.final_result is None
+                assert len(app.outputs) == 2
+                assert app.delivery_path is None
+                summary = str(app.query_one("#result-summary", Static).render())
+                assert "Execution: COMPLETE" not in summary
+                assert "No validated factory result" in summary
+                assert not any(card.started for card in app.query(ContractCard))
+                await pilot.press("q")
+
+        asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+        app._worker.join(5)
+        assert not app._worker.is_alive()
+        return app.command_code
+
+    monkeypatch.setattr("apmx.commands.tui_live.launch_workspace", launch)
+    result = CliRunner().invoke(
+        main, [str(caller), "--tui", "--allow-host-access", "--allow-unproven-inputs"]
+    )
+    assert result.exit_code == 22, (result.output, result.exception)
+    assert counts == {"capture": 1, "validate": int(failure == "record_changed"), "export": 0}
+    assert json.loads(records[0].read_text())["result"]["outcome"]["name"] == "HALTED"
+
+
+@pytest.mark.parametrize("complete_before_answer", [False, True])
+def test_quit_confirmation_is_not_lost_when_finalization_finishes(caller, complete_before_answer):
+    release = threading.Event()
+
+    def command(presentation, cancel):
+        presentation.phase("Finalizing")
+        assert release.wait(5)
+        raise click.exceptions.Exit(23)
+
+    app = LiveFactoryApp(_closure(caller).graph, command=command)
+    app.animation_level = "none"
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            await eventually(lambda: app.lifecycle == "Finalizing", pilot)
+            app.action_quit()
+            await pilot.pause()
+            assert isinstance(app.screen, ConsentScreen)
+            if complete_before_answer:
+                release.set()
+                await eventually(lambda: app.command_code == 23, pilot)
+            app.screen.dismiss(True)
+            await pilot.pause()
+            if not complete_before_answer:
+                assert app.is_cancel_requested()
+                assert app.is_running
+                release.set()
+            await eventually(lambda: not app.is_running, pilot)
+            assert app.command_code == 23
+
+    try:
+        asyncio.run(asyncio.wait_for(scenario(), timeout=15))
+    finally:
+        release.set()
+        app._worker.join(5)
+    assert not app._worker.is_alive()

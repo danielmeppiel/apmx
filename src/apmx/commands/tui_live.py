@@ -199,7 +199,10 @@ class LiveFactoryApp(FactoryApp):
         def decision(answer: bool | None) -> None:
             if answer:
                 self._exit_when_done = True
-                self.action_cancel_run()
+                if self.command_code is not None:
+                    self.exit()
+                else:
+                    self.action_cancel_run()
 
         self.push_screen(
             ConsentScreen(
@@ -319,10 +322,8 @@ class LiveFactoryApp(FactoryApp):
         if self._exit_when_done or self._headless_auto_exit:
             self.exit()
 
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        if action == "cancel_run" and self.command_code is not None:
-            return None
-        return True
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool:
+        return not (action == "cancel_run" and self.command_code is not None)
 
 
 def launch_workspace(

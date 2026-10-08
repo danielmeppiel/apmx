@@ -35,7 +35,15 @@ from .inspection import InspectionScreen, display_text, read_preview
 from .state import EVENT_LIMIT, AttemptView, Observations, OutputItem
 
 CardStatus = Literal[
-    "pending", "running", "checking", "retrying", "passed", "failed", "blocked", "cancelled"
+    "pending",
+    "running",
+    "checking",
+    "retrying",
+    "passed",
+    "failed",
+    "blocked",
+    "cancelled",
+    "unassessed",
 ]
 ACTIVE = ("running", "checking", "retrying")
 _STATUS_SYMBOL = {
@@ -47,6 +55,7 @@ _STATUS_SYMBOL = {
     "failed": "[x]",
     "blocked": "[!]",
     "cancelled": "[-]",
+    "unassessed": "[?]",
 }
 _PHASE_LABEL = {
     "preflight": "Capturing inputs",
@@ -103,7 +112,7 @@ def _format_event(event: RunEvent) -> str:
     if event.kind == "stop_requested":
         return f"Stop requested: {data.get('reason')}"
     if event.kind == "skill_loaded":
-        return f"Selected skill: {data.get('name')} (not proof of consumption)"
+        return f"Native-reported skill invocation: {data.get('name')} (unverified)"
     if event.kind == "input_captured":
         entry = data.get("entry")
         return f"Captured input: {getattr(entry, 'relative_path', '?')} / {data.get('origin')}"
@@ -915,13 +924,24 @@ class FactoryApp(App[None]):
 
     def finish_command(self, code: int, *, planning: bool = False) -> None:
         self.command_code = code
+        if self.delivery_state == "Not delivered yet":
+            self.delivery_state = "Not delivered"
+        if not planning and self.final_result is None:
+            for card in self.query(ContractCard):
+                if card.status in ACTIVE:
+                    self.apply_card_status(card.node.identity, "unassessed")
+                elif card.status == "pending":
+                    self.apply_card_status(card.node.identity, "blocked")
+            self.active_identity = None
         self.lifecycle = "Explore plan" if planning and code == 0 else "Explore results"
         if not planning:
             self.screen_stack[0].add_class("-explore")
             self.whole_factory = True
             self.action_show_tab("outputs-tab" if self.final_result else "activity-tab")
             outcome = (
-                self.final_result.outcome.name if self.final_result else "No completed execution"
+                self.final_result.outcome.name
+                if self.final_result
+                else "No validated factory result"
             )
             summary = self.query_one("#result-summary", Static)
             summary.add_class("-visible")

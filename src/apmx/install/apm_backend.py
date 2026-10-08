@@ -170,9 +170,11 @@ def _check_backend_version(
         **({"cancel_requested": cancel_requested} if cancel_requested else {}),
     )
     expected = expected_version_output()
-    if version.stop_reason == "cancelled":
+    if version.stop_reason == "cancelled" and cancel_requested is not None:
         raise ContractError(
-            "APM preparation cancelled; managed cleanup completed.", code="cancelled"
+            "APM preparation cancelled; managed cleanup "
+            + ("confirmed." if version.cleanup_confirmed else "UNCONFIRMED."),
+            code="cancelled",
         )
     if (
         version.returncode != 0
@@ -262,9 +264,10 @@ def install(
         )
     finally:
         decoder.finish()
-    if observed.stop_reason == "cancelled":
+    if observed.stop_reason == "cancelled" and cancel_requested is not None:
         raise ContractError(
-            "APM preparation cancelled. No producer was launched.",
+            "APM preparation cancelled. No producer was launched. Managed cleanup "
+            + ("confirmed." if observed.cleanup_confirmed else "UNCONFIRMED."),
             code="cancelled",
         )
     if (

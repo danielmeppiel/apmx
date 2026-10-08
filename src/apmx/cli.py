@@ -42,9 +42,10 @@ def _finish_result(
 
     if logger.presentation is not None:
         logger.presentation.phase("Finalizing")
-        logger.presentation.result(result)
     completion.validate(result)
     logger.render_result(result)
+    if logger.presentation is not None:
+        logger.presentation.result(result)
     if result.outcome is not Outcome.COMPLETE:
         return int(result.outcome)
     try:
