@@ -953,6 +953,8 @@ class FactoryApp(App[None]):
                 )
             )
         self._refresh_views()
+        if not planning and not self.outputs:
+            self.query_one("#output-path", Static).update("No outputs captured.")
         self._refresh_header()
 
     def action_toggle_scope(self) -> None:

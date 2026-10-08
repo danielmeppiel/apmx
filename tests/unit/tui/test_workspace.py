@@ -294,6 +294,7 @@ def test_default_no_preparation_and_execution_do_not_run_producer(caller, monkey
                 await eventually(lambda: app.command_code is not None, pilot)
                 assert app.command_code == 21
                 assert not app.outputs
+                assert str(app.query_one("#output-path", Static).render()) == "No outputs captured."
                 await pilot.press("q")
 
         asyncio.run(scenario())
