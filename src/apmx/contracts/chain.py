@@ -1,5 +1,6 @@
 """One admitted graph, sequential leaf-engine calls, and exact retained handoffs."""
 
+from collections.abc import Callable
 from dataclasses import replace
 
 from ..core.contract_logger import ContractLogger
@@ -87,8 +88,20 @@ def run_chain(
     logger: ContractLogger,
     allow_advisory: bool = False,
     consent_source: str = "flag",
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> ChainResult:
-    """Run each inferred node once; only the record authority admits downstream bytes."""
+    """Run each inferred node once; only the record authority admits downstream bytes.
+
+    ``cancel_requested``, when given, is the same cooperative-cancellation
+    callback accepted by ``process.supervise_process``: it is checked both
+    before starting the next node (so a cancellation requested between
+    leaves stops the chain without starting more work) and inside that
+    node's own producer/check process supervision (so a cancellation
+    requested mid-leaf reaps the live child promptly). A cancellation is
+    reported through the existing ``ContractError``/stop_reason="cancelled"
+    path already used for a delivered KeyboardInterrupt, not a new outcome
+    kind.
+    """
     logger.execution_context()
     if not allow_advisory:
         raise ContractError(
@@ -131,6 +144,10 @@ def run_chain(
         store.update("capture", project_capture=project)
         store.update("execution", nodes=states)
         for current, node in enumerate(plan.nodes):
+            if cancel_requested is not None and cancel_requested():
+                raise ContractError(
+                    "The run was cancelled before this step started.", code="cancelled"
+                )
             states[current]["state"] = "running"
             store.update("execution", nodes=states)
             executable = _bound(node, admitted)
@@ -150,6 +167,7 @@ def run_chain(
                     allow_advisory=allow_advisory,
                     consent_source=consent_source,
                     allow_unproven_inputs=plan.allow_unproven_inputs,
+                    cancel_requested=cancel_requested,
                 )
             finally:
                 leaf_logger.close()

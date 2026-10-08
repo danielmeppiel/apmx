@@ -24,6 +24,7 @@ def invoke_contract(
     logger: ContractLogger | None = None,
     factory_root: Path | None = None,
     allow_unproven_inputs: bool = False,
+    tui: bool = False,
 ) -> ChainResult | RunResult | None:
     """Plan or execute a local factory or one explicit leaf through shared admission."""
     from ..contracts import frontend, workspace
@@ -115,14 +116,45 @@ def invoke_contract(
                 )
                 logger.stop_activity()
                 if planning:
+                    if tui:
+                        from ..tui.entry import launch_preview, tui_eligible
+
+                        if not tui_eligible():
+                            raise ContractError(
+                                "The TUI preview needs an interactive terminal on both ends; "
+                                "omit --tui or redirect/CI runs stay on --plan.",
+                                code="tui_unavailable",
+                                outcome=Outcome.UNPROVEN,
+                            )
+                        launch_preview(closure.graph)
+                        return None
                     logger.render_chain_plan(closure)
                     return None
-                chain_result = run_chain(
-                    closure,
-                    logger=logger,
-                    allow_advisory=allow_advisory,
-                    consent_source=consent_source,
-                )
+                if tui:
+                    from ..tui.entry import tui_eligible
+
+                    if not tui_eligible():
+                        raise ContractError(
+                            "The live TUI needs an interactive terminal on both ends; "
+                            "omit --tui for a normal run.",
+                            code="tui_unavailable",
+                            outcome=Outcome.UNPROVEN,
+                        )
+                    from .tui_live import launch_live
+
+                    chain_result = launch_live(
+                        closure,
+                        logger=logger,
+                        allow_advisory=allow_advisory,
+                        consent_source=consent_source,
+                    )
+                else:
+                    chain_result = run_chain(
+                        closure,
+                        logger=logger,
+                        allow_advisory=allow_advisory,
+                        consent_source=consent_source,
+                    )
                 completion.capture(chain_result)
                 return chain_result
             plan = frontend.plan_contract(
@@ -136,6 +168,13 @@ def invoke_contract(
             )
             inventory = workspace.inspect_workspace(plan)
             logger.stop_activity()
+            if tui:
+                raise ContractError(
+                    "The TUI needs a factory directory; pass a factory directory, not "
+                    "a single contract file.",
+                    code="tui_requires_factory",
+                    outcome=Outcome.UNPROVEN,
+                )
             if planning:
                 logger.render_plan(plan, inventory)
                 return

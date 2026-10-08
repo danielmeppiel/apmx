@@ -2,6 +2,7 @@
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import replace
 
 from ..core.contract_logger import ContractLogger
@@ -34,6 +35,7 @@ def run_repair(
     consent_source: str,
     allow_unproven_inputs: bool | None,
     announce_result: bool,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> RunResult:
     """Retry only validated candidate rejection; retain every independent attempt."""
     from .engine import run_attempt
@@ -71,6 +73,7 @@ def run_repair(
                     shared_deadline=deadline,
                     repair_context=context,
                     on_created=store.attach_attempt,
+                    cancel_requested=cancel_requested,
                 )
             finally:
                 attempt_logger.close()

@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from apmx.utils.git_env import get_git_executable, git_long_paths_args
@@ -86,11 +87,19 @@ def supervise_process(
     on_started: StartedSink | None = None,
     events: EventEmitter | None = None,
     limits: ContractLimits | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> ProcessObservation:
     """Drain both pipes while bounding deadlines and original-group cleanup.
 
     This cannot contain descendants that leave the original process group.
     Callback failures propagate only after bounded cleanup has been attempted.
+
+    ``cancel_requested``, when given, is polled on every loop iteration
+    alongside the existing timeout check. It lets an external caller (for
+    example an interactive UI thread) request the same real SIGTERM/SIGKILL
+    escalation and process-group cleanup used for a timeout or a delivered
+    KeyboardInterrupt, without that caller needing its own supervisor or
+    needing to deliver a real OS signal into this thread.
     """
     limits = limits or ContractLimits()
     started = time.monotonic()
@@ -98,7 +107,12 @@ def supervise_process(
         from .process_windows import supervise_process as supervise_windows
 
         return supervise_windows(
-            request, on_bytes=on_bytes, on_started=on_started, events=events, limits=limits
+            request,
+            on_bytes=on_bytes,
+            on_started=on_started,
+            events=events,
+            limits=limits,
+            cancel_requested=cancel_requested,
         )
     if os.name != "posix":
         return ProcessObservation(None, error="Unsupported process execution platform.")
@@ -164,6 +178,8 @@ def supervise_process(
                         and now - leader_exited_at >= post_exit_grace(limits.cleanup_seconds)
                     ):
                         stop_reason = "lingering_children"
+                    elif cancel_requested is not None and cancel_requested():
+                        stop_reason = "cancelled"
                     if stop_reason is not None:
                         stop_started = (
                             leader_exited_at if stop_reason == "lingering_children" else now

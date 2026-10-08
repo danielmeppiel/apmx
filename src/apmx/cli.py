@@ -144,6 +144,25 @@ def _select_entry(
     is_flag=True,
     help="Stream native debug logs and show source/process details.",
 )
+@click.option(
+    "--tui",
+    "tui",
+    is_flag=True,
+    help=(
+        "Show the factory graph in the Textual UI: --tui --plan previews it "
+        "without running anything; --tui alone runs the factory live through "
+        "it, with the same default-No consent prompt as a normal run (see "
+        "docs/textual-design.md). Needs a factory directory and an interactive "
+        "terminal on both ends; redirected/CI runs and single contract files "
+        "stay on the plain output."
+    ),
+)
+@click.option(
+    "--no-tui",
+    "no_tui",
+    is_flag=True,
+    help="Reserved escape hatch: the TUI is never auto-selected yet, so this is currently a no-op.",
+)
 @click.version_option(version=get_version(), prog_name="apmx")
 @click.pass_context
 def main(
@@ -156,8 +175,12 @@ def main(
     allow_advisory: bool,
     verbose: bool,
     allow_unproven_inputs: bool,
+    tui: bool,
+    no_tui: bool,
 ) -> None:
     """Dispatch the selected factory or file through canonical admission."""
+    if tui and no_tui:
+        raise click.UsageError("Pass either --tui or --no-tui, not both.")
     configure_output_mode(detect_output_mode([]))
     configure_process_tls_trust()
     ctx.ensure_object(dict)
@@ -186,6 +209,7 @@ def main(
                 logger=logger,
                 factory_root=factory_root,
                 allow_unproven_inputs=allow_unproven_inputs,
+                tui=tui,
             )
             if result is not None:
                 ctx.exit(_finish_result(result, completion, logger))
@@ -235,6 +259,7 @@ def main(
                 logger=logger,
                 factory_root=source.root / contract if package_factory else None,
                 allow_unproven_inputs=allow_unproven_inputs,
+                tui=tui,
             )
         if result is not None:
             ctx.exit(_finish_result(result, completion, logger))
