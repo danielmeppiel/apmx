@@ -515,6 +515,200 @@ All milestone-4 screenshots are persisted at (absolute paths, session-scoped
 scratch storage, not part of the repo):
 `~/.copilot/session-state/5072cbd4-7912-45c6-b6ab-d4ba84303cb7/files/termviz/evidence-m4/`.
 
+### Milestone 5: genuine model exercise, Windows regression fix, and the five remaining open items
+
+**Genuine model runs.** Exactly one authorized genuine run per harness was
+executed against the real APM 0.30.0 backend, launched via
+`.venv/bin/python -m apmx` (the shared toolchain interpreter, not the frozen
+native binary — these two launch paths are evidence-distinct; see below),
+against a minimal real `handoff.contract.md`:
+
+- **Copilot**: completed genuinely — `outcome: COMPLETE`, `exit_code: 0`,
+  real `handoff.json` artifact (sha256 `99dd95d2...`), its `handoff` check
+  passed (`returncode: 0`). This is a real, successful native model
+  generation and a real passing check, not a replay.
+- **OpenCode**: this is a **real CLI invocation and a real error path**, not
+  a successful model generation and not proven model spend. OpenCode CLI
+  `1.2.24` was launched with its own default `providerID=github-copilot`,
+  `modelID=claude-sonnet-4.6` (OpenCode's default, not overridden by this
+  track); the native process reported `stop_reason: "native_protocol_error"`
+  via an `AI_APICallError` naming an integrator/model mismatch, before any
+  model text was generated. The chain record reflects this honestly:
+  `complete: false`, node `state: "stopped"`, `outcome: HALTED`,
+  `exit_code: 22`, `artifact: null`. Treat this as evidence that the
+  harness-selection and native-error-surfacing path works correctly, not as
+  evidence the model ran.
+
+Both records were independently reviewed: transcript SHA256s match the
+chain records, and the Copilot run's `handoff.json` passes the project's
+own trusted `checks/check_handoff.py` checker.
+
+**Frozen vs. source launch, and why `native-advisory` cannot distinguish
+them.** Both of the genuine runs above were launched via
+`.venv/bin/python -m apmx`, i.e. from source through the shared toolchain
+interpreter — deliberately kept separate from the milestone-2 frozen-binary
+proof (the packaged native executable). Both report
+`assurance.profile: "native-advisory"` in their chain records. That profile
+name does **not** by itself prove frozen-vs-source identity: it is reported
+identically by genuine source-launched runs (confirmed here) and by the
+frozen binary (milestone 2). The frozen/source distinction rests only on
+which launch mechanism was actually used for a given run, never on
+anything the evidence record itself asserts — the milestone 2 correction
+above applies the same fix to that earlier claim.
+
+**Windows CI hang, root-caused and fixed.** The Windows native job was
+hanging on exit. Root cause: `commands/tui_live.py` used Textual's
+`call_from_thread` to hand a result back to the app's event loop from a
+worker thread; on Windows, if the app's loop had already stopped by the
+time the worker thread called back in, `call_from_thread` blocked forever
+waiting for a reply that would never arrive, hanging the process instead of
+exiting. **Fix**: a `_fire_and_forget` helper that posts the message
+without blocking when the loop may already be gone. A deterministic
+regression test,
+`test_fire_and_forget_does_not_block_when_the_apps_loop_has_already_stopped`,
+proves this: reverting the fix makes the test fail (hang) deterministically,
+confirming the test actually exercises the bug rather than passing
+vacuously.
+
+**Final native CI conclusion.** Commit `8caa721` (and the mechanical
+`ruff format` follow-up, `6164408`) ran through the full five-native-target
+matrix (macOS arm64/x86_64, Linux arm64/x86_64, Windows x86_64) plus
+`validate`, against the real APM 0.30.0 backend where applicable. See the
+PR for the exact run conclusion at push time; this is the acceptance gate,
+not any local repetition.
+
+**The five open items, closed with exact live results** (per the explicit
+ask, each re-verified against the real engine/CLI rather than by
+code-reading alone):
+
+1. **Cheap/plain fallback and output redirection.** `apmx --from <factory>
+   --on copilot --tui --allow-host-access` with both stdin and stdout
+   redirected away from a TTY exits non-zero with a clean refusal:
+   `[!] apmx: UNPROVEN` / `The live TUI needs an interactive terminal on
+   both ends; omit --tui for a normal run.` No hang, no silent fallback,
+   no partial TUI launch attempt. Separately, `--no-tui` (or simply
+   omitting `--tui`, since it defaults off) under the same redirected,
+   non-tty conditions runs the existing plain-CLI path normally to
+   completion — confirming "cheap fallback" means the plain path is the
+   default and always available, while the live TUI explicitly refuses
+   rather than guessing when it cannot safely own a real terminal.
+2. **`NO_COLOR` stays interactive.** Confirmed via `terminal_capabilities()`
+   (`src/apmx/utils/console.py`): `NO_COLOR` alone maps to `PLAIN_TTY`, not
+   `STREAM` — a real TTY with `NO_COLOR` set remains TUI-eligible and
+   renders monochrome (also live-captured in milestone 4, item 5).
+3. **Reduced motion.** Live-captured: a genuine live-engine run launched
+   with `TEXTUAL_ANIMATIONS=none` renders and runs cleanly end-to-end (real
+   fork/join graph, real activity narration) — this track has no bespoke
+   animation code of its own; it relies entirely on Textual's native
+   handling of that env var, and the live capture confirms nothing in this
+   track's own code interferes with or depends on animations being
+   present.
+4. **Input ownership, confirmed both structurally and behaviorally.**
+   Structurally: every producer/check subprocess this track supervises is
+   spawned with `stdin=subprocess.DEVNULL`
+   (`src/apmx/contracts/process.py:129`) — there is no file descriptor
+   through which a native tool/model prompt could ever read the terminal,
+   so a native prompt cannot race with the TUI's own input handling
+   because there is never a channel for it to read from. Behaviorally: a
+   scripted keypress (`k`, switching to the Checks tab) sent while the
+   hermetic producer was still genuinely mid-execution
+   (`phase: Running the producer`, `HERMETIC_COPILOT_DELAY=2.5s`) was
+   immediately reflected in the live-captured frame — proving the
+   Textual app's own key-event loop, not any child process, is the sole
+   consumer of terminal input while a run is active.
+5. **Narrow-terminal detail-pane reachability — an honest gap, not a
+   pass.** The graph pane (`min-width: 28`) and the detail pane
+   (`min-width: 22`) are laid out side-by-side with no responsive
+   breakpoint and no horizontal-scroll fallback. Live-captured at three
+   widths: at 100 cols and at 52 cols the detail pane is fully visible
+   (cramped word-wrap at 52); at 40 cols it is **not reachable at all** —
+   it is pushed fully off-screen with no keybinding, scroll, or toggle to
+   bring it back. The practical cutoff is the sum of both min-widths (50
+   columns); below that, per-contract detail (status, dependencies,
+   checks) is simply unavailable until the terminal is widened. This is
+   reported as a known limitation for a future milestone, not silently
+   marked complete.
+
+Milestone-5 screenshots (`shot-reduced-motion.png`, `shot-narrow-40.png`,
+`shot-narrow-52.png`, `shot-input-ownership2.png`) and both genuine chain
+records are persisted at (absolute paths, session-scoped scratch storage,
+not part of the repo):
+`~/.copilot/session-state/5072cbd4-7912-45c6-b6ab-d4ba84303cb7/files/termviz/`
+(screenshots at the top level; chain records under
+`evidence-m5-live/genuine-model-runs/`).
+
+### A second, distinct Windows CI stall: root cause and fix
+
+A later CI run (`37702976752`) was cancelled by the job-level 35-minute
+timeout on `windows-x86_64` only, while all four other native targets
+(macOS arm64/x86_64, Linux x86_64/arm64) completed successfully running
+the identical test suite including the regression test for the earlier,
+already-fixed `call_from_thread` hang. This was a **second, distinct**
+stall, not a recurrence of the first.
+
+Exact progress accounting from the job log (27 full 72-dot progress lines
+plus one final partial 63-result line, no percentage, immediately before
+`The operation was canceled.`) places the stall at test index 2007 of
+2172 for the `tests/unit tests/release` selection, which is exactly
+`tests/unit/tui/test_live_bridge.py::test_launch_live_disables_terminal_echo_before_the_real_chain_runs`
+hanging mid-run — its own result dot never posts, and the next test in
+collection order never starts.
+
+**Mechanism:** that test calls `launch_live()`, which calls Textual's
+`App.run()` with no `headless=` argument, so it instantiates the real
+platform driver. Textual's `LinuxDriver` checks `os.isatty()` on stdin and
+falls back to a non-blocking `select()` read loop that tolerates a
+non-tty fd fine (why this test passed on macOS/Linux). Textual's
+`WindowsDriver` (`textual/drivers/windows_driver.py` / `win32.py`) has no
+such fallback: it reads real Win32 console handles with no "no console
+attached" non-blocking path, so under a non-interactive CI runner with no
+real console it blocks forever.
+
+**Fix:** `launch_live()` gained an optional `headless: bool = False`
+parameter (`src/apmx/commands/tui_live.py`), forwarded straight to
+`App.run(headless=headless)`. The default is unchanged, so every real
+invocation — the only caller is `commands/contracts.py`, already gated on
+`invoke_contract` confirming real TTYs on both ends before it ever calls
+this function — keeps using the real platform driver and genuinely owns
+the terminal exactly as before; this parameter never reaches production.
+The test now passes `headless=True`, selecting Textual's own
+cross-platform `HeadlessDriver`, which drives the exact same real chain
+and the exact same assertions without depending on native OS console
+APIs. Verified locally: `tests/unit/tui/test_live_bridge.py` 7/7 pass in
+under 3 seconds (previously this test alone could hang indefinitely on
+Windows). A full `tests/unit tests/release` run against the real APM
+0.30.0 backend (`APMX_APM_BACKEND` pointed at the read-only demo kit's
+bundled binary) passed 2113/2172 with 58 skipped and exactly one
+pre-existing, unrelated failure
+(`tests/release/test_demo.py::test_python_command_preserves_virtual_environment_identity`,
+an isolated uv-managed-Python dylib `SIGABRT` on this macOS host,
+unrelated to this track's code and not chased as a product regression).
+
+### Cheap-gate proof additions (exact, not broader claims)
+
+- **Plain mode genuinely completes under full redirection, not just
+  refuses.** Running the real CLI without `--tui` (`--allow-host-access
+  --allow-unproven-inputs`, stdin/stdout/stderr all redirected to files,
+  hermetic producer, no model spend) against the same 4-contract
+  fork/join factory produced `[+] Factory COMPLETE`, `Contracts: 4/4
+  completed`, `Checks: 4/4 passed`, and a retained evidence directory —
+  byte-scanning the entire redirected stdout for ANSI escape sequences
+  (`\x1b[...`) found **zero**, confirming no alternate-screen or other
+  terminal-control codes are ever emitted in the non-TUI path.
+- **Detail-pane reachability at the two sizes that actually matter.**
+  Live-captured at exactly 60×20 and 80×24 (`shot-60x20-required.png`,
+  `shot-80x24-required.png`): the detail pane (Contract/Status/Depends
+  on/Needs/Produces) is fully visible and readable at both sizes. The
+  previously reported <50-column gap (40 cols) remains an honest,
+  disclosed limitation below both of these required sizes, not something
+  that needed to expand scope.
+- **Reused evidence, not re-captured:** the already-accepted live
+  NO_COLOR screenshots are `evidence-m5-live/live-120x40-nocolor.png` and
+  `evidence-m4/m4-nocolor-live-120x40.png`; reduced-motion is
+  `shot-reduced-motion.png`; input-ownership is `shot-input-ownership2.png`
+  — all under the same `~/.copilot/session-state/.../files/termviz/` root
+  as above.
+
 ## Milestones and acceptance
 
 1. Persist docs/textual-design.md and refine the wireframes against the real

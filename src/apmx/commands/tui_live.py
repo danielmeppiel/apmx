@@ -227,6 +227,7 @@ def launch_live(
     logger: ContractLogger,
     allow_advisory: bool,
     consent_source: str,
+    headless: bool = False,
 ) -> ChainResult:
     """Run the real chain live, presenting it through ``FactoryApp``.
 
@@ -234,6 +235,17 @@ def launch_live(
     caller (``invoke_contract``'s existing default-No ``confirm_factory()``
     gate, before this function is ever reached); this only wires the already
     -authorized execution into the Textual surface.
+
+    ``headless`` defaults to ``False`` so every real invocation keeps using
+    Textual's native platform driver (``LinuxDriver``/``WindowsDriver``) and
+    genuinely owns the terminal, exactly as today. It exists only so tests
+    that drive this function without a real console can select Textual's
+    own ``HeadlessDriver`` instead: the native drivers read real OS console
+    handles, and Windows' console-input APIs (unlike POSIX's ``select()``
+    on the stdin fd) have no non-blocking "no real console attached" path,
+    so they hang indefinitely under a non-interactive test runner. This
+    never reaches production code -- ``invoke_contract`` already refuses to
+    call this function at all unless both ends are confirmed real TTYs.
     """
     from ..contracts.chain import run_chain
 
@@ -258,7 +270,7 @@ def launch_live(
 
     app = LiveFactoryApp(closure.graph, runner=runner)
     app_holder["app"] = app
-    app.run()
+    app.run(headless=headless)
     if app.run_failure is not None:
         raise app.run_failure
     if app.chain_result is None:

@@ -329,13 +329,32 @@ def test_launch_live_disables_terminal_echo_before_the_real_chain_runs(
     """launch_live() must stop the pre-existing ContractLogger from echoing
     straight to the terminal once Textual owns the screen, while still
     driving the real chain end to end through the real worker-thread path
-    App.run() uses (this process has no real TTY, but Textual's driver
-    tolerates that, so this exercises launch_live exactly as written)."""
+    App.run() uses.
+
+    ``headless=True`` asks Textual for its own ``HeadlessDriver`` instead of
+    a native platform driver: this process has no real console, and unlike
+    POSIX's ``LinuxDriver`` (which checks ``os.isatty()`` and falls back to
+    a non-blocking ``select()`` read loop that tolerates a non-tty stdin
+    fine), Windows' native ``WindowsDriver`` reads real console handles with
+    no non-blocking "no console attached" path -- under a non-interactive
+    test runner (e.g. GitHub Actions' windows-x86_64 job) that hangs
+    indefinitely instead of returning, which is exactly what stalled CI here
+    until this fix. ``headless=True`` never reaches production: the real
+    ``--tui`` CLI path already refuses to call ``launch_live`` at all unless
+    both ends are confirmed real TTYs, so this keeps exercising the exact
+    real chain-driving logic this test cares about without depending on a
+    native OS console driver's behavior."""
     _producer(monkeypatch)
     closure = _closure(caller)
     logger = ContractLogger(verbose=False)
 
-    result = launch_live(closure, logger=logger, allow_advisory=True, consent_source="flag")
+    result = launch_live(
+        closure,
+        logger=logger,
+        allow_advisory=True,
+        consent_source="flag",
+        headless=True,
+    )
 
     assert logger._display.enabled is False
     assert result.outcome is Outcome.COMPLETE
