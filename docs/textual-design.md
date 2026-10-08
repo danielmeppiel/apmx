@@ -709,6 +709,78 @@ unrelated to this track's code and not chased as a product regression).
   — all under the same `~/.copilot/session-state/.../files/termviz/` root
   as above.
 
+### Windows CI stall #2: confirmed green end-to-end
+
+CI run `37707835041` (head commit `878eaf1`, the `headless=` driver fix
+above) completed with overall conclusion **success** across all six jobs:
+`validate`, `macos-arm64`, `macos-x86_64`, `linux-arm64`, `linux-x86_64`,
+and — the one that used to hang for the full 35-minute job timeout —
+`windows-x86_64`, which completed in 16m41s. This is the real, uncontaminated
+end-to-end proof that the Windows stall is fixed, not just a local/headless
+reproduction of the hang.
+
+### Keyboard-reachability proof at the two required sizes, and a genuine bug it found
+
+Text being visibly present in a screenshot does not prove a real user can
+reach it with the keyboard alone. Re-examining the already-captured
+`shot-60x20-required.png`/`shot-80x24-required.png` against that stricter bar
+found one real defect and one false alarm:
+
+- **80×24 — false alarm, now proven fine.** The `Checks:` field can sit
+  below the detail pane's visible window when a card's dependency text
+  wraps (`DetailPane` is a `VerticalScroll`, by design — see its docstring).
+  Driving the app with only the real bound `tab` key (never `.focus()`) past
+  every contract card until keyboard focus genuinely lands on `DetailPane`,
+  then pressing the real `down` key repeatedly, reaches
+  `scroll_y == max_scroll_y` — i.e. every field, including `Checks:`, is
+  reachable by keyboard alone. Regression test:
+  `tests/unit/tui/test_app.py::test_detail_pane_reachable_by_keyboard_alone_at_80x24`.
+- **60×20 — real bug, found and fixed.** `#graph-row` (`min-height: 9`) and
+  `#lower-tabs` (`min-height: 10`) together need 19 rows, but a 60×20
+  terminal only has 18 left after the 1-row Header and 1-row Footer.
+  Textual's layout resolution for this over-constrained case gave
+  `#graph-row` *all* 18 remaining rows (not its `1fr` share, and far more
+  than its own 9-row minimum) and left `#lower-tabs` — the
+  Activity/Checks/Evidence tabs — exactly **1** visible row, at the very
+  bottom edge, effectively unreachable. Confirmed empirically with a
+  headless pilot probe (`lower-tabs` region height before fix: 1 visible
+  row at 60×20; `graph-row` size 18 instead of its declared 9-row minimum).
+  Fixed with the smallest change that resolves it: `max-height: 60%` added
+  to `#graph-row` in `src/apmx/tui/app.py`. This cap is well above
+  `#graph-row`'s natural height at every already-validated larger size
+  (confirmed unchanged at 80×24, 100×30, 120×40 before/after), so it only
+  engages at the narrow 60×20 floor. After the fix, `#lower-tabs` gets 8
+  visible rows at 60×20, and the real `k`/`e` keys switch to a Checks/
+  Evidence pane body that is actually on screen. Regression test:
+  `tests/unit/tui/test_app.py::test_lower_tabs_stay_reachable_at_declared_minimum_60x20`
+  — confirmed to fail (`1 >= 5` assertion) against the pre-fix CSS and pass
+  against the fix.
+
+Both new tests pass together with the full existing
+`tests/unit/tui/test_app.py` suite (9/9), and `ruff check`/`ruff format
+--check` are clean for both changed files.
+
+### Plain-mode no-ANSI proof: exact reproducible command
+
+The earlier "zero ANSI escapes" claim is reproducible with the following
+exact command (hermetic producer, no model spend, same fork/join factory
+used throughout this track):
+
+```
+VENV=<your-venv>
+PATH="$VENV/bin:$PATH" PYTHONPATH=<repo>/src "$VENV/bin/python" \
+  run_live_tui.py --from <factory-dir> --on copilot \
+  --allow-host-access --allow-unproven-inputs \
+  >stdout.log 2>stderr.log </dev/null
+```
+
+Exit code `0`; stdout ends with `Contracts: 4/4 completed`, `Checks: 4/4
+passed`, and a retained evidence directory; stderr is empty. A
+regex byte-scan of stdout (`\x1b\[[0-9;?]*[a-zA-Z]`) over all 3302 bytes
+finds zero matches. The raw transcript is preserved (outside the repo, per
+this track's receipts policy) as
+`~/.copilot/session-state/5072cbd4-7912-45c6-b6ab-d4ba84303cb7/files/plain-run-evidence/{stdout,stderr}.log`.
+
 ## Milestones and acceptance
 
 1. Persist docs/textual-design.md and refine the wireframes against the real

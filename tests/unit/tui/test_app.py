@@ -107,6 +107,76 @@ def test_detail_pane_is_scrollable_when_narrow_terminal_clips_content(tmp_path):
     _run(scenario())
 
 
+def test_detail_pane_reachable_by_keyboard_alone_at_80x24(tmp_path):
+    """Regression for a reviewer-caught gap: the previous scroll test proved
+    the pane *can* scroll once something calls ``.focus()``/``scroll_end()``
+    directly, but never proved a real keyboard user can actually tab onto it
+    and page down to it -- at the declared-supported 80x24 floor -- without
+    that test-only shortcut. ``tab`` is the app's real, bound navigation key
+    (see BINDINGS); this drives only that key, never ``.focus()``."""
+    graph = _branched_graph(tmp_path)
+    app = FactoryApp(graph)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            card_count = len(app.query(ContractCard))
+            # Tab past every card (real keyboard navigation, matching the
+            # bound "tab" -> focus_next action) until focus reaches DetailPane.
+            for _ in range(card_count):
+                await pilot.press("tab")
+            await pilot.pause()
+            detail = app.query_one(DetailPane)
+            assert app.focused is detail, "real Tab presses must land keyboard focus on DetailPane"
+            assert detail.virtual_size.height > detail.size.height, (
+                "test terminal too generous to exercise overflow; selection drifted"
+            )
+            for _ in range(detail.virtual_size.height):
+                await pilot.press("down")
+            await pilot.pause()
+            assert detail.scroll_y == pytest.approx(detail.max_scroll_y), (
+                "pressing down (real key, not scroll_end()) must reach the pane's "
+                "final, otherwise-clipped fields such as Checks:"
+            )
+
+    _run(scenario())
+
+
+def test_lower_tabs_stay_reachable_at_declared_minimum_60x20(tmp_path):
+    """Regression for a layout bug a reviewer's screenshot inspection caught:
+    at the declared-supported 60x20 floor, #graph-row's and #lower-tabs'
+    combined min-height (9 + 10 = 19) exceeded the 18 rows left after
+    Header/Footer, and Textual's over-constrained fr resolution gave
+    #graph-row *all* remaining rows instead of its 1fr share -- squeezing
+    #lower-tabs (the Activity/Checks/Evidence tabs) to zero visible rows.
+    Text was still technically present in the DOM, so a naive assertion on
+    widget existence would have passed; this checks actual on-screen
+    visibility, and that the real "k"/"e" keys still switch to a tab whose
+    body is actually on screen, not just allocated off it."""
+    graph = _branched_graph(tmp_path)
+    app = FactoryApp(graph)
+
+    async def scenario():
+        async with app.run_test(size=(60, 20)) as pilot:
+            await pilot.pause()
+            lower = app.query_one("#lower-tabs")
+            visible_rows = app.size.height - lower.region.y
+            assert visible_rows >= 5, (
+                f"#lower-tabs only has {visible_rows} visible row(s) at 60x20 "
+                "-- Activity/Checks/Evidence tabs are not keyboard-reachable"
+            )
+            for key, pane_id in (("k", "#checks-pane"), ("e", "#evidence-pane")):
+                await pilot.press(key)
+                await pilot.pause()
+                pane = app.query_one(pane_id)
+                pane_visible_rows = app.size.height - pane.region.y
+                assert pane_visible_rows >= 1, (
+                    f"{pane_id} selected via '{key}' has no visible rows at 60x20"
+                )
+
+    _run(scenario())
+
+
 def test_pending_and_running_cards_use_distinct_symbols(tmp_path):
     """Regression for the design-review-loop defect where every card showed
     the same "[>]" glyph regardless of whether it was pending or running."""

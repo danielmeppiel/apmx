@@ -487,6 +487,16 @@ class FactoryApp(App[None]):
     #graph-row {
         height: 1fr;
         min-height: 9;
+        /* Without this cap, Textual's over-constrained min-height
+        resolution (graph-row's min 9 + lower-tabs' min 10 exceeds the
+        body space a 60x20 terminal has left after Header/Footer) gives
+        graph-row *all* remaining rows instead of its 1fr share, leaving
+        zero visible rows for #lower-tabs -- the Activity/Checks/Evidence
+        tabs silently become unreachable rather than merely cramped. A
+        60% cap is well above graph-row's natural height at every size
+        already validated (80x24, 120x40, ...) so it only engages at the
+        narrow 60x20 floor this product declares supported. */
+        max-height: 60%;
     }
     #detail-pane {
         width: 1fr;
