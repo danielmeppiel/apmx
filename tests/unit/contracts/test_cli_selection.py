@@ -28,7 +28,9 @@ def test_package_root_and_copilot_are_explicit_defaults(
         ["--from", str(root), "--plan", *(["--on", harness] if harness else [])],
     )
     assert result.exit_code == 0, result.output
-    assert "2 contracts / 2 artifacts / 2 planned checks" in result.output
+    assert "   2 contracts   " in result.output
+    assert f"Nothing ran. Run it with:  apmx --from {root.name}" not in result.output
+    assert str(caller) not in result.output
     assert f"{harness or 'copilot'} / default model" in result.output
     assert calls == [] and not (caller / ".apm").exists()
 

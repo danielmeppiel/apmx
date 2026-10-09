@@ -64,7 +64,7 @@ def test_reuse_plan_shows_resolved_skill_identity_before_consent(
     )
     ContractLogger(verbose=verbose).render_plan(plan, ())
     output = capsys.readouterr().out
-    assert "Imported skill: handoff-style" in output
+    assert "imports: handoff-style" in output
     assert (
         "Source identity: ../handoff-style; observed-local-source, not a cryptographic pin"
         in output
@@ -129,7 +129,7 @@ def test_ordered_phases_final_once_and_frozen_transcript(tmp_path: Path, capsys)
     positions = [
         output.index(name)
         for name in (
-            "Execution: local (not sandboxed)",
+            "Not sandboxed: agents and checks",
             "Contract  hello.contract.md   copilot / requested",
             "attempt 1/1",
             "[+] COMPLETE   1/1 contract   1/1 check",
@@ -398,22 +398,23 @@ def test_plan_is_nonexecuting_no_prompt_or_model_claim(
     )
     ContractLogger(verbose=verbose).render_plan(plan, (FileEntry("input.txt", "sha", 7, 0o644),))
     output = capsys.readouterr().out
-    assert "Preview: hello.contract.md -> output.txt" in output
-    assert "Nothing will execute or download." in output
-    assert "Copilot / default model" in output
+    assert "Contract  hello.contract.md   copilot / default model\n" in output
+    assert "\nhello   needs input.txt -> produces output.txt\n" in output
+    assert "        checks: content   1 attempt\n" in output
     assert "native default" not in output
-    assert "Input: input.txt" in output
-    assert "Checks: content" in output
-    assert "Time limits: run" in output
-    assert "Complete execution returns COMPLETE (0); this does not certify isolation." in output
+    assert "Nothing ran. Run it with:  apmx hello.contract.md --allow-host-access\n" in output
+    assert "Runs are local and not sandboxed; APMX does not cap model charges." in output
+    assert ("Time limits: run" in output) is verbose
+    assert (
+        "Complete execution returns COMPLETE (0); this does not certify isolation." in output
+    ) is verbose
     assert ("Baseline: 1 files, 7 bytes" in output) is verbose
     assert ("Native executable:" in output) is verbose
     assert ("Policy: no-policy" in output) is verbose
     assert ("Requested model:" in output) is verbose
     assert "DO NOT DUMP" not in output
     assert ("private check command" in output) is verbose
-    assert "To run, use apmx with --allow-host-access and without --plan." in output
-    assert "Imported skill:" not in output
+    assert "imports:" not in output
     for stale in ("Installed skills: 0", "Watchdogs", "Harness:", "available login details", "[!]"):
         assert stale not in output
     assert "***" not in output
@@ -694,8 +695,8 @@ def test_job_heading_separates_preparation_without_leading_blank(
     )
     transcript = (tmp_path / "transcript.log").read_text()
     for text, heading in ((output, "Contract  job"), (transcript, "Contract 1/1: job")):
-        assert text.index("Execution: local (not sandboxed)") < text.index(heading)
-        assert text.count("Execution: local (not sandboxed)") == 1
+        assert text.index("Not sandboxed: agents and checks") < text.index(heading)
+        assert text.count("Not sandboxed: agents and checks") == 1
     assert "Produces: result.txt" in transcript
     assert "Produces: result.txt" not in output
 
@@ -1528,7 +1529,10 @@ def test_full_source_artifact_and_log_paths_stay_copyable(
     assert (f"        Logs: {relative}/transcript.log" in lines) is verbose
     assert lines.count(f"Saved     {relative}/   (attempt files + logs)") == 1
     assert lines.count(f"        Record: {relative}/record.json") == int(verbose)
-    assert lines.count("[i] Execution: local (not sandboxed)") == 1
+    assert (
+        lines.count("[i] Not sandboxed: agents and checks can use host files, network and logins.")
+        == 1
+    )
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -1602,8 +1606,11 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
     if verbose:
         assert output.index("Copilot >") < output.index("Check handoff > Required fields")
         assert output.index("[+] PASS handoff") < output.index("attempt 1/1")
-    assert output.count("[i] Execution: local (not sandboxed)") == 1
-    assert "Agents and checks can use host files, network and available logins." in output
+    assert (
+        output.count("[i] Not sandboxed: agents and checks can use host files, network and logins.")
+        == 1
+    )
+    assert "agents and checks can use host files, network and logins." in output
     assert "Model usage may cost money. Run only contracts you trust." in output
     for retired in ("Evidence", "Directory:", "Artifacts:", "The run stopped"):
         assert retired not in output
@@ -1825,7 +1832,9 @@ def test_header_gap_metadata_and_elapsed_time_form_a_secondary_level(
         model="native-model",
     )
     context = rich_console.export_text(clear=False)
-    assert context.startswith("[i] Execution: local (not sandboxed)\n")
+    assert context.startswith(
+        "[i] Not sandboxed: agents and checks can use host files, network and logins.\n"
+    )
     assert (
         "Run only contracts you trust.\n\n"
         "Contract  contracts/handoff.contract.md   copilot / native-model\n"
@@ -2036,9 +2045,9 @@ def test_packaged_preview_uses_stable_identity_and_gates_source_metadata(
     )
     ContractLogger(verbose=verbose).render_plan(plan, ())
     output = capsys.readouterr().out
-    assert "Preview: contracts/handoff.contract.md -> handoff.json" in output
-    assert "Nothing will execute or download." in output
-    assert "without --plan" in output
+    assert "Contract  contracts/handoff.contract.md   copilot / fixture-model" in output
+    assert "contracts/handoff   needs notes.txt -> produces handoff.json" in output
+    assert "Nothing ran. Run it with:" in output
     assert ("Source: local-package/" + relative in output) is verbose
     assert (f"Package: {package}" in output) is verbose
     assert "private-source-copy" not in output

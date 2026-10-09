@@ -1,0 +1,10 @@
+Contract  first.contract.md   copilot /
+          fixture-model
+
+first   needs notes.md -> produces
+        first.json, second.json
+        checks: identity   1 attempt
+
+Nothing ran. Run it with:  apmx first.contract.md --model fixture-model --allow-host-access
+Runs are local and not sandboxed; APMX
+does not cap model charges.

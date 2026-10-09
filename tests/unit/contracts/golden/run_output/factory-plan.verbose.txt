@@ -1,0 +1,22 @@
+Factory  factory   2 contracts   copilot / fixture-model
+
+[1/2] first    needs notes.md -> produces first.json, second.json
+               checks: identity   budget 3 attempts, 600s
+    Source: factory/first.contract.md
+    Check identity: python -I checks/check.py
+[2/2] second   needs notes.md, first.json*, second.json* -> produces final.json
+               checks: identity   1 attempt
+    Source: factory/second.contract.md
+    Check identity: python -I checks/check.py
+               * from an earlier contract
+    Saved under: factory/.apm/
+    Required checks must pass before dependent work starts.
+
+Nothing ran. Run it with:  apmx ./factory --model fixture-model
+Unattended:                apmx ./factory --model fixture-model --allow-host-access --allow-unproven-inputs
+Runs are local and not sandboxed; APMX does not cap model charges.
+Handoffs: fully checked local outputs (--allow-unproven-inputs); assurance remains unproven.
+    Nothing will execute or download. Dependency resolution uses no model calls.
+    Handoff policy: fully checked local outputs (--allow-unproven-inputs); assurance remains unproven
+    Limits: 64 discovered contracts; retries only within the explicit per-contract budgets above.
+    Without --plan or consent flags, an interactive factory invocation asks for confirmation before execution. COMPLETE does not certify isolation.

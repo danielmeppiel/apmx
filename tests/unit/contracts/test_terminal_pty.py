@@ -219,7 +219,10 @@ def test_real_closed_stdout_pipe_keeps_draining_and_finishes_record(
     assert child.stdout is not None
     assert child.stderr is not None
     try:
-        assert b"[i] Execution: local (not sandboxed)" in child.stdout.readline()
+        assert (
+            b"[i] Not sandboxed: agents and checks can use host files, network and logins."
+            in child.stdout.readline()
+        )
         child.stdout.close()
         child.wait(timeout=12)
         errors = child.stderr.read()

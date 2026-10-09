@@ -153,7 +153,10 @@ def _select_entry(
 @click.option(
     "--allow-unproven-inputs",
     is_flag=True,
-    help="For factories, permit fully checked native handoffs; not certification.",
+    help=(
+        "For factories, permit fully checked native handoffs; not certification. "
+        "A single contract has no handoffs, so it ignores this flag."
+    ),
 )
 @click.option(
     "--allow-host-access",
@@ -194,8 +197,6 @@ def main(
         package_factory = package_ref is not None and not contract.endswith(".contract.md")
         if not planning and factory_root is None and not package_factory:
             logger.execution_context()
-        if allow_unproven_inputs and factory_root is None and not package_factory:
-            raise click.UsageError("--allow-unproven-inputs requires a factory directory.")
         if package_ref is None:
             result = invoke_contract(
                 ctx,

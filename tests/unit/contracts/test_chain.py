@@ -122,9 +122,11 @@ def test_preview_is_free_symbolic_and_engine_refuses_it(
     before = {p.name: p.read_bytes() for p in caller.iterdir()}
     result = CliRunner().invoke(main, [str(caller), "--on", "copilot", "--plan"])
     assert result.exit_code == 0, result.output
-    assert "2 contracts" in result.output and "dependent work" in result.output
-    assert "VERIFIED-only" in result.output and "Every run starts fresh" in result.output
-    assert "Produces: first.txt" in result.output and "Produces: last.txt" in result.output
+    assert "   2 contracts   copilot / default model" in result.output
+    assert "needs first.txt* -> produces last.txt" in result.output
+    assert "* from an earlier contract" in result.output
+    assert "Nothing ran. Run it with:" in result.output
+    assert "APMX does not cap model charges" in result.output
     assert "Final outputs:" not in result.output
     assert before == {p.name: p.read_bytes() for p in caller.iterdir()}
     planned = prepare(caller).nodes[-1].plan
@@ -493,7 +495,9 @@ def test_cancellation_and_consent_are_distinct(
             "--allow-unproven-inputs",
         ],
     )
-    assert invalid.exit_code == 2 and "requires a factory directory" in invalid.output
+    # A single contract has no handoffs: the flag is accepted and grants nothing else.
+    assert invalid.exit_code == 21 and "requires a factory directory" not in invalid.output
+    assert "--allow-host-access" in invalid.output
 
 
 def test_frozen_inventory_rejects_last_moment_resource_change(
@@ -746,3 +750,37 @@ def test_view_reads_retained_roots_not_changed_live_caller(
     view = Path(json.loads(result.record_path.read_bytes())["artifacts"]["root"])
     assert (view / "seed.txt").read_bytes() == b"seed"
     assert (caller / "seed.txt").read_bytes() == b"caller edited after assessment"
+
+
+@pytest.mark.parametrize("planning", [False, True])
+def test_allow_unproven_inputs_is_a_no_op_for_a_single_contract(
+    caller: Path, monkeypatch: pytest.MonkeyPatch, planning: bool
+) -> None:
+    """The flag only widens factory handoffs; a leaf has none, so nothing changes."""
+    write_contract(caller, "solo.contract.md", ("seed.txt",), "solo.txt")
+    calls = producer(monkeypatch)
+    outputs, policies = [], []
+    for flags in ([], ["--allow-unproven-inputs"]):
+        result = CliRunner().invoke(
+            main,
+            [
+                "solo.contract.md",
+                "--on",
+                "copilot",
+                *(["--plan"] if planning else ["--allow-host-access"]),
+                *flags,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "requires a factory directory" not in result.output
+        outputs.append(result.output)
+        if not planning:
+            record = max((caller / ".apm/runs").glob("*/record.json"))
+            data = json.loads(record.read_bytes())
+            policies.append((data["handoff_policy"], data["advisory_consent"], data["execution"]))
+    assert len(calls) == (0 if planning else 2)
+    if planning:
+        assert outputs[0] == outputs[1]
+    else:
+        assert policies[0] == policies[1]
+        assert all("[+] COMPLETE   1/1 contract" in output for output in outputs)

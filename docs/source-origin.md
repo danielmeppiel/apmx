@@ -305,8 +305,8 @@ not survive. Missing or changed evidence cannot authorize downstream work.
 
 Without an explicit local-development exception, the handoff policy requires
 VERIFIED. The current native profile cannot emit that result. For an interactive
-factory invocation without consent flags, APMX first lists every contract's
-outputs and planned checks, with total contract, artifact and check counts.
+factory invocation without consent flags, APMX first lists every contract in
+order with its inputs, outputs, planned checks and attempt budget.
 It then describes local host access, package installation and model costs once,
 immediately before asking for confirmation. The default is no. No installation,
 model or check work starts before a positive answer.

@@ -644,6 +644,15 @@ class ContractLogger:
         self._factory: _FactoryView | None = None
         self._invocation: str | None = None
 
+    def _local_ref(self, reference: str) -> str:
+        """Show a local package path relative to the caller, as a ./PATH the CLI accepts."""
+        if not Path(reference).is_absolute():
+            return reference
+        relative = portable_link_relpath(reference, self._display_root or self._caller_root)
+        if relative is None:
+            return reference
+        return relative if relative.startswith(".") else "./" + relative
+
     def remember_invocation(
         self,
         selection: str,
@@ -657,7 +666,7 @@ class ContractLogger:
         """Keep the user's own selection so Next lines can name a copyable rerun."""
         parts = ["apmx"]
         if package_ref:
-            parts += ["--from", package_ref]
+            parts += ["--from", self._local_ref(package_ref)]
             if selection not in {"", "."}:
                 parts.append(selection)
         else:
@@ -1696,23 +1705,56 @@ class ContractLogger:
             else plan.contract.path
         )
         identity = self._job_identity(source, relative)
-        self._write(
-            f"Preview: {identity} -> {plan.contract.output_label}", severity="heading", indent=0
+        name = identity.removesuffix(".contract.md")
+        self._show(
+            _DisplayLine(
+                f"Contract  {identity}   {plan.harness} / {plan.model or 'default model'}",
+                role=_Role.TITLE,
+                accent=f"Contract  {identity}",
+                level=0,
+                layout=_Layout.PROSE,
+                hang=len("Contract  "),
+            )
         )
-        self._write(f"{self._harness} / {plan.model or 'default model'}", severity="detail")
-        self._write("Nothing will execute or download.")
-        for name in plan.contract.needs:
-            self._write(f"Input: {name}")
-        self._write("Checks: " + ", ".join(check.name for check in plan.contract.checks))
-        for skill in plan.imported_skills:
-            self._write(f"Imported skill: {skill.name}")
+        self._display.gap()
+        self._show(self._block_header(name, plan.contract.needs, plan.contract.output_label, None))
+        body = len(name) + 3
+        self._show(
+            _DisplayLine(
+                "checks: "
+                + ", ".join(check.name for check in plan.contract.checks)
+                + f"   {self._attempts_text(plan.contract.budget)}",
+                level=body,
+                layout=_Layout.PROSE,
+            )
+        )
+        if plan.imported_skills:
+            self._show(
+                _DisplayLine(
+                    "imports: " + ", ".join(skill.name for skill in plan.imported_skills),
+                    level=body,
+                    layout=_Layout.PROSE,
+                )
+            )
+        # A single contract has no interactive consent: running it needs the flag.
+        command = self._invocation or f"apmx {identity}"
+        if "--allow-host-access" not in command.split():
+            command += " --allow-host-access"
+        self._plan_footer(command)
         self._write(
             f"Time limits: run {plan.limits.attempt_seconds:g}s; "
-            f"each check {plan.limits.check_seconds:g}s"
+            f"each check {plan.limits.check_seconds:g}s",
+            severity="detail",
+            detail=True,
+            indent=0,
         )
         self.repair_budget(plan.contract.budget, preview=True)
-        self._write("Complete execution returns COMPLETE (0); this does not certify isolation.")
-        self._write("To run, use apmx with --allow-host-access and without --plan.")
+        self._write(
+            "Complete execution returns COMPLETE (0); this does not certify isolation.",
+            severity="detail",
+            detail=True,
+            indent=0,
+        )
         self._write(f"Source: {self._path(source)}", severity="detail", detail=True)
         if plan.source and plan.source.package_ref:
             self._write(f"Package: {plan.source.package_ref}", severity="detail", detail=True)
@@ -1796,7 +1838,7 @@ class ContractLogger:
                 f"{'attempt' if budget.max_attempts == 1 else 'attempts'}, "
                 f"{budget.max_seconds:g}s total for execution and checks. "
                 "Only rejected outputs can be retried; this is not a model spending limit.",
-                detail=not preview,
+                detail=True,
             )
 
     def repair_finished(self, *, reason: str, record: Path, attempts: int) -> None:
@@ -1825,44 +1867,102 @@ class ContractLogger:
     def _harness_label(name: str) -> str:
         return {"copilot": "Copilot", "opencode": "OpenCode"}.get(name, name)
 
+    @staticmethod
+    def _attempts_text(budget: RepairBudget | None) -> str:
+        """Plan facts: the authored budget, or the engine's single attempt."""
+        if budget is None:
+            return "1 attempt"
+        return f"budget {_plural(budget.max_attempts, 'attempt')}, {budget.max_seconds:g}s"
+
+    def _plan_footer(self, command: str, *, unattended: str | None = None) -> None:
+        """Truthful plan ending: nothing ran, how to run it, and the short safety facts."""
+        self._display.gap()
+        rows = [("Nothing ran. Run it with:", command)]
+        if unattended:
+            rows.append(("Unattended:", f"{command} {unattended}"))
+        width = max(len(label) for label, _ in rows)
+        for label, value in rows:
+            self._show(_DisplayLine(f"{label.ljust(width)}  {value}", level=0))
+        self._show(
+            _DisplayLine(
+                "Runs are local and not sandboxed; APMX does not cap model charges.",
+                level=0,
+                layout=_Layout.PROSE,
+            )
+        )
+
     def render_factory_work(
-        self, graph: Graph, *, project_root: Path, harness: str = "copilot"
+        self,
+        graph: Graph,
+        *,
+        project_root: Path,
+        harness: str = "copilot",
+        model: str | None = None,
+        label: str | None = None,
     ) -> None:
+        """Compact work preview shared by --plan and interactive consent."""
         self.stop_activity()
         self._harness = self._harness_label(harness)
         count = self._factory_contract_count = len(graph.order)
-        artifacts = sum(len(contract.outputs) for contract in graph.order)
-        checks = sum(len(contract.checks) for contract in graph.order)
-        self._write(f"Factory: {self._path(graph.root)}", severity="heading", indent=0)
-        self._write(
-            f"{count} {'contract' if count == 1 else 'contracts'} / "
-            f"{artifacts} {'artifact' if artifacts == 1 else 'artifacts'} / "
-            f"{checks} planned {'check' if checks == 1 else 'checks'}",
-            layout=_Layout.PROSE,
-        )
         catalog = tuple(contract.path for contract in graph.order)
+        names = {path: self._contract_identity(path, catalog) for path in catalog}
+        width = len(f"[{count}/{count}]") + 1 + max(len(name) for name in names.values())
+        label = self._local_ref(label) if label else graph.root.name
+        title = f"Factory  {safe_text(label, limit=256)}"
+        self._show(
+            _DisplayLine(
+                f"{title}   {_plural(count, 'contract')}   {harness} / {model or 'default model'}",
+                role=_Role.TITLE,
+                accent=title,
+                level=0,
+                layout=_Layout.PROSE,
+                hang=len("Factory  "),
+            )
+        )
+        self._display.gap()
+        starred = False
         for index, contract in enumerate(graph.order, start=1):
-            self._preview_node(index, count, contract.path, catalog=catalog)
-            self._write("Produces: " + ", ".join(contract.outputs))
-            self._write("Checks: " + ", ".join(check.name for check in contract.checks))
-            self.repair_budget(contract.budget, preview=True)
-            self._write(f"Source: {self._path(contract.path)}", severity="detail", detail=True)
-            for value in contract.needs:
-                kind = (
-                    "from an earlier step" if value in graph.inputs(contract) else "starting file"
+            upstream = graph.inputs(contract)
+            starred = starred or bool(set(contract.needs) & set(upstream))
+            needs = tuple(f"{name}*" if name in upstream else name for name in contract.needs)
+            header = self._block_header(
+                names[contract.path],
+                needs,
+                ", ".join(contract.outputs),
+                None,
+                order=f"[{index}/{count}]",
+                width=width,
+            )
+            self._show(replace(header, hang=width + 3))
+            self._show(
+                _DisplayLine(
+                    "checks: "
+                    + ", ".join(check.name for check in contract.checks)
+                    + f"   {self._attempts_text(contract.budget)}",
+                    level=width + 3,
+                    layout=_Layout.PROSE,
                 )
-                self._write(f"Input: {value} ({kind})")
+            )
+            self._write(f"Source: {self._path(contract.path)}", severity="detail", detail=True)
             for check in contract.checks:
                 self._write(f"Check {check.name}: {check.command}", severity="detail", detail=True)
-        self._display.gap()
+        if starred:
+            self._show(
+                _DisplayLine(
+                    "* from an earlier contract", level=width + 3, layout=_Layout.PROSE, hang=2
+                )
+            )
         self._write(
-            f"Evidence: will be saved under {self._path(project_root / '.apm')}/",
+            f"Saved under: {self._path(project_root / '.apm')}/",
+            severity="detail",
+            detail=True,
             indent=0,
         )
         self._write(
             "Required checks must pass before dependent work starts.",
+            severity="detail",
+            detail=True,
             indent=0,
-            layout=_Layout.PROSE,
         )
         self._display.gap()
 
@@ -1880,10 +1980,9 @@ class ContractLogger:
         """Authorize acquisition only; factory execution still needs its own consent."""
         self._write(f"Factory source: {package_ref}", severity="heading", indent=0)
         self._write(
-            "APMX will load the factory and use APM to install its dependencies in a temporary "
-            "workspace. This can use host files, download packages and use available logins. "
-            "No agent or check runs yet; you will inspect "
-            "the steps and approve execution separately. Load only factories you trust.",
+            "Loading installs its APM dependencies in a temporary workspace and can use host "
+            "files, network and logins. Nothing runs yet; you approve execution next. "
+            "Load only factories you trust.",
             layout=_Layout.PROSE,
             indent=0,
         )
@@ -1912,13 +2011,6 @@ class ContractLogger:
                 identity = self._path(contract)
         return identity.removesuffix(".contract.md")
 
-    def _preview_node(
-        self, index: int, count: int, contract: Path, *, catalog: tuple[Path, ...] = ()
-    ) -> None:
-        self._display.gap()
-        identity = self._contract_identity(contract, catalog)
-        self._write(f"Contract {index}/{count}: {identity}", severity="heading", indent=0)
-
     def factory_started(self, plan: ChainPlan) -> None:
         """Show the admitted graph once: name, size and agent, before any contract runs."""
         catalog = tuple(node.plan.contract.path for node in plan.nodes)
@@ -1944,7 +2036,7 @@ class ContractLogger:
             )
         root = plan.graph.root
         source = plan.nodes[0].plan.source
-        label = source.package_ref if source and source.package_ref else root.name
+        label = self._local_ref(source.package_ref) if source and source.package_ref else root.name
         order = len(f"[{len(nodes)}/{len(nodes)}]")
         self._factory = _FactoryView(
             safe_text(label or self._path(root), limit=256),
@@ -2019,60 +2111,61 @@ class ContractLogger:
         if self._display.disclosure_shown:
             return
         self._display.disclosure_shown = True
-        self._write("Execution: local (not sandboxed)", severity="notice", indent=0)
-        if factory:
-            self._write(
-                "Agents and checks can access host files, network and available logins.",
-                layout=_Layout.PROSE,
-            )
-            self._write(
-                "Package dependencies may be installed; model usage may cost money.",
-                layout=_Layout.PROSE,
-            )
-            self._write("Run only contracts you trust.")
-        else:
-            self._write(
-                "Agents and checks can use host files, network and available logins.",
-                layout=_Layout.PROSE,
-            )
-            self._write(
-                "Model usage may cost money. Run only contracts you trust.", layout=_Layout.PROSE
-            )
+        self._write(
+            "Not sandboxed: agents and checks can use host files, network and logins.",
+            severity="notice",
+            indent=0,
+            layout=_Layout.PROSE,
+        )
+        self._write(
+            "Packages may be installed; model usage may cost money. Run only contracts you trust."
+            if factory
+            else "Model usage may cost money. Run only contracts you trust.",
+            indent=4,
+            layout=_Layout.PROSE,
+        )
         self._display.gap()
 
     def render_chain_plan(self, plan: ChainPlan) -> None:
+        first = plan.nodes[0].plan
         self.render_factory_work(
             plan.graph,
-            project_root=plan.nodes[0].plan.project_root,
-            harness=plan.nodes[0].plan.harness,
+            project_root=first.project_root,
+            harness=first.harness,
+            model=first.model,
+            label=first.source.package_ref if first.source else None,
         )
-        self._write(f"{plan.nodes[0].plan.harness} / {plan.nodes[0].plan.model or 'default model'}")
-        self._write("Nothing will execute or download. Dependency resolution uses no model calls.")
-        policy = (
-            "fully checked local outputs (--allow-unproven-inputs); assurance remains unproven"
-            if plan.allow_unproven_inputs
-            else "strict VERIFIED-only; native outputs block"
-        )
-        self._write(f"Handoff policy: {policy}")
-        self._write("Every run starts fresh; APMX does not cap model charges.")
-        self._write(
-            f"Limits: {plan.nodes[0].plan.limits.chain_contracts} discovered contracts; "
+        command = self._invocation or f"apmx ./{self._path(plan.graph.root)}"
+        self._plan_footer(command, unattended="--allow-host-access --allow-unproven-inputs")
+        if plan.allow_unproven_inputs:
+            self._show(
+                _DisplayLine(
+                    "Handoffs: fully checked local outputs (--allow-unproven-inputs); "
+                    "assurance remains unproven.",
+                    level=0,
+                    layout=_Layout.PROSE,
+                )
+            )
+        for detail in (
+            "Nothing will execute or download. Dependency resolution uses no model calls.",
+            "Handoff policy: "
+            + (
+                "fully checked local outputs (--allow-unproven-inputs); assurance remains unproven"
+                if plan.allow_unproven_inputs
+                else "strict VERIFIED-only; native outputs block"
+            ),
+            f"Limits: {first.limits.chain_contracts} discovered contracts; "
             + (
                 "retries only within the explicit per-contract budgets above."
                 if any(node.plan.contract.budget is not None for node in plan.nodes)
                 else "one attempt per step, no retries."
-            )
-        )
-        self._write(
-            "Without --plan or consent flags, an interactive factory invocation asks for "
-            "confirmation before execution."
-        )
-        if not plan.allow_unproven_inputs:
-            self._write(
-                "For trusted local automation, explicitly add --allow-host-access and "
-                "--allow-unproven-inputs to permit fully checked native handoffs. "
-                "COMPLETE does not certify isolation."
-            )
+            ),
+            (
+                "Without --plan or consent flags, an interactive factory invocation asks for "
+                "confirmation before execution. COMPLETE does not certify isolation."
+            ),
+        ):
+            self._write(detail, severity="detail", detail=True, indent=0)
 
     def chain_stopped(self, reason: str, *, outcome: Outcome, code: str) -> None:
         self._chain_stop = _StopContext(outcome, reason, code)

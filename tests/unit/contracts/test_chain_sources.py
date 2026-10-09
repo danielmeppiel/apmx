@@ -81,8 +81,8 @@ def test_public_package_factory_keeps_source_resources_and_consumer_separate(
     assert original == {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
     assert (caller / "seed.txt").read_bytes() == b"seed"
     if planning:
-        evidence = [line for line in result.output.splitlines() if line.startswith("Evidence:")]
-        assert evidence == ["Evidence: will be saved under .apm/"]
+        assert "Nothing ran. Run it with:  apmx --from " in result.output
+        assert "Evidence" not in result.output
         assert not (caller / ".apm").exists()
         return
     for plan, snapshot, _ in calls:
@@ -127,7 +127,7 @@ def test_package_factory_separates_preparation_and_execution_consent(
     if interactive:
         assert "Load this factory and install its dependencies? [y/N]" in result.output
     if preparations:
-        assert result.output.index("Load this factory") < result.output.index("Factory:")
+        assert result.output.index("Load this factory") < result.output.index("Factory  ")
         assert "Run these 2 contracts with Copilot? [y/N]" in result.output
     if executions:
         record = json.loads(next((caller / ".apm/chains").glob("*/record.json")).read_bytes())

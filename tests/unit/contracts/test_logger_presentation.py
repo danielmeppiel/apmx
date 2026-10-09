@@ -465,7 +465,7 @@ def test_factory_and_leaves_share_only_screen_state_with_immutable_step_context(
     assert "      produces one.txt\n" in output and "      produces two.txt\n" in output
     for retired in ("Evidence", "Directory:", "Record:", "Harness:"):
         assert retired not in output
-    assert output.count("Execution: local (not sandboxed)") == 1
+    assert output.count("Not sandboxed: agents and checks") == 1
     assert "first/record.json" not in output and "second/record.json" not in output
     assert output.count("COMPLETE") == 1
     assert factory._display is first._display is second._display
@@ -677,7 +677,7 @@ def test_completed_factory_leaves_retain_evidence_without_repeating_summary(
         ChainResult("factory", tmp_path / "record.json", Outcome.COMPLETE, True, tuple(runs))
     )
     output = capsys.readouterr().out
-    assert output.count("Execution: local (not sandboxed)") == 1
+    assert output.count("Not sandboxed: agents and checks") == 1
     assert "Harness:" not in output
     assert output.count("COMPLETE") == 1
     assert "[+] COMPLETE   2/2 contracts   2/2 checks   " in output
@@ -861,22 +861,26 @@ def test_factory_preview_distinguishes_strict_policy_from_explicit_native_opt_in
     plan = ChainPlan(graph, (Node(leaf, ()),), allow_unproven_inputs=allow_unproven)
     ContractLogger(verbose=verbose).render_chain_plan(plan)
     output = capsys.readouterr().out
-    assert "Nothing will execute or download. Dependency resolution uses no model calls." in output
+    # Default plan: compact work list, "Nothing ran", how to run, short safety facts.
+    assert "[1/1] job   needs seed.txt -> produces output.txt\n" in output
+    assert "            checks: structure   1 attempt\n" in output
+    assert "Nothing ran. Run it with:  apmx ./" in output
+    assert "--allow-host-access --allow-unproven-inputs" in output
+    assert "Runs are local and not sandboxed; APMX does not cap model charges." in output
     assert (
-        "Handoff policy: strict VERIFIED-only; native outputs block" in output
-    ) is not allow_unproven
-    assert (
-        "fully checked local outputs (--allow-unproven-inputs); assurance remains unproven"
+        "Handoffs: fully checked local outputs (--allow-unproven-inputs); assurance remains"
         in output
     ) is allow_unproven
+    # The full policy lecture is verbose detail, unchanged in substance.
+    assert (
+        "Nothing will execute or download. Dependency resolution uses no model calls." in output
+    ) is verbose
+    assert ("Handoff policy: strict VERIFIED-only; native outputs block" in output) is (
+        verbose and not allow_unproven
+    )
+    assert ("COMPLETE does not certify isolation." in output) is verbose
     assert "UNPROVEN inputs block" not in output
-    assert "--allow-unproven-inputs" in output and "--plan" in output
-    if not allow_unproven:
-        assert "--allow-host-access" in output
-        assert "COMPLETE does not certify isolation." in output
-    assert "Produces: output.txt" in output and "Final outputs:" not in output
-    assert "Input: seed.txt (starting file)" in output
-    assert "Checks: structure" in output
+    assert "Final outputs:" not in output and "*" not in output
     assert "PRIVATE_PROMPT" not in output and "[+]" not in output
     assert ("PRIVATE_CHECK" in output) is verbose
     assert "[+] COMPLETE" not in output
