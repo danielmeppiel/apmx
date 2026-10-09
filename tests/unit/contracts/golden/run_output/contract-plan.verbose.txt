@@ -9,7 +9,7 @@ Runs are local and not sandboxed; APMX does not cap model charges.
     Complete execution returns COMPLETE (0); this does not certify isolation.
     Source: first.contract.md
     Requested model: fixture-model
-    Native executable: /not/invoked/copilot
+    Native executable: copilot
     Baseline: 1 files, 33 bytes
     Check identity: python -I checks/check.py
     Policy: no-policy

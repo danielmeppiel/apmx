@@ -72,7 +72,8 @@ def _plan(root: Path, budget=None) -> ChainPlan:
     edges = tuple(Edge(second.path, name, first.path) for name in first.outputs)
     graph = Graph(root, (second.path,), (first, second), (first, second), edges)
     nodes = tuple(
-        Node(LeafPlan(item, root, Path("/not/invoked/copilot"), model="fixture-model"), ())
+        # A bare executable name renders identically on every platform.
+        Node(LeafPlan(item, root, Path("copilot"), model="fixture-model"), ())
         for item in (first, second)
     )
     return ChainPlan(graph, nodes, allow_unproven_inputs=True)
