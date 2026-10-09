@@ -258,7 +258,8 @@ def _render(tmp_path, monkeypatch, scenario: str, *, mode: str, width: int, verb
             )
         driver(logger, root, clock)
         raw = terminal.text
-    return raw
+    # CRLF is the native Windows line ending, not cursor motion; compare logical lines.
+    return raw.replace("\r\n", "\n")
 
 
 @pytest.mark.parametrize("profile", sorted(PROFILES))
