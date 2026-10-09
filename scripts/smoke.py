@@ -690,7 +690,7 @@ def require_child_cleanup(root: Path) -> None:
 
 
 def require_standard_delivery(run: Path, stdout: str, *, ambiguous_inventory: bool) -> str:
-    package = run / "evidence"
+    package = run / "receipt"
     if ambiguous_inventory:
         require(not package.exists() and not package.is_symlink(), "Failed export published a package")
         require("Evidence delivery failed (command exit 23)" in stdout, "Missing delivery diagnostic")
@@ -701,7 +701,7 @@ def require_standard_delivery(run: Path, stdout: str, *, ambiguous_inventory: bo
         require("Recorded execution remains COMPLETE" in stdout, "Delivery rewrote completion")
         return "refused-ambiguous-inventory"
     for name in ("index.json", "summary.md", "abom.cdx.json", "provenance.intoto.json"):
-        require((package / name).is_file(), f"Automatic evidence delivery missing {name}")
+        require((package / name).is_file(), f"Automatic receipt delivery missing {name}")
     index = json.loads((package / "index.json").read_bytes())
     require(index.get("schema") == "apmx-evidence-package/1", "Unexpected standard package index")
     require("Evidence package:" in stdout and "Summary:" in stdout, "Missing evidence paths")
@@ -1006,9 +1006,11 @@ def _run_case(
     require_actor_transcript(transcript, mode)
     calls = [json.loads(line) for line in Path(env["APMX_ACTOR_LOG"]).read_text().splitlines()]
     require(sum("-p" in call["argv"] for call in calls) == 1, "Expected exactly one fixture producer")
-    delivery = "not-eligible" if outcome == "COMPLETE" else "not-complete"
-    if selection == "package" and outcome == "COMPLETE":
+    delivery = "not-complete"
+    if outcome == "COMPLETE":
         delivery = require_standard_delivery(run, result.stdout, ambiguous_inventory=mixed_imports)
+    else:
+        require(not (run / "receipt").exists(), "A run that did not complete published a receipt")
     return {
         "selection": selection, "mode": mode, "exit_code": result.returncode,
         "evidence_delivery": delivery,
@@ -1083,6 +1085,16 @@ def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
     for name in ("first.json", "second.json", "final.json"):
         require(json.loads((view / name).read_bytes()) == expected, f"Factory delivery mismatch: {name}")
     require(digest(view / "checks/check.py") == digest(FIXTURES / "check.py"), "Factory checker changed")
+    receipt = chains[0].parent / "receipt"
+    require(
+        require_standard_delivery(chains[0].parent, result.stdout, ambiguous_inventory=False)
+        == "delivered",
+        "Factory receipt was not delivered",
+    )
+    require(
+        json.loads((receipt / "abom.cdx.json").read_bytes())["components"] == [],
+        "Dependency-free factory receipt must list zero CycloneDX components",
+    )
     leaves = [json.loads(path.read_bytes()) for path in (factory / ".apm/runs").glob("*/record.json")]
     require(len(leaves) == 2, "Expected two factory leaf records")
     require({leaf["schema"] for leaf in leaves} == {"apm-contract-run/0.3"},

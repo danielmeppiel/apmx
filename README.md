@@ -124,9 +124,9 @@ block dependent work. Follow the printed paths:
 - `.apm/chains/<id>/artifacts/` collects the completed factory's artifacts.
 - `.apm/runs/<id>/record.json` records each contract's inputs and checks.
 
-Completed invocations with retained official inventory also print a portable
-Evidence Package: a CycloneDX ABOM, in-toto/SLSA producer statements, Test Result
-statements, exact supporting files and a generated summary.
+Every completed invocation also delivers a receipt: a CycloneDX ABOM,
+in-toto/SLSA producer statements, Test Result statements, exact supporting
+files and a generated summary.
 [Inspect and independently validate the standard files](docs/evidence.md).
 These are unsigned content bindings, not authenticated attestations or proof
 that arbitrary prose is correct. Review captured source files before sharing.

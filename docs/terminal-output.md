@@ -81,7 +81,7 @@ redaction and refusal of missing or malformed reports remain unchanged.
 Native debug noise is displayed separately from the evidence transcript so it
 cannot consume the space needed by checker subject reports. Copilot's native
 files remain under the attempt's `native-tools/copilot-logs/`, outside the portable
-Evidence Package. Only ordinary `.log` files in that run-owned directory are
+receipt. Only ordinary `.log` files in that run-owned directory are
 mirrored, with eight-file, 8 MiB and 16 KiB line bounds and explicit omission
 notices. Global logs, links, special files and configuration files are not read.
 OpenCode INFO/DEBUG stderr is similarly display-only; warnings/errors retain
@@ -91,7 +91,7 @@ the normal diagnostic path. Neither stream can decide a run or check outcome.
 not a model spending cap. `Attempt 1 of 3` does not imply a retry happened;
 `Accepted on attempt 1` explicitly identifies first-pass acceptance.
 
-After automatic delivery, `Evidence package` names the actual directory and
+After automatic delivery, `Evidence package` names the actual `receipt/` directory and
 prints the factory definition, SLSA/in-toto production statement, CycloneDX ABOM,
 in-toto check statements and SHA-256 file index. Hashes bind the recorded bytes;
 the package is unsigned and does not authenticate the builder. See

@@ -1,8 +1,11 @@
 """Standards export is a read-only delivery, separate from execution acceptance."""
 
 import hashlib
+import importlib.util
 import json
+import os
 import shutil
+from pathlib import Path
 
 import pytest
 from test_chain import caller, producer
@@ -16,16 +19,55 @@ __all__ = ["caller"]
 pytestmark = pytest.mark.component
 
 
-def test_no_inventory_is_explicit_and_does_not_change_execution(tmp_path, monkeypatch) -> None:
+def test_run_without_dependencies_exports_an_explicit_empty_inventory(
+    tmp_path, monkeypatch
+) -> None:
     _, result = _execute(tmp_path, monkeypatch)
     path = result.run_directory / "record.json"
     before = path.read_bytes()
-    with pytest.raises(ContractError) as error:
-        evidence.export_package(path, tmp_path / "package")
-    assert error.value.code == "inventory_missing"
+    target = evidence.export_package(path, tmp_path / "receipt")
     assert path.read_bytes() == before
     assert records.load_completed_result(path) == result
-    assert not (tmp_path / "package").exists()
+    bom = json.loads((target / "abom.cdx.json").read_bytes())
+    assert (bom["bomFormat"], bom["specVersion"]) == ("CycloneDX", "1.5")
+    assert bom["components"] == [] and bom["dependencies"] == []
+    properties = {item["name"]: item["value"] for item in bom["metadata"]["properties"]}
+    assert properties["apmx:apm-dependencies"] == "0"
+    assert "no APM dependencies" in properties["apmx:inventory-scope"]
+    assert "timestamp" not in bom["metadata"] and "serialNumber" not in bom
+    definition = json.loads((target / "definition.json").read_bytes())
+    assert definition["resolvedDependencies"] == []
+    assert json.loads((target / "capability-bindings.json").read_bytes()) == []
+    summary = (target / "summary.md").read_text()
+    assert summary.startswith("# APMX receipt")
+    assert "APM dependencies: 0 (CycloneDX inventory lists zero components)" in summary
+    index = json.loads((target / "index.json").read_bytes())
+    for name, identity in index["files"].items():
+        assert hashlib.sha256((target / name).read_bytes()).hexdigest() == identity["sha256"]
+    assert {"provenance.intoto.json", "abom.cdx.json", "definition.json", "summary.md"} <= set(
+        index["files"]
+    )
+    assert list((target / "checks").glob("*.intoto.json"))
+
+
+def test_selected_capabilities_without_a_retained_lock_refuse_a_receipt(
+    tmp_path, monkeypatch
+) -> None:
+    _, result = _execute(tmp_path, monkeypatch)
+    original = records._record_bytes
+
+    def with_imports(path, limits):
+        data, digest = original(path, limits)
+        return {**data, "imports": [{"name": "unlocked"}]}, digest
+
+    monkeypatch.setattr(records, "_record_bytes", with_imports)
+    with pytest.raises(ContractError) as error:
+        evidence._inventory((result,))
+    assert error.value.code == "inventory_missing"
+
+
+def test_empty_inventory_is_deterministic() -> None:
+    assert evidence._empty_inventory() == evidence._empty_inventory()
 
 
 def test_package_statements_bind_exact_files_and_relocate(tmp_path, monkeypatch) -> None:
@@ -186,3 +228,28 @@ def test_export_failure_does_not_mutate_canonical_completion(tmp_path, monkeypat
     assert record.read_bytes() == before
     assert not (tmp_path / "package").exists()
     assert not list(tmp_path.glob(".apmx-evidence-*"))
+
+
+def _independent_verifier():
+    pytest.importorskip("jsonschema")
+    pytest.importorskip("in_toto_attestation")
+    schemas = os.environ.get("APMX_EVIDENCE_SCHEMAS")
+    if not schemas:
+        pytest.skip("Set APMX_EVIDENCE_SCHEMAS to the pinned CycloneDX schema directory.")
+    script = Path(__file__).resolve().parents[3] / "scripts/verify_evidence.py"
+    spec = importlib.util.spec_from_file_location("verify_evidence_under_test", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module, Path(schemas)
+
+
+def test_independent_verifier_accepts_a_dependency_free_receipt(tmp_path, monkeypatch) -> None:
+    verifier, schemas = _independent_verifier()
+    _, result = _execute(tmp_path, monkeypatch)
+    target = evidence.export_package(result.run_directory / "record.json", tmp_path / "receipt")
+    report = verifier.verify(target, schemas)
+    assert report["status"] == "passed" and report["capabilities"] == 0
+    (target / "abom.cdx.json").chmod(0o600)
+    (target / "abom.cdx.json").write_bytes(b'{"bomFormat":"CycloneDX"}\n')
+    with pytest.raises(ValueError, match="File hash mismatch"):
+        verifier.verify(target, schemas)

@@ -15,6 +15,9 @@
 
 ### Changed
 
+- Every COMPLETE run now delivers a receipt (`.apm/<runs|chains|controllers>/<id>/receipt/`,
+  formerly `evidence/`), with or without APM dependencies. Without dependencies the
+  CycloneDX 1.5 inventory explicitly lists zero components. REJECTED/HALTED runs get no receipt.
 - Evidence-delivery failure returns command exit 23 without changing a recorded
   COMPLETE outcome. Scripts must distinguish execution completion from package delivery.
 
