@@ -249,13 +249,8 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
 
         record = next((caller / ".apm/runs").glob("*/record.json"))
         assert load_completed_result(record).outcome is Outcome.COMPLETE
-<<<<<<< HEAD
         assert not (record.parent / "receipt").exists()
-    assert "PASS content" in result.output
-=======
-        assert not (record.parent / "evidence").exists()
     assert "checks: [+] content" in result.output
->>>>>>> dc64d6a (feat(cli): tell the contract/loop/factory/receipt story in default run output)
     producer.assert_called_once()
     assert install.call_count == 1
     assert install.call_args.kwargs.get("scope", "package") == (

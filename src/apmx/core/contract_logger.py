@@ -2205,7 +2205,7 @@ class ContractLogger:
         """Report a delivered standards receipt without changing recorded execution."""
         if path is None:
             self._write(
-                "Receipt: not exported (no retained official APM inventory).",
+                "Receipt: not exported.",
                 severity="detail",
                 detail=True,
                 indent=0,

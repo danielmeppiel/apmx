@@ -44,12 +44,13 @@ access host files, network and available logins; this is not a sandbox. Model
 usage can cost money. Copilot keeps its configured model. The helper supplies
 neither model overrides nor permission flags.
 
-Public agent activity and checker stdout/stderr stream by default. `--verbose`
-also mirrors full native debug diagnostics, with safety bounds; omit it for a
-more readable presentation without hiding the actual work. Inspect debug output
-before projecting it: native metadata can be sensitive. `Found input` means a
-file was actually captured, not merely declared. Narrate the check command,
-its output and then its authoritative result, in that order.
+`--verbose` streams agent activity, checker stdout/stderr and full native debug
+diagnostics, with safety bounds. Omit it for the compact story: one attempt
+line per contract with its check marks, handoff lines, and a final Outputs /
+Receipt / Next block. Inspect debug output before projecting it: native
+metadata can be sensitive. `Found input` means a file was actually captured,
+not merely declared. Narrate the check command, its output and then its
+authoritative result, in that order.
 
 After successful execution and automatic evidence delivery, show the printed
 code patch and separate documentation patch. Required checks assess their stated
@@ -68,7 +69,7 @@ SLSA v1 predicate, wrapped in an in-toto Statement v1. Then show the output
 subjects and their SHA-256 digests, the official APM CycloneDX 1.5 ABOM and the
 per-producer/per-check statement counts. The ABOM is an inventory byproduct,
 not a claim that the model read the inventory. Open `provenance.intoto.json`,
-`abom.cdx.json` and one `checks/*.intoto.json` in the printed evidence directory
+`abom.cdx.json` and one `checks/*.intoto.json` in the printed Receipt directory
 when you want to show the real standard documents, not a slide about them.
 
 **"Do not take APMX's word for it. Use a separate consumer."**

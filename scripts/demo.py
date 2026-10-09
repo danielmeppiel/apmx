@@ -406,7 +406,7 @@ def evidence_package(root: Path, config: dict, harness: str | None, run: str | N
     directory(package)
     print(f"Recorded {harness} run: {selected.name}")
     print("This selects a saved run, not an observation of your last terminal command.")
-    print(f"Evidence package: {package.relative_to(root)}")
+    print(f"Receipt: {package.relative_to(root)}")
     return package
 
 

@@ -33,7 +33,7 @@
 - Default run output tells one compact story per contract: `needs -> produces`,
   one `attempt n/N` line with per-check marks, producer-side handoff lines,
   `not started: waits on` for blocked contracts, and a final COMPLETE/REJECTED
-  block with Outputs, Receipt and Next. Interactive color terminals update the
+  block with Outputs, Receipt and `Next  apmx audit <receipt>`. Interactive color terminals update the
   running attempt in place; redirected, CI and `NO_COLOR` output stay
   append-only. Capture details, phase lines, narration, tool calls, check
   commands and checker output moved behind `--verbose`, which keeps them all.

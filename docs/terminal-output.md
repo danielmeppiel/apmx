@@ -52,8 +52,9 @@ Next      Fix the contract or check, then rerun:  apmx ./factory
 
 A single `.contract.md` uses the same shape without `[i/N]` order or handoff
 lines. The Receipt rows name only standards documents that the export actually
-wrote; without a receipt the block ends at Outputs. `Next` suggests
-`apmx audit` only in builds that ship it.
+wrote, and `Next` is the [`apmx audit`](audit.md) command for that receipt.
+REJECTED, UNPROVEN and HALTED runs have no receipt; they end with `Saved` and a
+rerun command instead.
 
 `--verbose` keeps everything else, in order and indented under its contract:
 capture details (`Found input`, `Working copy`), phase lines, agent narration,

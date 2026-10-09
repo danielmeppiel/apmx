@@ -77,13 +77,12 @@ def test_ordinary_run_without_dependencies_delivers_a_receipt(tmp_path, monkeypa
         main, ["job.contract.md", "--on", "copilot", "--allow-host-access"]
     )
     assert response.exit_code == 0, response.output
-<<<<<<< HEAD
-    assert "Evidence package:" in response.output
     receipts = list(tmp_path.glob(".apm/runs/*/receipt"))
     assert len(receipts) == 1
-=======
-    assert "Receipt" not in response.output
->>>>>>> dc64d6a (feat(cli): tell the contract/loop/factory/receipt story in default run output)
+    relative = receipts[0].relative_to(tmp_path).as_posix()
+    assert f"\nReceipt   {relative}/\n" in response.output
+    assert "          inventory   CycloneDX 1.5 (0 components)\n" in response.output
+    assert f"\nNext      apmx audit {relative}\n" in response.output
     assert not list(tmp_path.glob(".apm/runs/*/evidence"))
     bom = json.loads((receipts[0] / "abom.cdx.json").read_bytes())
     assert bom["components"] == []
@@ -106,7 +105,7 @@ def test_rejected_run_gets_no_receipt_but_keeps_its_saved_attempt(tmp_path, monk
         main, ["job.contract.md", "--on", "copilot", "--allow-host-access"]
     )
     assert response.exit_code == 20, response.output
-    assert "Evidence package:" not in response.output
+    assert "Receipt" not in response.output and "apmx audit" not in response.output
     runs = list(tmp_path.glob(".apm/runs/*"))
     assert len(runs) == 1 and (runs[0] / "record.json").is_file()
     assert not (runs[0] / "receipt").exists() and not (runs[0] / "evidence").exists()

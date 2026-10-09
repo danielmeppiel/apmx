@@ -25,8 +25,8 @@ COMPLETE is not VERIFIED, trust, certification, correct software, a sandbox,
 or permission to merge/deploy. Native agents and checks use host files,
 network and available logins; model usage can cost money. Run only trusted
 contracts. The disclosure appears once before consent/action, including
-noninteractive flag mode. A successful factory shows Contract / Checks /
-Evidence, counts every required check and output, and prints copyable paths.
+noninteractive flag mode. A successful run ends with `[+] COMPLETE` and its
+contract and check counts, then copyable `Outputs`, `Receipt` and `Next` lines.
 
 ## Handoffs remain fail-closed
 

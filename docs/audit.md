@@ -19,7 +19,8 @@ Receipt   factory/.apm/chains/20261009T090958Z-7a55db0b0bb0/receipt   2 contract
 [+] VALID   (content-bound; not authenticated)
 ```
 
-Every COMPLETE run delivers a [receipt](evidence.md) next to its record:
+Every COMPLETE run ends by printing this exact command on its `Next` line, and
+delivers a [receipt](evidence.md) next to its record:
 `.apm/runs/<id>/receipt`, `.apm/chains/<id>/receipt` or
 `.apm/controllers/<id>/receipt`. REJECTED and HALTED runs have no receipt.
 

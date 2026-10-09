@@ -395,3 +395,40 @@ def test_append_only_liveness_is_sparse_and_names_the_latest_status(tmp_path, mo
         "        still running 1m02s: Reading the request.",
     ]
     assert "Reading the request." not in text.replace(liveness[0], "").replace(liveness[1], "")
+
+
+def test_real_no_dependency_receipt_renders_and_its_next_command_verifies(tmp_path, monkeypatch):
+    """A real COMPLETE run delivers a receipt; the printed Next command is a passing audit."""
+    import re
+    import shlex
+
+    from click.testing import CliRunner
+    from test_engine import _fake_adapter
+    from test_execution_result import _complete_plan
+
+    from apmx.cli import main
+    from apmx.utils import console
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("CI", "true")
+    console._reset_console()
+    plan = _complete_plan(tmp_path)
+    _fake_adapter(monkeypatch, plan)
+    monkeypatch.chdir(tmp_path)
+    run = CliRunner().invoke(main, ["job.contract.md", "--on", "copilot", "--allow-host-access"])
+    assert run.exit_code == 0, run.output
+    (receipt,) = tmp_path.glob(".apm/runs/*/receipt")
+    tail = run.output[run.output.index("[+] COMPLETE") :]
+    tail = re.sub(r"\d{8}T\d{6}Z-[0-9a-f]{12}", "<run>", tail)
+    tail = re.sub(r"   [0-9.]+s\n", "   <t>\n", tail, count=1)
+    path = GOLDEN / "contract-pass.real-receipt.txt"
+    if os.environ.get("APMX_UPDATE_GOLDEN") == "1":
+        path.write_text(tail, encoding="ascii")
+    assert tail == path.read_text(encoding="ascii")
+    (next_line,) = [line for line in run.output.splitlines() if line.startswith("Next      ")]
+    command = shlex.split(next_line.removeprefix("Next      "))
+    assert command[:2] == ["apmx", "audit"]
+    assert Path(command[2]).resolve() == receipt.resolve()
+    audit = CliRunner().invoke(main, command[1:])
+    assert audit.exit_code == 0, audit.output
+    assert audit.output.rstrip().endswith("[+] VALID   (content-bound; not authenticated)")
