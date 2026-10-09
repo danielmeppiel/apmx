@@ -4,6 +4,18 @@
 
 ### Added
 
+- `apmx audit <receipt-dir>` verifies a receipt row by row: integrity
+  (SHA-256 index), standards (in-toto Statement v1, SLSA Provenance v1,
+  CycloneDX 1.5), factory, checks, outputs (`--outputs` re-hashes delivered
+  files) and ingredients, delegated to the bundled APM via
+  `apm install --frozen` + `apm audit --ci [--policy]`. It reports receipts as
+  unsigned. Exit 0 valid, 1 invalid/policy failure, 2 usage, missing receipt or
+  unavailable ingredients; `--offline` and `--format json` are supported.
+  `audit` is now a reserved word; run a directory named audit as `./audit`.
+- The receipt verifier moved into `apmx.audit` with bundled pinned schemas;
+  `scripts/verify_evidence.py` is a thin wrapper that still runs without
+  importing APMX. Its runtime dependencies (`in-toto-attestation` from PyPI,
+  `protobuf`, `jsonschema`, `referencing`) are now main dependencies.
 - Capture the consumer project implicitly and run a five-stage source factory
   that delivers checked code and documentation patches without per-file workspace declarations.
 - Support opt-in bounded repair with fixed inputs/checks, a shared deadline and

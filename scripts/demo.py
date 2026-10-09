@@ -23,7 +23,12 @@ SCHEMA = "apmx-demo-kit/1"
 HARNESSES = ("copilot", "opencode")
 ROOT = Path(__file__).resolve().parents[1]
 SKIP = {"__pycache__", ".DS_Store"}
-EVIDENCE_TOOLS = ("verify_evidence.py", "check_evidence_controls.py", "evidence-requirements.txt")
+EVIDENCE_TOOLS = {
+    "verify_evidence.py": "scripts/verify_evidence.py",
+    "receipt_verifier.py": "src/apmx/audit/verifier.py",
+    "check_evidence_controls.py": "scripts/check_evidence_controls.py",
+    "evidence-requirements.txt": "scripts/evidence-requirements.txt",
+}
 CHAIN_ID = re.compile(r"\d{8}T\d{6}Z-[a-f0-9]{12}")
 
 
@@ -615,8 +620,8 @@ def prepare(
     if verifier_python is not None:
         tools = private / "evidence-tools"
         tools.mkdir()
-        for name in EVIDENCE_TOOLS:
-            shutil.copy2(ROOT / "scripts" / name, tools / name)
+        for name, source in EVIDENCE_TOOLS.items():
+            shutil.copy2(ROOT / source, tools / name)
         config["verifier"] = {
             "python": str(verifier_python),
             "schemas": str(schemas),
