@@ -46,7 +46,7 @@ CycloneDX specification repository (commit
 1ce97b2a7b8cf2429da248560d2aa671c6bce74a): `bom-1.5.schema.json`,
 `spdx.schema.json` and `jsf-0.82.schema.json`. Copyright (c) OWASP Foundation.
 They are licensed under the Apache License, Version 2.0; the upstream license
-text ships beside them as `apmx/audit/schemas/LICENSE`.
+text ships beside them as `apmx/audit/schemas/LICENSE-CycloneDX.txt`.
 
 ## Additional third-party notices
 

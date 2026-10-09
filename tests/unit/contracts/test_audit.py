@@ -374,4 +374,4 @@ def test_bundled_schemas_are_the_pinned_upstream_bytes() -> None:
     for name, expected in verifier.SCHEMAS.items():
         raw = (verifier.BUNDLED_SCHEMAS / name).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == expected
-    assert (verifier.BUNDLED_SCHEMAS / "LICENSE").is_file()
+    assert (verifier.BUNDLED_SCHEMAS / "LICENSE-CycloneDX.txt").is_file()

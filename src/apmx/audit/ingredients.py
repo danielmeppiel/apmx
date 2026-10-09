@@ -116,7 +116,9 @@ def _last_line(capture: _Bounded) -> str:
     ]
     if not lines:
         return "no diagnostic output"
-    return safe_text(lines[-1], limit=200).encode("ascii", errors="replace").decode("ascii")
+    errors = [line.removeprefix("[x]").strip() for line in lines if line.startswith("[x]")]
+    text = errors[0] if errors else lines[-1]
+    return safe_text(text, limit=200).encode("ascii", errors="replace").decode("ascii")
 
 
 def _run(
