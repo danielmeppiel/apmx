@@ -22,7 +22,10 @@ class SmokeFixtureTests(unittest.TestCase):
     def test_completed_package_requires_automatic_standard_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
-            stdout = "Evidence package: receipt\nSummary: receipt/summary.md"
+            stdout = (
+                "Outputs   artifacts/\nReceipt   receipt/\n          provenance  in-toto\n\n"
+                "Next      apmx audit receipt"
+            )
             with self.assertRaisesRegex(AssertionError, "missing index.json"):
                 smoke.require_standard_delivery(run, stdout, ambiguous_inventory=False)
             package = run / "receipt"
@@ -33,14 +36,14 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertEqual(
                 smoke.require_standard_delivery(run, stdout, ambiguous_inventory=False), "delivered"
             )
-            with self.assertRaisesRegex(AssertionError, "Missing evidence paths"):
+            with self.assertRaisesRegex(AssertionError, "Missing receipt paths"):
                 smoke.require_standard_delivery(run, "", ambiguous_inventory=False)
 
     def test_ambiguous_inventory_requires_explicit_refusal_not_a_published_package(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
             stdout = (
-                "Evidence delivery failed (command exit 23)\n"
+                "Receipt export failed (command exit 23)\n"
                 "The official ABOM has missing or duplicate component identities.\n"
                 "Recorded execution remains COMPLETE"
             )

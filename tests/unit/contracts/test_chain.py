@@ -542,7 +542,7 @@ def test_explicit_model_and_full_cli_closure(caller: Path, monkeypatch: pytest.M
             "configured-test-model",
         ],
     )
-    assert result.exit_code == 0 and "Factory COMPLETE" in result.output
+    assert result.exit_code == 0 and "[+] COMPLETE   2/2 contracts" in result.output
     assert len(calls) == 2 and all(call[0].model == "configured-test-model" for call in calls)
 
 

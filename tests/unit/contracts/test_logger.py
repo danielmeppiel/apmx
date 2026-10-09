@@ -130,21 +130,21 @@ def test_ordered_phases_final_once_and_frozen_transcript(tmp_path: Path, capsys)
         output.index(name)
         for name in (
             "Execution: local (not sandboxed)",
-            "Contract 1/1: hello",
-            "Running Copilot",
-            "Checks:",
-            "Contract COMPLETE",
-            "Evidence:",
+            "Contract  hello.contract.md   copilot / requested",
+            "attempt 1/1",
+            "[+] COMPLETE   1/1 contract   1/1 check",
         )
     ]
     assert positions == sorted(positions)
-    assert output.count("Contract COMPLETE") == 1
+    assert output.count("COMPLETE") == 1
     assert "VERIFIED" not in output
     assert "The run stopped" not in output
-    assert "Contract: 1/1 completed" in output
-    assert "Check: 1/1 passed" in output
+    # Phase narration moved behind --verbose but stays in the retained transcript.
+    assert "Running Copilot" not in output
+    assert "Running Copilot" in path.read_text()
+    assert "Contract 1/1: hello" in path.read_text()
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
-    assert b"Contract COMPLETE" not in path.read_bytes()
+    assert b"COMPLETE" not in path.read_bytes()
     assert "Observed execution model" not in output
     assert "Run: run-id" not in output
     assert "Run: run-id" in path.read_text()
@@ -173,7 +173,7 @@ def test_final_outcome_is_authoritative_not_inferred(
     output = capsys.readouterr().out
     assert outcome.name in output
     assert "VERIFIED" not in output
-    assert "Contract COMPLETE" not in output
+    assert "[+] COMPLETE" not in output
     assert "[+]" not in output
 
 
@@ -192,11 +192,20 @@ def test_final_outcome_is_authoritative_not_inferred(
 def test_empty_stdout_check_status_comes_from_observation(
     capsys, raw: int | None, normalized: int, text: str
 ) -> None:
-    emitter = EventEmitter("run", ContractLogger().on_event)
+    emitter = EventEmitter("run", ContractLogger(verbose=True).on_event)
     emitter.emit("check_finished", observation=_check(raw, normalized))
     output = capsys.readouterr().out
     assert f"{text} criterion" in output
     assert ("[+]" in output) is (normalized == 0)
+    # Default mode folds the same owner-normalized verdict into the attempt line.
+    emitter = EventEmitter("run", ContractLogger().on_event)
+    emitter.emit("selected", contract="hello.contract.md", harness="copilot")
+    emitter.emit("check_finished", observation=_check(raw, normalized))
+    emitter.emit("phase", name="record")
+    output = capsys.readouterr().out
+    mark = {0: "[+]", 1: "[x]"}.get(normalized, "[!]")
+    assert f"attempt 1/1   checks: {mark} criterion" in output
+    assert f"{text} criterion" not in output
 
 
 @pytest.mark.parametrize("confirmed", [False, True])
@@ -215,7 +224,7 @@ def test_stop_request_precedes_observation_and_preserves_provisional_path(
     output = capsys.readouterr().out
     expected = "Managed process group stopped" if confirmed else "Stop unconfirmed"
     assert output.index("Stop requested") < output.index(expected) < output.index("HALTED")
-    assert "Artifacts: 1 file retained" in output
+    assert "Saved     " in output
     assert "Artifact:" in output
     assert "answer.txt" in output
     assert "cancelled successfully" not in output
@@ -299,7 +308,7 @@ def test_transcript_saturation_does_not_hide_lifecycle_or_stderr(tmp_path: Path,
     )
     output = capsys.readouterr().out
     assert "Useful last error" in output
-    assert "Saving results" in output
+    assert "Saving results" not in output
     assert "Saving results" in (tmp_path / "transcript.log").read_text()
     assert "HALTED" in output
     assert (tmp_path / "transcript.log").stat().st_size <= 1024
@@ -559,9 +568,10 @@ def test_public_subprocess_output_flows_while_spinner_remains_active(
         decoder.feed("stdout", (json.dumps({"type": kind, "data": data}) + "\n").encode())
     decoder.feed("stderr", b"Native diagnostic\n")
     output = "\n".join(call.args[0] for call in console._rich_echo.call_args_list)
-    assert "Public line" in output
-    assert "Reading input" in output
-    assert "Tool started: view" in output
+    # Default output keeps narration and tools behind --verbose; stderr stays immediate.
+    assert ("Public line" in output) is verbose
+    assert ("Reading input" in output) is verbose
+    assert ("Tool started: view" in output) is verbose
     assert "Copilot stderr > Native diagnostic" in output
     assert "PRIVATE_" not in output
     animated_console.status.return_value.stop.assert_not_called()
@@ -678,11 +688,16 @@ def test_job_heading_separates_preparation_without_leading_blank(
     logger.close()
     output = capsys.readouterr().out
     assert not output.startswith("\n") and "\n\n\n" not in output
-    assert "\n\nContract 1/1: job\n" in output
-    for text in (output, (tmp_path / "transcript.log").read_text()):
-        assert text.index("Execution: local (not sandboxed)") < text.index("Contract 1/1: job")
+    assert (
+        "\n\nContract  job.contract.md   copilot / default model\n\njob   produces result.txt\n"
+        in (output)
+    )
+    transcript = (tmp_path / "transcript.log").read_text()
+    for text, heading in ((output, "Contract  job"), (transcript, "Contract 1/1: job")):
+        assert text.index("Execution: local (not sandboxed)") < text.index(heading)
         assert text.count("Execution: local (not sandboxed)") == 1
-        assert "Produces: result.txt" in text
+    assert "Produces: result.txt" in transcript
+    assert "Produces: result.txt" not in output
 
 
 def test_selected_context_counts_documents_not_entire_dependency_graph(
@@ -815,7 +830,8 @@ def test_native_prose_punctuation_is_readable_on_strict_terminal_encodings(
         decoder.feed("stdout", bytes([byte]))
     decoder.finish()
     logger.close()
-    assert b"""I'm reading "notes" -- that's ready...""" in raw.getvalue()
+    # Narration is a verbose stream; whenever it is shown it is readable ASCII.
+    assert (b"""I'm reading "notes" -- that's ready...""" in raw.getvalue()) is verbose
     assert all(byte < 128 for byte in raw.getvalue())
     retained = (tmp_path / "transcript.log").read_text(encoding="ascii")
     assert r"I\u2019m reading \u201cnotes\u201d \u2014" in retained
@@ -1176,7 +1192,7 @@ def test_close_failure_propagates_and_cannot_announce_success(
         logger.close()
     logger.close()
     output = capsys.readouterr().out
-    assert "VERIFIED" not in output and "Contract COMPLETE" not in output
+    assert "VERIFIED" not in output and "[+] COMPLETE" not in output
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -1211,7 +1227,7 @@ def test_native_result_zero_without_artifact_remains_unproven_and_private(
     transcript = (tmp_path / "transcript.log").read_text()
     assert "UNPROVEN" in output
     assert "VERIFIED" not in output
-    assert "Contract COMPLETE" not in output
+    assert "[+] COMPLETE" not in output
     assert "[+]" not in output
     assert "Native completion reported exit code 0" in transcript
     assert "PRIVATE_" not in output + transcript
@@ -1259,9 +1275,9 @@ def test_analysis_phase_never_reaches_terminal_or_transcript(
     for text in (output, transcript):
         assert "PRIVATE_" not in text
     assert transcript.count("Public answer") == 1
-    assert output.count("Public answer") == 1
+    assert output.count("Public answer") == int(verbose)
     assert "Tool started: apply_patch" in transcript
-    assert "Tool started: apply_patch" in output
+    assert ("Tool started: apply_patch" in output) is verbose
 
 
 def test_pre_engine_interrupt_reports_halted_without_claiming_child_cleanup(capsys) -> None:
@@ -1502,14 +1518,16 @@ def test_full_source_artifact_and_log_paths_stay_copyable(
         assert "\x1b" not in output
     lines = click.unstyle(output).splitlines()
     relative_source = source.relative_to(tmp_path).as_posix()
-    assert f"Contract 1/1: {relative_source.removesuffix('.contract.md')}" in lines
-    assert (f"    Source: {relative_source}" in lines) is verbose
-    assert (f"    Artifact: {artifact_path.relative_to(tmp_path).as_posix()}" in lines) is verbose
+    relative = directory.relative_to(tmp_path).as_posix()
+    # Wrapping happens between words only: every path stays one copyable token.
+    assert any(line.startswith(f"Contract  {relative_source}") for line in lines)
+    assert (f"        Source: {relative_source}" in lines) is verbose
     assert (
-        f"    Logs: {directory.relative_to(tmp_path).as_posix()}/transcript.log" in lines
+        f"        Artifact: {artifact_path.relative_to(tmp_path).as_posix()}" in lines
     ) is verbose
-    assert f"  Directory: {directory.relative_to(tmp_path).as_posix()}/artifacts" in lines
-    assert lines.count(f"  Record: {directory.relative_to(tmp_path).as_posix()}/record.json") == 1
+    assert (f"        Logs: {relative}/transcript.log" in lines) is verbose
+    assert lines.count(f"Saved     {relative}/   (attempt files + logs)") == 1
+    assert lines.count(f"        Record: {relative}/record.json") == int(verbose)
     assert lines.count("[i] Execution: local (not sandboxed)") == 1
 
 
@@ -1566,22 +1584,30 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
         )
     )
     output = capsys.readouterr().out
-    assert output.index("Contract 1/1: jobs/handoff") < output.index("Produces: handoff.json")
-    assert output.index("Produces: handoff.json") < output.index("Checks:")
-    assert "Copilot > The requested output is ready." in output
-    assert output.index("Copilot >") < output.index("Checks:")
-    assert output.index("Check handoff > Required fields present") < output.index(
-        "[+] PASS handoff"
-    )
-    assert output.index("[+] PASS handoff") < output.index("[+] Contract COMPLETE  12.3s")
+    story = [
+        "Contract  jobs/handoff.contract.md   copilot / requested-model",
+        "jobs/handoff   produces handoff.json",
+        "      attempt 1/1  agent ",
+        "checks: [+] handoff\n",
+        "      [+] handoff.json\n",
+        "[+] COMPLETE   1/1 contract   1/1 check   ",
+        "Outputs   .apm/runs/run/artifacts/\n          handoff.json\n",
+    ]
+    positions = [output.index(text) for text in story]
+    assert positions == sorted(positions)
+    # Narration, checker stdout and per-check lines are verbose detail, in order.
+    assert ("Copilot > The requested output is ready." in output) is verbose
+    assert ("Check handoff > Required fields present" in output) is verbose
+    assert ("[+] PASS handoff" in output) is verbose
+    if verbose:
+        assert output.index("Copilot >") < output.index("Check handoff > Required fields")
+        assert output.index("[+] PASS handoff") < output.index("attempt 1/1")
     assert output.count("[i] Execution: local (not sandboxed)") == 1
     assert "Agents and checks can use host files, network and available logins." in output
     assert "Model usage may cost money. Run only contracts you trust." in output
-    assert "Contract: 1/1 completed" in output and "Check: 1/1 passed" in output
-    assert "Evidence:\n  Artifacts: 1 file retained\n" in output
-    assert "  Directory: .apm/runs/run/artifacts\n" in output
-    assert "The run stopped" not in output
-    assert "  Record: .apm/runs/run/record.json\n" in output
+    for retired in ("Evidence", "Directory:", "Artifacts:", "The run stopped"):
+        assert retired not in output
+    assert ("        Record: .apm/runs/run/record.json\n" in output) is verbose
     for jargon in (
         "Preflight",
         "Capture",
@@ -1594,7 +1620,7 @@ def test_default_job_to_saved_output_story_and_verbose_evidence(
     assert output.count("requested-model") == 1
     assert output.count("observed-model") == int(verbose)
     assert "(requested)" not in output
-    assert "[>] Checking handoff.json" in output
+    assert ("[>] Checking handoff.json" in output) is verbose
     for detail in (
         "raw exit 0",
         "Run: run",
@@ -1630,8 +1656,7 @@ def test_saved_paths_are_relative_to_original_caller_after_cwd_changes(
         ),
     )
     output = capsys.readouterr().out
-    assert "Directory: .apm/runs/stable/artifacts" in output
-    assert "Record: .apm/runs/stable/record.json" in output
+    assert "Saved     .apm/runs/stable/   (attempt files + logs)" in output
     assert str(caller) not in output
     assert str(transient) not in output
 
@@ -1654,8 +1679,8 @@ def test_packaged_job_identity_uses_stable_contract_path(
         model="native-model",
     )
     output = capsys.readouterr().out
-    assert "Contract 1/1: contracts/handoff" in output
-    assert "Produces: handoff.json" in output
+    assert "Contract  contracts/handoff.contract.md   copilot / native-model" in output
+    assert "contracts/handoff   produces handoff.json" in output
     assert ("private-source-copy" in output) is verbose
     assert (f"Package: {package_ref}" in output) is verbose
     assert output.count("native-model") == 1
@@ -1664,13 +1689,13 @@ def test_packaged_job_identity_uses_stable_contract_path(
 @pytest.mark.parametrize(
     ("outcome", "reason", "message", "color"),
     [
-        (Outcome.COMPLETE, None, "Contract: 1/1 completed", "green"),
-        (Outcome.REJECTED, None, "Contract checks found a problem.", "red"),
-        (Outcome.UNPROVEN, None, "Checks could not establish a result.", "yellow"),
-        (Outcome.HALTED, "cancelled", "Run interrupted.", "red"),
-        (Outcome.HALTED, "producer_failed", "Copilot did not complete successfully.", "red"),
-        (Outcome.HALTED, "checker_stop_unconfirmed", "A check may still be running.", "red"),
-        (Outcome.HALTED, "attempt_deadline", "The run exceeded its time limit.", "red"),
+        (Outcome.COMPLETE, None, "1/1 contract", "green"),
+        (Outcome.REJECTED, None, "contract was rejected   exit 20", "red"),
+        (Outcome.UNPROVEN, None, "Checks could not establish a result", "yellow"),
+        (Outcome.HALTED, "cancelled", "Run interrupted", "red"),
+        (Outcome.HALTED, "producer_failed", "Copilot did not complete successfully", "red"),
+        (Outcome.HALTED, "checker_stop_unconfirmed", "A check may still be running", "red"),
+        (Outcome.HALTED, "attempt_deadline", "The run exceeded its time limit", "red"),
     ],
 )
 def test_result_headline_color_and_reason_follow_owner(
@@ -1693,12 +1718,17 @@ def test_result_headline_color_and_reason_follow_owner(
         ),
     )
     calls = console._rich_echo.call_args_list
-    headline = next(call for call in calls if f"Contract {outcome.name}" in call.args[0])
+    headline = next(
+        call for call in calls if call.args[0].startswith("[") and outcome.name in call.args[0]
+    )
     assert headline.kwargs["color"] == color
     assert headline.args[0][: headline.kwargs["accent_length"]].endswith(outcome.name)
-    assert any(message in call.args[0] for call in calls)
-    assert any(call.args[0] == "  Artifacts: 1 file retained" for call in calls)
-    assert any(call.args[0].startswith("  Directory:") for call in calls)
+    assert message in headline.args[0]
+    if outcome is Outcome.COMPLETE:
+        assert any(call.args[0].startswith("Outputs   ") for call in calls)
+    else:
+        assert any(call.args[0].startswith("Saved     ") for call in calls)
+        assert headline.args[0].endswith(f"exit {int(outcome)}")
     assert not any("provisional" in call.args[0].lower() for call in calls)
 
 
@@ -1710,7 +1740,7 @@ def test_animated_phases_are_visible_and_retained(tmp_path: Path, animated_conso
         events.emit("phase", name=phase)
     logger.close()
     written = "\n".join(call.args[0] for call in console._rich_echo.call_args_list)
-    assert written.count("Checks:") == 1
+    assert "Checks:" not in written
     for label in (
         "Capturing files for Copilot",
         "Running Copilot",
@@ -1720,7 +1750,8 @@ def test_animated_phases_are_visible_and_retained(tmp_path: Path, animated_conso
         assert label in (tmp_path / "transcript.log").read_text()
     status = animated_console.status.return_value
     status.start.assert_called_once()
-    assert status.update.call_count == 4
+    # The record phase ends the live line instead of animating "Saving results".
+    assert status.update.call_count == 3
     status.stop.assert_called_once()
 
 
@@ -1795,29 +1826,32 @@ def test_header_gap_metadata_and_elapsed_time_form_a_secondary_level(
     )
     context = rich_console.export_text(clear=False)
     assert context.startswith("[i] Execution: local (not sandboxed)\n")
-    assert "Run only contracts you trust.\n\nContract 1/1: contracts/handoff\n" in context
+    assert (
+        "Run only contracts you trust.\n\n"
+        "Contract  contracts/handoff.contract.md   copilot / native-model\n"
+    ) in context
     model = next(
         call.args[0] for call in printed.call_args_list if "native-model" in call.args[0].plain
     )
     assert not model.get_style_at_offset(rich_console, 2).dim
     heading = next(
-        call.args[0] for call in printed.call_args_list if "Contract 1/1:" in call.args[0].plain
+        call.args[0] for call in printed.call_args_list if "Contract  " in call.args[0].plain
     )
     assert heading.get_style_at_offset(rich_console, 0).color.name == "cyan"
     assert heading.get_style_at_offset(rich_console, 0).bold
     events.started -= 20
     events.emit("finished", result=_result(tmp_path, Outcome.UNPROVEN))
     headline = next(
-        call.args[0] for call in printed.call_args_list if "Contract UNPROVEN" in call.args[0].plain
+        call.args[0] for call in printed.call_args_list if "[!] UNPROVEN" in call.args[0].plain
     )
     result_style = headline.get_style_at_offset(rich_console, 0)
     assert result_style.color.name == "yellow"
     assert result_style.bold is True
     assert not result_style.dim
-    timing_offset = headline.plain.rindex("  ") + 2
-    timing_style = headline.get_style_at_offset(rich_console, timing_offset)
-    assert timing_style.dim is True
-    assert not timing_style.bold
+    reason_offset = headline.plain.index("UNPROVEN") + len("UNPROVEN") + 3
+    reason_style = headline.get_style_at_offset(rich_console, reason_offset)
+    assert not reason_style.bold
+    assert headline.plain.endswith("exit 21")
 
 
 def test_native_tool_metadata_controls_emphasis_not_assistant_wording(
@@ -1968,9 +2002,8 @@ def test_assurance_metadata_cannot_override_recorded_unproven_outcome(
     owner.assert_not_called()
     output = capsys.readouterr().out
     assert "Contract checks passed; this run was not sandboxed." not in output
-    assert "Checks could not establish a result." in output
-    assert "[!] Contract UNPROVEN" in output
-    assert "Contract COMPLETE" not in output
+    assert "[!] UNPROVEN   contract: Checks could not establish a result   exit 21" in output
+    assert "COMPLETE" not in output
     assert "Stop reason:" not in output
 
 
@@ -2015,7 +2048,7 @@ def test_packaged_preview_uses_stable_identity_and_gates_source_metadata(
 
 
 def test_plain_checks_have_one_heading_without_duplicate_phase_narration(capsys) -> None:
-    events = EventEmitter("run", ContractLogger().on_event)
+    events = EventEmitter("run", ContractLogger(verbose=True).on_event)
     events.emit("selected", contract="job.contract.md", produces="handoff.json")
     events.emit("phase", name="checks")
     for name in ("format", "coverage"):
@@ -2024,7 +2057,7 @@ def test_plain_checks_have_one_heading_without_duplicate_phase_narration(capsys)
         events.emit("check_finished", observation=_check(0, 0, name))
     output = capsys.readouterr().out
     assert output.count("Checks:") == 1
-    assert "Harness: copilot / default model" in output
+    assert "Contract  job.contract.md   copilot / default model" in output
     assert "native default" not in output
     assert output.count("[>] Checking") == 1
     assert "(saved output)" not in output

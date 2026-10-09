@@ -62,9 +62,9 @@ def test_both_cli_completion_paths_keep_delivery_separate(
     path, digest = captured[0]
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     assert json.loads(path.read_bytes())["execution"] == {"name": "COMPLETE", "exit_code": 0}
-    assert "Contract COMPLETE" in response.output
-    assert ("Evidence delivery failed" in response.output) is bool(failure)
-    assert ("Evidence package:" in response.output) is (failure is None)
+    assert "[+] COMPLETE" in response.output
+    assert ("Receipt export failed" in response.output) is bool(failure)
+    assert ("\nReceipt   " in response.output) is (failure is None)
     assert "apmx: HALTED" not in response.output
     assert "private filesystem error" not in response.output
 
@@ -77,9 +77,13 @@ def test_ordinary_run_without_dependencies_delivers_a_receipt(tmp_path, monkeypa
         main, ["job.contract.md", "--on", "copilot", "--allow-host-access"]
     )
     assert response.exit_code == 0, response.output
+<<<<<<< HEAD
     assert "Evidence package:" in response.output
     receipts = list(tmp_path.glob(".apm/runs/*/receipt"))
     assert len(receipts) == 1
+=======
+    assert "Receipt" not in response.output
+>>>>>>> dc64d6a (feat(cli): tell the contract/loop/factory/receipt story in default run output)
     assert not list(tmp_path.glob(".apm/runs/*/evidence"))
     bom = json.loads((receipts[0] / "abom.cdx.json").read_bytes())
     assert bom["components"] == []

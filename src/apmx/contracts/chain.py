@@ -97,6 +97,7 @@ def run_chain(
             outcome=Outcome.UNPROVEN,
         )
     _revalidate(plan)
+    logger.factory_started(plan)
     store = records.ChainStore.create_chain(
         plan.nodes[0].plan.project_root,
         describe(plan),

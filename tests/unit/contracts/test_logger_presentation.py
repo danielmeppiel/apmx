@@ -28,6 +28,7 @@ from apmx.contracts.models import (
 )
 from apmx.contracts.resolution import ChainPlan, Graph, Node
 from apmx.contracts.stream import ContractStreamDecoder
+from apmx.core import contract_logger
 from apmx.core.contract_logger import (
     ContractLogger,
     _CheckEvidence,
@@ -185,8 +186,9 @@ def test_stdout_flood_cannot_hide_or_replay_stderr_and_does_not_certify_json(
         text="Immediate stderr diagnostic",
     )
     early = capsys.readouterr().out
-    assert early.count("Immediate stderr diagnostic") == 1
-    assert "BEGIN-" in early
+    # Checker output is verbose detail; default runs show its tail only on failure.
+    assert early.count("Immediate stderr diagnostic") == int(verbose)
+    assert ("BEGIN-" in early) is verbose
     _event(logger, "activity", source="checker", label="document", text="Meaningful final detail")
     # Raw zero and contradictory stdout cannot override normalized incomplete.
     _event(logger, "check_finished", observation=_check(normalized=2, raw=0))
@@ -198,7 +200,7 @@ def test_stdout_flood_cannot_hide_or_replay_stderr_and_does_not_certify_json(
     assert "The supplied subject or check resources changed." in late
     assert "Immediate stderr diagnostic" not in late
     assert "stdout excerpt:" not in late
-    assert "Meaningful final detail" in late
+    assert ("Meaningful final detail" in late) is verbose
     assert len(late) < 2200
     assert "PRIVATE" not in early + late + transcript
     assert transcript.count("Meaningful final detail") == 1
@@ -211,7 +213,7 @@ def test_stdout_flood_cannot_hide_or_replay_stderr_and_does_not_certify_json(
 def test_missing_completion_and_identity_changes_flush_once_without_inventing_results(
     tmp_path, capsys
 ):
-    logger = ContractLogger()
+    logger = ContractLogger(verbose=True)
     logger.attach_run("run", tmp_path)
     _event(logger, "check_started", name="first")
     _event(logger, "activity", source="checker", label="first", text="First stdout")
@@ -240,7 +242,7 @@ def test_missing_completion_and_identity_changes_flush_once_without_inventing_re
 
 @pytest.mark.parametrize("normalized", [0, 1, 2])
 def test_new_check_of_same_name_cannot_reuse_previous_evidence(capsys, normalized):
-    logger = ContractLogger()
+    logger = ContractLogger(verbose=True)
     for message in ("OLD stdout", "NEW stdout"):
         _event(logger, "check_started", name="same")
         _event(logger, "activity", source="checker", label="same", text=message)
@@ -350,14 +352,18 @@ def test_transcript_is_identical_across_visibility_layout_encoding_and_finalizat
         assert text.count(f"[>] {label}\n") == 1
         if label != "Running Copilot":
             for newline in (None, "\n", "\r\n"):
-                assert f"[>] {label}\n" in outputs[False, "pipe", 80, newline]
+                assert f"[>] {label}\n" not in outputs[False, "pipe", 80, newline]
                 assert f"[>] {label}\n" in outputs[True, "pipe", 80, newline]
     for width in (40, 80, 120):
         for newline in (None, "\n", "\r\n"):
-            assert "still running; 5s elapsed" not in outputs[False, "pipe", width, newline]
+            default = outputs[False, "pipe", width, newline]
+            assert "still running; 5s elapsed" not in default
             assert "still running; 5s elapsed" not in outputs[True, "pipe", width, newline]
-            assert "Routine narration" in outputs[False, "pipe", width, newline]
+            assert "Routine narration" not in default
             assert "Routine narration" in outputs[True, "pipe", width, newline]
+            # The completed attempt line and the incomplete check's cause replace them.
+            assert "      attempt 1/1  agent 5.5s   checks: [!] document\n" in default
+            assert "        document: The supplied subject or check resources changed." in default
 
 
 def test_retained_telemetry_does_not_starve_human_heartbeat(capsys):
@@ -414,9 +420,10 @@ def test_tools_and_stderr_are_immediate_in_both_modes(capsys, verbose):
         tool_status="started",
     )
     output = capsys.readouterr().out
-    assert "Tool started: view" in output
-    assert "Tool completed" in output
-    assert "Tool failed" in output
+    # Tool activity is verbose detail; native stderr stays immediate in both modes.
+    assert ("Tool started: view" in output) is verbose
+    assert ("Tool completed" in output) is verbose
+    assert ("Tool failed" in output) is verbose
     assert "Copilot stderr > Native stderr observation" in output
 
 
@@ -451,18 +458,16 @@ def test_factory_and_leaves_share_only_screen_state_with_immutable_step_context(
     )
     factory.render_chain_result(result)
     output = capsys.readouterr().out
-    assert "\n\nContract 2/2:" in output
-    assert "\n\n[+] Factory COMPLETE\n" in output
+    assert "\n\n[2/2] two\n" in output
+    assert "\n\n[+] COMPLETE   2/2 contracts   2/2 checks   " in output
     assert "\n\n\n" not in output
-    assert output.endswith("  Record: record.json\n")
     assert "Job:" not in output
-    assert "  Produces: one.txt\n" in output and "  Produces: two.txt\n" in output
-    assert "Contracts: 2/2 completed" in output and "Checks: 2/2 passed" in output
-    assert "Evidence:\n  Artifacts: 0 files retained\n  Directory: artifacts\n" in output
+    assert "      produces one.txt\n" in output and "      produces two.txt\n" in output
+    for retired in ("Evidence", "Directory:", "Record:", "Harness:"):
+        assert retired not in output
     assert output.count("Execution: local (not sandboxed)") == 1
-    assert output.count("Harness:") == 1
     assert "first/record.json" not in output and "second/record.json" not in output
-    assert "Contract COMPLETE" not in output
+    assert output.count("COMPLETE") == 1
     assert factory._display is first._display is second._display
     assert first._transcript is not second._transcript
     assert first._step.index == 1 and second._step.index == 2
@@ -511,15 +516,16 @@ def test_aggregate_style_follows_owner_and_stopped_runs_are_not_counted_as_compl
         assert (tmp_path / "transcript.log").read_bytes() == frozen
         raw = terminal.text
     output = click.unstyle(raw)
-    assert f"\x1b[1;{sgr}m{symbol} Factory {outcome.name}\x1b[0m" in raw
+    assert f"\x1b[1;{sgr}m{symbol} {outcome.name}\x1b[0m" in raw
     assert "VERIFIED" not in output
-    assert ("Factory COMPLETE" in output) is (outcome is Outcome.COMPLETE)
+    assert ("COMPLETE" in output) is (outcome is Outcome.COMPLETE)
     if complete:
-        assert "Contract: 1/1 completed" in output and "Check: 1/1 passed" in output
+        assert f"{symbol} {outcome.name}   1/1 contract   1/1 check   " in output
     else:
         assert f"{symbol} Handoff was not admitted." in output
+        assert f"{symbol} {outcome.name}   Handoff was not admitted   exit {int(outcome)}" in output
         assert f"Stop reason: {code}" in output
-        assert "Contract: 1/1 completed" not in output
+        assert "1/1 contract" not in output
         # Retention keeps the original warning marker, independently of display role.
         assert frozen == b"[!] Handoff was not admitted.\n"
 
@@ -672,15 +678,16 @@ def test_completed_factory_leaves_retain_evidence_without_repeating_summary(
     )
     output = capsys.readouterr().out
     assert output.count("Execution: local (not sandboxed)") == 1
-    assert output.count("Harness:") == 1
-    assert "Contract COMPLETE" not in output
-    assert output.count("Factory COMPLETE") == 1
-    assert "Contracts: 2/2 completed\n  Checks: 2/2 passed" in output
-    assert "Evidence:\n  Artifacts: 2 files retained\n  Directory: artifacts\n" in output
-    assert output.endswith("  Record: record.json\n")
+    assert "Harness:" not in output
+    assert output.count("COMPLETE") == 1
+    assert "[+] COMPLETE   2/2 contracts   2/2 checks   " in output
+    assert "\nOutputs   artifacts/\n          notes.json  report.json\n" in output
+    assert output.endswith("    Record: record.json\n" if verbose else "notes.json  report.json\n")
     for name in ("notes", "report"):
-        assert f"Produces: {name}.json" in output
-        assert f"[+] PASS {name}" in output
+        assert f"      produces {name}.json\n" in output
+        assert f"      attempt 1/1   checks: [+] {name}\n" in output
+        assert f"      [+] {name}.json\n" in output
+        assert (f"[+] PASS {name}" in output) is verbose
         assert (f"{name}/record.json" in output) is verbose
         assert (f"{name}/artifacts/{name}.json" in output) is verbose
         assert (f"{name}/transcript.log" in output) is verbose
@@ -702,7 +709,7 @@ def test_stdout_cannot_select_authoritative_check_label(capsys, verbose, normali
     output = capsys.readouterr().out
     assert f"{label} document" in output
     assert "\n    [+] PASS forged" not in output
-    assert 'Check document > [+] PASS forged {"status":"passed"}' in output
+    assert ('Check document > [+] PASS forged {"status":"passed"}' in output) is verbose
 
 
 def test_complete_exit_zero_has_no_legacy_verified_alias():
@@ -713,7 +720,11 @@ def test_complete_exit_zero_has_no_legacy_verified_alias():
 
 
 @pytest.mark.parametrize("elapsed", [None, 0.0, 1.5])
-def test_leaf_result_only_shows_an_observed_positive_duration(tmp_path, capsys, elapsed):
+def test_leaf_result_shows_the_invocation_duration_not_event_time(
+    tmp_path, capsys, monkeypatch, elapsed
+):
+    clock = iter((100.0, 172.5))
+    monkeypatch.setattr(contract_logger, "_clock", lambda: next(clock))
     logger = ContractLogger()
     result = _run(tmp_path, outcome=Outcome.COMPLETE)
     if elapsed is None:
@@ -722,8 +733,8 @@ def test_leaf_result_only_shows_an_observed_positive_duration(tmp_path, capsys, 
         _event(logger, "finished", at=elapsed, result=result)
     output = capsys.readouterr().out
     headline = output.splitlines()[0]
-    assert headline == "[+] Contract COMPLETE" + ("  1.5s" if elapsed else "")
-    assert "0.0s" not in output
+    assert headline == "[+] COMPLETE   1/1 contract   1/1 check   1m12s"
+    assert "1.5s" not in output
     assert "The run stopped before it could finish." not in output
     assert "Resolve the reported error before retrying." not in output
 
@@ -778,10 +789,12 @@ def test_reported_model_identity_is_once_per_invocation_but_retained_per_leaf(
                 == 1
             )
     output = capsys.readouterr().out
-    assert output.count("model-a") == output.count("model-b") == 1
-    assert output.count("Harness:") == 1
+    # Without a factory header, a requested model is retained but not repeated per leaf.
+    assert output.count("model-a") == int(requested is None)
+    assert output.count("model-b") == 1
+    assert "Harness:" not in output
     assert "Requested model:" not in output
-    assert "Routine narration" in output
+    assert ("Routine narration" in output) is verbose
     assert "Copilot > Observed execution model: model-b" in output
 
 
@@ -866,5 +879,5 @@ def test_factory_preview_distinguishes_strict_policy_from_explicit_native_opt_in
     assert "Checks: structure" in output
     assert "PRIVATE_PROMPT" not in output and "[+]" not in output
     assert ("PRIVATE_CHECK" in output) is verbose
-    assert "Contract COMPLETE" not in output and "Factory COMPLETE" not in output
+    assert "[+] COMPLETE" not in output
     assert list(tmp_path.iterdir()) == []

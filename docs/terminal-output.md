@@ -3,9 +3,62 @@
 Use a [matching current-source build](install.md#choose-release-or-current-source)
 for these presentation behaviors.
 
-Default output streams public agent narration, tool activity and checker output
-as they arrive, alongside required inputs, check results and saved artifacts.
-For the full native debug stream and source/process detail, run:
+Default output tells one story per run: each contract's inputs and outputs,
+its agent loop until the checks pass, the factory order and file handoffs, and
+a final block naming the outputs and the receipt.
+
+```text
+Factory  factory   2 contracts   copilot / fixture-model
+
+[1/2] first    needs notes.md -> produces first.json, second.json
+      attempt 1/1  agent 4.0s   checks: [+] identity
+      [+] first.json, second.json -> handed to second
+
+[2/2] second   needs notes.md, first.json, second.json -> produces final.json
+      attempt 1/1  agent 3.0s   checks: [+] identity
+      [+] final.json
+
+[+] COMPLETE   2/2 contracts   2/2 checks   9.0s
+
+Outputs   factory/.apm/chains/<id>/artifacts/
+          first.json  second.json  final.json
+Receipt   factory/.apm/chains/<id>/receipt/
+          provenance  in-toto + SLSA v1
+          checks      in-toto test-result (2)
+          inventory   CycloneDX 1.5 (0 components)
+          unsigned: binds content, not identity; review before sharing
+
+Next      apmx audit factory/.apm/chains/<id>/receipt
+```
+
+When checks reject an output, the block shows every attempt, the last lines
+of the failing check's output, contracts that never started, and what to do:
+
+```text
+[1/2] first    needs notes.md -> produces first.json, second.json   budget 3 attempts
+      attempt 1/3  agent 5.0s   checks: [x] identity
+      attempt 2/3  agent 4.0s   checks: [x] identity
+      attempt 3/3  agent 4.0s   checks: [x] identity
+        identity: Independent fixture check: reject
+
+[2/2] second   not started: waits on first
+
+[x] REJECTED   first failed check identity after 3/3 attempts   exit 20
+
+Saved     factory/.apm/runs/<id>/   (attempt files + logs)
+Next      Fix the contract or check, then rerun:  apmx ./factory
+          More detail:                            apmx ./factory --verbose
+```
+
+A single `.contract.md` uses the same shape without `[i/N]` order or handoff
+lines. The Receipt rows name only standards documents that the export actually
+wrote; without a receipt the block ends at Outputs. `Next` suggests
+`apmx audit` only in builds that ship it.
+
+`--verbose` keeps everything else, in order and indented under its contract:
+capture details (`Found input`, `Working copy`), phase lines, agent narration,
+tool calls, check commands and checker output, per-check PASS/FAIL lines,
+record and log paths, and the receipt's individual files.
 
 ```sh
 apmx ./feature-factory --on copilot --verbose
@@ -13,8 +66,7 @@ apmx ./feature-factory --on copilot --verbose
 
 Copilot producers run with `--log-level all` in a private, per-attempt log
 directory. OpenCode producers use `--print-logs --log-level DEBUG`.
-`--verbose` mirrors native debug diagnostics live; it is not needed to see
-public narration, tools, checker stdout/stderr or failures.
+`--verbose` also mirrors these native debug diagnostics live.
 Configuration/authentication inventory probes remain quiet. Public JSON event
 decoders still exclude private reasoning and retained-only protocol events.
 Native debug diagnostics are less structured and may contain sensitive native
@@ -22,19 +74,27 @@ metadata: redaction is best-effort, not a safe-to-project-or-publish guarantee.
 
 ## Reading the output
 
-Contract headings and result blocks have clear blank-line boundaries.
-Headings/activity use cyan; metadata is subordinate. Both modes show actual
-output names under Produces, engine-owned PASS/FAIL under Checks, and final
-counts plus copyable artifact-directory and record paths under Evidence.
+Contract blocks and the final block have clear blank-line boundaries. `attempt
+n/N` counts the engine's attempts against the authored budget (`1/1` when no
+budget is authored). Its `[+]`, `[x]` and `[!]` marks are the engine-owned
+PASS, FAIL and INCOMPLETE verdicts. A handoff line is printed only after the
+factory admitted the producer's files for the next contract.
+
+On an interactive, color-capable terminal, the running attempt is one line
+updated in place with elapsed agent time and the agent's latest status. When
+output is redirected, in CI, with `NO_COLOR` or `TERM=dumb`, output is
+append-only: no cursor control, completed lines only, and a sparse
+`still running` line during long quiet work. Native stderr and engine
+diagnostics remain immediately visible in every mode.
 
 Before interactive factory consent, the work preview lists contract, artifact
 and planned-check counts, then every contract's Produces and Checks names.
 Contract identities match execution: a unique basename, or a root-relative
 path when names collide. Required files are visible in both modes, distinguished
-as starting inputs or earlier-stage outputs. During execution, `Found input`
-is emitted only after the canonical workspace owner captures the actual file,
-with its origin and byte count; `--verbose` adds its SHA-256 and upstream record.
-Each check's name and command appear before it starts. No check result is
+as starting inputs or earlier-stage outputs. During execution, `--verbose` emits
+`Found input` only after the canonical workspace owner captures the actual file,
+with its origin, byte count, SHA-256 and upstream record, and shows each
+check's name and command before it starts. No check result is
 claimed before execution, and Evidence
 says where it **will be saved**, not that a record already exists.
 
@@ -69,9 +129,10 @@ before consent/action, not as repeated per-leaf warnings. Green results do not
 imply isolation, correct software or production certification. Historical
 v0.3.2 and its recordings retain UNPROVEN/21; see [migration](results.md).
 
-Agent narration, tool activity and passing checker stdout are visible by default.
-A failed or incomplete check adds its normalized result without replaying
-already-streamed stdout. Check output is evidence
+Agent narration, tool activity and checker output are `--verbose` detail. A
+failed or incomplete check adds the last five lines of its output (stdout and
+stderr) under the attempt in default mode; `--verbose` does not replay
+already-streamed lines. Check output is evidence
 from an external program, not the authority for a green or red status.
 Checker stdout retains sanitized logical lines up to the existing 16 KiB stream
 limit; the terminal uses the same bound for checker lines. This keeps bounded JSON
@@ -87,19 +148,20 @@ notices. Global logs, links, special files and configuration files are not read.
 OpenCode INFO/DEBUG stderr is similarly display-only; warnings/errors retain
 the normal diagnostic path. Neither stream can decide a run or check outcome.
 
-`Attempts: up to 3 ... 600s total` describes the authored execution/check limit,
-not a model spending cap. `Attempt 1 of 3` does not imply a retry happened;
-`Accepted on attempt 1` explicitly identifies first-pass acceptance.
+`budget 3 attempts` describes the authored execution/check limit, not a model
+spending cap. `attempt 1/3` does not imply a retry happened. `--verbose` adds
+the full bound (`Attempts: up to 3 ... 600s total`) and `Accepted on attempt 1`.
 
-After automatic delivery, `Evidence package` names the actual `receipt/` directory and
-prints the factory definition, SLSA/in-toto production statement, CycloneDX ABOM,
-in-toto check statements and SHA-256 file index. Hashes bind the recorded bytes;
-the package is unsigned and does not authenticate the builder. See
+After automatic delivery, `Receipt` names the actual `receipt/` directory and the
+standards documents it contains; `--verbose` adds each file, including the
+factory definition and the SHA-256 file index. Hashes bind the recorded bytes;
+the receipt is unsigned and does not authenticate the builder. See
 [evidence verification](evidence.md) and the [live demo](demo.md).
 
 An interactive `NO_COLOR` terminal keeps hanging indentation without ANSI.
 Redirected output keeps logical lines, without animation or application-inserted
-wrapping. Saved artifact and record paths stay intact and copyable. The existing
+wrapping. Terminal rows wrap only between words, so output, receipt and saved
+paths and the suggested commands stay intact and copyable. The existing
 ASCII, redaction, literal-text and broken-pipe protections apply in every mode.
 If capturing terminal output yourself, write the log outside the application:
 a changing log inside the application can invalidate its admitted input snapshot.
@@ -116,6 +178,7 @@ The design uses composition, not a second logging framework.
 | Semantic explanations and observation routing | `ContractLogger` in `core/contract_logger.py` |
 | Roles, visibility, indentation, block gaps and outcome emphasis | Its private `_ContractDisplay` |
 | Pending check identity and completion observation | Its private `_CheckEvidence` |
+| Attempt lines, handoff lines and the final block | Its display-only `_AttemptView`, `_LeafView` and `_FactoryView` |
 | Stream capabilities, width, literal rendering and fallback | `utils/console.py` |
 | Bounded retained evidence | Existing per-attempt `_Transcript` and record finalization |
 

@@ -171,7 +171,7 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
         ],
     )
     assert result.exit_code == Outcome.COMPLETE, result.output
-    assert "PASS content" in result.output
+    assert "checks: [+] content" in result.output
     producer.assert_called_once()
     transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
     assert "APM > [>] Resolving" in result.output
@@ -181,14 +181,14 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
             "Installing packages with APM 0.30.0",
             "Packages ready.",
             "Imported style",
-            "Running Copilot",
+            "Running Copilot" if verbose or output is transcript else "attempt 1/1",
         ]
         assert [output.index(phase) for phase in phases] == sorted(
             output.index(phase) for phase in phases
         )
         assert output.count(phases[0]) == 1
         assert output.count(phases[1]) == 1
-    assert "Capturing files for Copilot" in result.output
+    assert ("Capturing files for Copilot" in result.output) is verbose
     assert "Capturing files for Copilot" in transcript
     details = (
         "Running: apm install (in a temporary workspace)",
@@ -244,13 +244,18 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
     assert result.exit_code == (23 if packaged else Outcome.COMPLETE), result.output
     if packaged:
         assert "duplicate component identities" in result.output
-        assert "Evidence delivery failed" in result.output
+        assert "Receipt export failed" in result.output
         from apmx.contracts.records import load_completed_result
 
         record = next((caller / ".apm/runs").glob("*/record.json"))
         assert load_completed_result(record).outcome is Outcome.COMPLETE
+<<<<<<< HEAD
         assert not (record.parent / "receipt").exists()
     assert "PASS content" in result.output
+=======
+        assert not (record.parent / "evidence").exists()
+    assert "checks: [+] content" in result.output
+>>>>>>> dc64d6a (feat(cli): tell the contract/loop/factory/receipt story in default run output)
     producer.assert_called_once()
     assert install.call_count == 1
     assert install.call_args.kwargs.get("scope", "package") == (
@@ -331,7 +336,7 @@ def test_local_run_without_imports_does_not_claim_apm_ran(
         ],
     )
     assert result.exit_code == Outcome.COMPLETE, result.output
-    assert "PASS content" in result.output
+    assert "checks: [+] content" in result.output
     install.assert_not_called()
     producer.assert_called_once()
     transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
@@ -339,11 +344,15 @@ def test_local_run_without_imports_does_not_claim_apm_ran(
         assert "with APM" not in output
         assert "Running: apm install" not in output
         assert "APM >" not in output
+    assert "needs notes.md -> produces" in result.output
+    assert "Needs: notes.md" in transcript
+    # Capture details are retained always and shown only with --verbose.
+    for output in (transcript, result.output) if verbose else (transcript,):
         assert "Capturing files for Copilot" in output
-        assert "Needs: notes.md" in output
         assert "Found input: notes.md (application; captured" in output
         assert output.index("Capturing files") < output.index("Found input: notes.md")
         assert output.index("Found input: notes.md") < output.index("Running Copilot")
+    assert ("Found input:" in result.output) is verbose
 
 
 @pytest.mark.parametrize("packaged", [False, True])

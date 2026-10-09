@@ -1,0 +1,31 @@
+[i] Execution: local (not sandboxed)
+  Agents and checks can access host
+  files, network and available logins.
+  Package dependencies may be installed;
+  model usage may cost money.
+  Run only contracts you trust.
+
+Factory  factory   2 contracts   copilot
+         / fixture-model
+
+[1/2] first    needs notes.md ->
+      produces first.json, second.json
+      budget 3 attempts
+      attempt 1/3  agent 5.0s   checks:
+      [x] identity
+      attempt 2/3  agent 4.0s   checks:
+      [x] identity
+      attempt 3/3  agent 4.0s   checks:
+      [x] identity
+        identity: Independent fixture check: reject
+
+[2/2] second   not started: waits on
+      first
+
+[x] REJECTED   first failed check
+    identity after 3/3 attempts   exit
+    20
+
+Saved     factory/.apm/runs/attempt-3/   (attempt files + logs)
+Next      Fix the contract or check, then rerun:  apmx ./factory --model fixture-model
+          More detail:                            apmx ./factory --model fixture-model --verbose

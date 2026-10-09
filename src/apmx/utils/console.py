@@ -199,7 +199,7 @@ def silence_broken_pipe() -> None:
         pass
 
 
-def _wrap_prose(message: str, width: int, indent: int) -> str:
+def _wrap_prose(message: str, width: int, indent: int, *, break_long_words: bool = True) -> str:
     """ASCII hanging layout shared by styled, no-color and fallback contract output."""
     if 0 < indent < width:
         prefix, body = message[:indent], message[indent:]
@@ -210,7 +210,7 @@ def _wrap_prose(message: str, width: int, indent: int) -> str:
     lines = textwrap.wrap(
         body,
         width=available,
-        break_long_words=True,
+        break_long_words=break_long_words,
         break_on_hyphens=False,
         replace_whitespace=False,
         expand_tabs=False,
@@ -236,6 +236,7 @@ def _rich_echo(
     body_style: str = "default",
     hanging_indent: int | None = None,
     capabilities: TerminalCapabilities | None = None,
+    break_long_words: bool = True,
 ):
     """Echo with opt-in accents and TTY prose layout; legacy output is unchanged."""
     # Handle backward compatibility - if style is provided, use it as color
@@ -251,7 +252,9 @@ def _rich_echo(
         plain = not capabilities.styled
         if capabilities.prose_layout and hanging_indent is not None:
             full_accent = accent_length == len(message)
-            message = _wrap_prose(message, capabilities.width, hanging_indent)
+            message = _wrap_prose(
+                message, capabilities.width, hanging_indent, break_long_words=break_long_words
+            )
             if full_accent:
                 accent_length = len(message)
         hanging_indent = None

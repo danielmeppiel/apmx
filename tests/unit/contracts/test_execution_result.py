@@ -128,7 +128,7 @@ def test_promotion_persistence_failure_cannot_announce_complete(tmp_path, monkey
     monkeypatch.setattr(records.AttemptStore, "_write", fail_complete)
     with pytest.raises(ContractError):
         _execute(tmp_path, monkeypatch)
-    assert "Contract COMPLETE" not in capsys.readouterr().out
+    assert "[+] COMPLETE" not in capsys.readouterr().out
     record = next((tmp_path / ".apm/runs").glob("*/record.json"))
     data = json.loads(record.read_bytes())
     assert data["complete"] is False
@@ -192,7 +192,7 @@ def test_preparation_cleanup_failure_is_recorded_before_cli_success(
         ],
     )
     assert result.exit_code == 22, result.output
-    assert "Contract COMPLETE" not in result.output
+    assert "[+] COMPLETE" not in result.output
     path = next((tmp_path / ".apm/runs").glob("*/record.json"))
     record = json.loads(path.read_bytes())
     assert record["execution"] == {"name": "HALTED", "exit_code": 22}
@@ -249,17 +249,18 @@ def test_actual_completed_cli_has_one_disclosure_and_evidence_hierarchy(
     assert result.exit_code == 0, result.output
     text = result.output
     assert text.count("[i] Execution: local (not sandboxed)") == 1
-    assert text.index("host files") < text.index("Contract 1/1:")
-    assert text.index("Model usage may cost money") < text.index("Contract 1/1:")
-    assert "Produces: result.txt" in text
-    assert text.index("Checks:") < text.index("    [+] PASS acceptance")
-    assert "[+] Contract COMPLETE" in text
-    assert "Contract: 1/1 completed" in text
-    assert "Check: 1/1 passed\nEvidence:" in text
-    assert "Artifacts: 1 file retained" in text
-    assert "Directory: .apm/runs/" in text
-    assert "Record: .apm/runs/" in text
-    assert "Copilot > Done" in text
+    assert text.index("host files") < text.index("Contract  job.contract.md")
+    assert text.index("Model usage may cost money") < text.index("Contract  job.contract.md")
+    assert "job   needs input.txt -> produces result.txt\n" in text
+    assert text.index("checks: [+] acceptance\n") < text.index("      [+] result.txt\n")
+    assert "\n\n[+] COMPLETE   1/1 contract   1/1 check   " in text
+    assert "\n\nOutputs   .apm/runs/" in text and "/artifacts/\n          result.txt\n" in text
+    for retired in ("Evidence", "Directory:", "Artifacts:"):
+        assert retired not in text
+    if verbose:
+        assert text.index("Checks:") < text.index("    [+] PASS acceptance")
+    assert ("Record: .apm/runs/" in text) is verbose
+    assert ("Copilot > Done" in text) is verbose
     assert "\n\n\n" not in text and text.isascii()
     assert "UNPROVEN" not in text and "production certification" not in text
     assert "stopped" not in text and "Resolve the reported error" not in text
@@ -318,7 +319,7 @@ def test_chain_finalization_refuses_incoherent_completion(tmp_path, monkeypatch,
     with pytest.raises(ContractError) as failure:
         chain.run_chain(prepare(tmp_path), logger=ContractLogger(), allow_advisory=True)
     assert failure.value.code == "chain_finalization_failure"
-    assert "Factory COMPLETE" not in capsys.readouterr().out
+    assert "[+] COMPLETE" not in capsys.readouterr().out
     path = next((tmp_path / ".apm/chains").glob("*/record.json"))
     data = json.loads(path.read_bytes())
     assert data["complete"] is False and data["phase"] == "finalization_failed"
@@ -347,7 +348,7 @@ def test_duplicate_contract_basenames_remain_unambiguous(tmp_path, monkeypatch, 
         identity = (
             node.plan.contract.path.relative_to(tmp_path).as_posix().removesuffix(".contract.md")
         )
-        assert f"Contract {index}/2: {identity}" in text
+        assert f"[{index}/2] {identity}" in text
 
 
 @pytest.mark.parametrize("error_type", [OSError, KeyboardInterrupt])
@@ -378,7 +379,7 @@ def test_all_finalization_inspection_failures_repair_the_record(
     assert data["complete"] is False and data["phase"] == "finalization_failed"
     assert data["execution"] == {"name": "HALTED", "exit_code": 22}
     assert data["result"]["stop_reason"] == "finalization_failure"
-    assert "Contract COMPLETE" not in capsys.readouterr().out
+    assert "[+] COMPLETE" not in capsys.readouterr().out
 
 
 def _cli_fixture(tmp_path, monkeypatch, factory):
@@ -438,7 +439,7 @@ def test_normal_preparation_teardown_cannot_invalidate_completed_evidence(
         ],
     )
     assert result.exit_code == 22, result.output
-    assert "Contract COMPLETE" not in result.output
+    assert "[+] COMPLETE" not in result.output
     data = json.loads(next((tmp_path / ".apm/runs").glob("*/record.json")).read_bytes())
     assert data["execution"]["name"] == "HALTED"
 
@@ -458,8 +459,9 @@ def test_factory_complete_headline_waits_for_shared_cleanup(tmp_path, monkeypatc
         main, [*args, "--on", "copilot", "--allow-host-access", "--verbose"]
     )
     assert result.exit_code == (22 if failure else 0), result.output
-    assert "Contract COMPLETE" not in result.output
-    assert result.output.count("Factory COMPLETE") == (0 if failure else 1)
+    # Leaves never print their own headline; only the factory result does.
+    assert "1/1 contract" not in result.output
+    assert result.output.count("[+] COMPLETE") == (0 if failure else 1)
     assert "PASS exact" in result.output
 
 

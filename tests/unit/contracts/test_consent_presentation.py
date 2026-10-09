@@ -155,9 +155,11 @@ def test_collision_names_match_execution(tmp_path, capsys):
             index, 2, contract.path, catalog=tuple(item.path for item in graph.catalog)
         )
     execution = capsys.readouterr().out
-    headings = [line for line in preview.splitlines() if line.startswith("Contract ")]
-    assert headings == [line for line in execution.splitlines() if line]
-    assert headings == ["Contract 1/2: first/planning", "Contract 2/2: second/planning"]
+    previewed = [
+        line.split(": ", 1)[1] for line in preview.splitlines() if line.startswith("Contract ")
+    ]
+    executed = [line.split("] ", 1)[1] for line in execution.splitlines() if line]
+    assert previewed == executed == ["first/planning", "second/planning"]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX PTY fixture.")
