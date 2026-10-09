@@ -1,0 +1,6 @@
+{
+  "$comment": "Trusted receiver factory allowlist, read from the PR base ref only. Only Evidence Packages whose definition.json digest (the hashed contract/plan identity recorded by apmx's own export) appears here are accepted; this is an identity check, independent of whether the evidence is otherwise internally valid or signed.",
+  "definitionSha256": [
+    "9b33061ec3b152a56b2f2934b2db17acfa3b0e0b666d4d5f133b5590527a3788"
+  ]
+}

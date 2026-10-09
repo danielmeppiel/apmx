@@ -1,0 +1,5 @@
+{
+  "$comment": "Trusted receiver capability-revocation list, read from the PR base ref only. Two selector forms, both optional: (1) 'lockIdentity' is a coarse whole-install-identity revocation -- for a local-path dependency this is an absolute install path, not a stable public identity, so it only revokes a specific recorded install root outright. (2) 'capabilities' is the exact structured selector: a list of {purl, bodySha256} pairs. A binding is revoked only when BOTH its purl and bodySha256 exactly match one listed pair -- never a substring or path-only match -- so the same real capability content still matches after being reinstalled at a different path. If an Evidence Package's capability-bindings.json matches either form, the receiver rejects the PR even though binding, factory and signer checks would otherwise pass -- this is the incident-response control: revoking trust in a previously-approved imported capability without touching main's protections or any other policy file.",
+  "lockIdentity": [],
+  "capabilities": []
+}
