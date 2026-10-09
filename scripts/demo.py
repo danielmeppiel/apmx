@@ -392,10 +392,10 @@ def evidence_package(root: Path, config: dict, harness: str | None, run: str | N
             raise ValueError("Concurrent factory runs are ambiguous. Select one with --run ID.")
         (selected,) = matches
     directory(selected)
-    package = selected / "evidence"
+    package = selected / "receipt"
     if not package.is_dir():
         raise ValueError(
-            f"Recorded run {selected.name} has no delivered evidence. "
+            f"Recorded run {selected.name} has no delivered receipt. "
             "Inspect that run; an earlier success will not be substituted."
         )
     directory(package)

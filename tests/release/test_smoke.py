@@ -22,10 +22,10 @@ class SmokeFixtureTests(unittest.TestCase):
     def test_completed_package_requires_automatic_standard_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
-            stdout = "Evidence package: evidence\nSummary: evidence/summary.md"
+            stdout = "Evidence package: receipt\nSummary: receipt/summary.md"
             with self.assertRaisesRegex(AssertionError, "missing index.json"):
                 smoke.require_standard_delivery(run, stdout, ambiguous_inventory=False)
-            package = run / "evidence"
+            package = run / "receipt"
             package.mkdir()
             (package / "index.json").write_text('{"schema":"apmx-evidence-package/1"}')
             for name in ("summary.md", "abom.cdx.json", "provenance.intoto.json"):
@@ -56,7 +56,7 @@ class SmokeFixtureTests(unittest.TestCase):
                     stdout.replace("duplicate component identities", "unexpected error"),
                     ambiguous_inventory=True,
                 )
-            (run / "evidence").mkdir()
+            (run / "receipt").mkdir()
             with self.assertRaisesRegex(AssertionError, "published a package"):
                 smoke.require_standard_delivery(run, stdout, ambiguous_inventory=True)
 

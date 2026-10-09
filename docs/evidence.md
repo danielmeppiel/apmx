@@ -1,9 +1,13 @@
-# Portable execution evidence
+# Receipts: portable execution evidence
 
-Development source exports a standards-based Evidence Package after a completed
-contract, factory or repair controller with retained official APM inventory.
-APM provides the dependency inventory; APMX projects recorded production and
+Every COMPLETE contract, factory or repair controller exports a standards-based
+**receipt**, with or without APM dependencies. *Outputs* are the delivered
+files; the *receipt* is the standards bundle that binds them to the factory,
+its ingredients and its checks. When APM dependencies were installed, APM
+provides the dependency inventory; APMX projects recorded production and
 checker observations. The export neither runs a model nor reruns checks.
+REJECTED and HALTED runs get no receipt: a receipt attests a COMPLETE result
+only. Their saved attempt outputs and check logs stay under `.apm/runs/<id>/`.
 
 ```mermaid
 flowchart LR
@@ -21,20 +25,25 @@ flowchart LR
 | --- | --- |
 | `summary.md` | Which attempts completed or were rejected? Where are the standard files? |
 | `definition.json` | Which contracts, checks, resources, capabilities and budgets defined this invocation? |
-| `abom.cdx.json` | Which packages did the recorded official APM lock inventory? |
+| `abom.cdx.json` | Which packages did the recorded official APM lock inventory? Zero components when no APM dependencies were installed. |
 | `provenance.intoto.json` | Which selected output files did this completed invocation produce? |
 | `provenance/*.intoto.json` | Which individual attempt produced each artifact, including separate code and documentation patches? |
 | `checks/*.intoto.json` | What did each actual checker invocation report, against which exact files? |
 | `attempts/`, `candidates/` | What retained inputs, outputs and reconstructed tested files bind those claims? |
 | `index.json` | What files and hashes belong to this package? |
 
-The CLI prints the package and summary paths. Packages live next to the completed
-root record: `.apm/runs/<id>/evidence`, `.apm/controllers/<id>/evidence`, or
-`.apm/chains/<id>/evidence`. A completed repair includes its earlier rejected
+The CLI prints the receipt and summary paths. Receipts live next to the completed
+root record: `.apm/runs/<id>/receipt`, `.apm/controllers/<id>/receipt`, or
+`.apm/chains/<id>/receipt`. A completed repair includes its earlier rejected
 attempts, not just the selected output. A stopped root is not eligible.
 
-Without a retained APM lock, an ordinary run keeps its existing output and
-execution exit. With a retained lock, missing/inconsistent inventory, ambiguous
+Without a retained APM lock (no APM dependencies were installed or selected),
+`abom.cdx.json` is still a schema-valid CycloneDX 1.5 document. It lists zero
+components and says so explicitly in `metadata.properties`
+(`apmx:apm-dependencies` = `0`); `definition.json` has no resolved
+dependencies and `capability-bindings.json` is empty. A run that selected
+capabilities without a retained lock refuses export rather than claiming zero
+dependencies. With a retained lock, missing/inconsistent inventory, ambiguous
 capability bindings or unavailable checked subjects are explicit delivery
 failures, not a silent downgrade. The command exits **23** while its canonical
 execution record remains COMPLETE. Other execution exits are unchanged;
@@ -55,7 +64,8 @@ failure rather than deduplicating the official bytes or relabeling execution.
 | Check predicate | `https://in-toto.io/attestation/test-result/v0.1` |
 
 APMX's small `apmx-evidence-package/1` index and `apmx-definition/1` definition
-connect these standard files; they do not replace their formats.
+connect these standard files; they do not replace their formats. The index
+profile name predates the *receipt* vocabulary and is kept for compatibility.
 
 ### Contract v1 build-type mapping
 
@@ -72,7 +82,8 @@ source and baseline files. `runDetails` records the builder identifier
 execution projection are **byproducts**, not inputs supposedly read by a model.
 An aggregate statement relates selected outputs to distinct producer statements.
 
-APM's export is retained verbatim, without installing or re-resolving dependencies.
+With dependencies, APM's export is retained verbatim, without installing or
+re-resolving dependencies.
 Its deterministic inventory timestamp is not an execution time. Its coarse
 package identifiers do not always identify a virtual skill. Therefore
 `capability-bindings.json` connects an unambiguous official component to the
@@ -110,11 +121,12 @@ establish their stated format/reference/example scope, not prose correctness.
 
 ## Export again without inference
 
-Use the development Python environment and the exact recorded official APM
-backend. Supply an original completed root record and a **new** destination:
+Use the development Python environment and, when the run had APM dependencies,
+the exact recorded official APM backend. Supply an original completed root
+record and a **new** destination:
 
 ```sh
-.venv/bin/python - /absolute/path/to/record.json /absolute/path/to/new-evidence <<'PY'
+.venv/bin/python - /absolute/path/to/record.json /absolute/path/to/new-receipt <<'PY'
 import sys
 from pathlib import Path
 from apmx.contracts.evidence import export_package
@@ -128,7 +140,7 @@ in owned temporary directories, without executing their code. It refuses
 existing/symlink destinations, checks all written bytes, revalidates the root,
 and publishes a completed directory by rename. It does not rewrite canonical
 records. The export has a 512 MiB byte bound. Raw records themselves still
-refer to original local evidence paths; relocate the **exported package**.
+refer to original local evidence paths; relocate the **exported receipt**.
 
 ## Independent, offline verification
 
@@ -138,9 +150,9 @@ CycloneDX JSON Schemas. They do **not** import APMX. From the source checkout:
 ```sh
 python3 -m venv .venv-evidence
 .venv-evidence/bin/python -m pip install -r scripts/evidence-requirements.txt
-.venv-evidence/bin/python scripts/verify_evidence.py /path/to/evidence \
+.venv-evidence/bin/python scripts/verify_evidence.py /path/to/receipt \
   --schemas /path/to/schema-cache --fetch-schemas --require-capability
-.venv-evidence/bin/python scripts/check_evidence_controls.py /path/to/evidence \
+.venv-evidence/bin/python scripts/check_evidence_controls.py /path/to/receipt \
   --schemas /path/to/schema-cache
 ```
 

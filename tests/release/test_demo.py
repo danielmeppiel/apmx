@@ -75,7 +75,7 @@ def test_reset_preserves_evidence_and_recreates_identical_consumers(kit: Path) -
 
 
 def recorded_package(kit: Path, run: str = "20261007T120000Z-abcdef123456") -> Path:
-    package = kit / "checkout-copilot/.apm/chains" / run / "evidence"
+    package = kit / "checkout-copilot/.apm/chains" / run / "receipt"
     package.mkdir(parents=True)
     definition = {"name": "definition.json", "digest": {"sha256": "d" * 64}}
     documents = {

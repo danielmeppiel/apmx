@@ -249,7 +249,7 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
 
         record = next((caller / ".apm/runs").glob("*/record.json"))
         assert load_completed_result(record).outcome is Outcome.COMPLETE
-        assert not (record.parent / "evidence").exists()
+        assert not (record.parent / "receipt").exists()
     assert "PASS content" in result.output
     producer.assert_called_once()
     assert install.call_count == 1

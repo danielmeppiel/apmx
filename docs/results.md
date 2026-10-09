@@ -15,10 +15,11 @@ record. Check labels are PASS, FAIL and INCOMPLETE; raw process observations
 remain in the record.
 
 Development source also uses command exit **23** when execution is COMPLETE
-but delivery of its eligible [standards Evidence Package](evidence.md) fails.
+but delivery of its [receipt](evidence.md) fails.
 This is not a new execution outcome: the canonical COMPLETE record and
 artifacts are not rewritten. Retry the read-only export, not the model run.
-Runs without retained official APM inventory keep their existing behavior.
+Every COMPLETE run gets a receipt, with or without APM dependencies;
+REJECTED, UNPROVEN and HALTED runs never do.
 
 COMPLETE is not VERIFIED, trust, certification, correct software, a sandbox,
 or permission to merge/deploy. Native agents and checks use host files,
@@ -75,7 +76,7 @@ outcomes. The BOM describes supplied inventory; it is not an input allegedly
 read by the model, nor proof that every installed capability was used.
 
 Current development source automatically exports a portable
-[Evidence Package](evidence.md) after eligible completed executions and all
+[receipt](evidence.md) after every completed execution and all
 preparation cleanup. It adds no CLI command or flag. The package includes
 ordinary CycloneDX inventory, in-toto/SLSA producer statements and in-toto
 Test Result statements; records remain the sole execution authority.

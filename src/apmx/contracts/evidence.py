@@ -66,12 +66,43 @@ def _matches_component(component: dict, dependency: LockedDependency) -> bool:
     )
 
 
+def _empty_inventory() -> bytes:
+    """A truthful CycloneDX 1.5 inventory for an execution that installed no APM packages."""
+    return _json(
+        {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.5",
+            "version": 1,
+            "metadata": {
+                "tools": [{"vendor": "APMX", "name": "apmx receipt"}],
+                "properties": [
+                    {"name": "apmx:apm-dependencies", "value": "0"},
+                    {
+                        "name": "apmx:inventory-scope",
+                        "value": "No APM lock was retained: this execution installed and "
+                        "selected no APM dependencies.",
+                    },
+                ],
+            },
+            "components": [],
+            "dependencies": [],
+        }
+    )
+
+
 def _inventory(runs: tuple[RunResult, ...]) -> tuple[bytes, list[dict], list[dict]]:
     """Bind official inventory to frozen locks and exact selected capability identities."""
     documents = [
         records._record_bytes(run.run_directory / "record.json", ContractLimits())[0]
         for run in runs
     ]
+    if all(row.get("lock_sha256") is None for row in documents):
+        if any(row.get("imports") for row in documents):
+            raise ContractError(
+                "Selected capabilities have no retained APM lock; no receipt was exported.",
+                code="inventory_missing",
+            )
+        return _empty_inventory(), [], []
     first = documents[0]
     if (
         not first.get("lock_sha256")
@@ -219,13 +250,11 @@ class _Package:
         identity = {"sha256": _hash(raw), "size": len(raw)}
         if name in self.files:
             if self.files[name] != identity:
-                raise ContractError("Evidence output collision.", code="evidence_collision")
+                raise ContractError("Receipt output collision.", code="evidence_collision")
         else:
             self.total += len(raw)
             if self.total > 4 * ContractLimits().baseline_bytes:
-                raise ContractError(
-                    "Evidence export exceeds its byte limit.", code="evidence_limit"
-                )
+                raise ContractError("Receipt export exceeds its byte limit.", code="evidence_limit")
             path = _path(self.root, name)
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("xb") as stream:
@@ -413,16 +442,12 @@ def _test_results(report: dict | None) -> dict:
     return result
 
 
+RECEIPT_DIRECTORY = "receipt"
+
+
 def export_completed(result: RunResult | ChainResult) -> Path | None:
-    """Existing invocations export when they captured official inventory; plain runs stay plain."""
+    """Every COMPLETE invocation gets a receipt; REJECTED/HALTED roots never do."""
     if result.outcome is not Outcome.COMPLETE:
-        return None
-    runs = result.runs if isinstance(result, ChainResult) else (result,)
-    documents = [
-        records._record_bytes(run.run_directory / "record.json", ContractLimits())[0]
-        for run in runs
-    ]
-    if all(row.get("lock_sha256") is None for row in documents):
         return None
     record = (
         result.record_path
@@ -431,7 +456,7 @@ def export_completed(result: RunResult | ChainResult) -> Path | None:
         if result.controller
         else result.run_directory / "record.json"
     )
-    return export_package(record, record.parent / "evidence")
+    return export_package(record, record.parent / RECEIPT_DIRECTORY)
 
 
 def export_package(record_path: Path, destination: Path) -> Path:
@@ -439,7 +464,7 @@ def export_package(record_path: Path, destination: Path) -> Path:
     destination = destination.absolute()
     if destination.exists() or has_symlink_component(Path(destination.anchor), destination):
         raise ContractError(
-            "Evidence destination exists or contains a symlink.", code="evidence_destination"
+            "Receipt destination exists or contains a symlink.", code="evidence_destination"
         )
     result = records.load_completed_result(record_path)
     selected = result.runs if isinstance(result, ChainResult) else (result,)
@@ -561,9 +586,13 @@ def export_package(record_path: Path, destination: Path) -> Path:
                 )
             package.document("provenance.intoto.json", primary)
             summary = (
-                "# APMX execution evidence\n\n"
-                "Unsigned local observations, not authenticated attestation or a sandbox.\n\n"
+                "# APMX receipt\n\n"
+                "Unsigned local observations, not authenticated attestation or a sandbox. "
+                "See docs/evidence.md to verify it.\n\n"
                 f"Definition SHA-256: `{definition_ref['digest']['sha256']}`\n\n"
+                f"APM dependencies: {len(dependencies)}"
+                + (" (CycloneDX inventory lists zero components)" if not dependencies else "")
+                + "\n\n"
                 "[Definition](definition.json) | [CycloneDX inventory](abom.cdx.json) | "
                 "[Production provenance](provenance.intoto.json) | [File index](index.json)\n\n"
                 "| Attempt | Recorded outcome | Harness | Checks |\n| --- | --- | --- | --- |\n"
@@ -604,7 +633,7 @@ def export_package(record_path: Path, destination: Path) -> Path:
                 raw, _ = _read(staging, name, identity["size"])
                 if _hash(raw) != identity["sha256"]:
                     raise ContractError(
-                        "Exported evidence changed before publication.",
+                        "Exported receipt changed before publication.",
                         code="evidence_delivery_failed",
                     )
             with (staging / "index.json").open("xb") as stream:
@@ -614,7 +643,7 @@ def export_package(record_path: Path, destination: Path) -> Path:
             boundary.validate(result)
             if destination.exists():
                 raise ContractError(
-                    "Evidence destination appeared during export.", code="evidence_destination"
+                    "Receipt destination appeared during export.", code="evidence_destination"
                 )
             os.rename(staging, destination)
         return destination
@@ -622,6 +651,6 @@ def export_package(record_path: Path, destination: Path) -> Path:
         if isinstance(exc, ContractError):
             raise
         raise ContractError(
-            "Evidence delivery failed; the canonical execution outcome was not changed.",
+            "Receipt delivery failed; the canonical execution outcome was not changed.",
             code="evidence_delivery_failed",
         ) from exc
