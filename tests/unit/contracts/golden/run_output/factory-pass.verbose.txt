@@ -1,0 +1,86 @@
+[i] Execution: local (not sandboxed)
+  Agents and checks can access host files, network and available logins.
+  Package dependencies may be installed; model usage may cost money.
+  Run only contracts you trust.
+
+Factory  factory   2 contracts   copilot / fixture-model
+
+[1/2] first    needs notes.md -> produces first.json, second.json
+        Source: factory/first.contract.md
+        Run: run
+        Record directory: factory/.apm/runs/run-1
+      [>] Capturing files for Copilot
+      Found input: notes.md (application; captured 33 bytes)
+        Input SHA-256: 0000000000000000000000000000000000000000000000000000000000000000
+      Working copy: 3 captured files; execution uses copies.
+      [>] Running Copilot
+      Copilot > Hermetic fixture progress.
+        Copilot > Tool started: view
+      [>] Saving output
+      Checks:
+      [>] Checking first.json, second.json
+      Running check: identity - python -I check.py
+      Check identity stdout:
+        Check identity > Independent fixture check: pass
+        [+] PASS identity
+        Check identity: raw exit 0
+      attempt 1/1  agent 4.0s   checks: [+] identity
+      [>] Saving results
+        Record: factory/.apm/runs/run-1/record.json
+        Artifact: factory/.apm/runs/run-1/artifacts/first.json
+        Artifact: factory/.apm/runs/run-1/artifacts/second.json
+        Observed execution model: unknown
+        Logs: factory/.apm/runs/run-1/transcript.log
+        Logs may contain sensitive data. Review before sharing.
+      [+] first.json, second.json -> handed to second
+
+[2/2] second   needs notes.md, first.json, second.json -> produces final.json
+        Source: factory/second.contract.md
+        Run: run
+        Record directory: factory/.apm/runs/run-2
+      [>] Capturing files for Copilot
+      Found input: notes.md (application; captured 33 bytes)
+        Input SHA-256: 0000000000000000000000000000000000000000000000000000000000000000
+      Found input: first.json (application; captured 33 bytes)
+        Input SHA-256: 0000000000000000000000000000000000000000000000000000000000000000
+      Found input: second.json (application; captured 33 bytes)
+        Input SHA-256: 0000000000000000000000000000000000000000000000000000000000000000
+      Working copy: 5 captured files; execution uses copies.
+      [>] Running Copilot
+      Copilot > Hermetic fixture progress.
+        Copilot > Tool started: view
+      [>] Saving output
+      Checks:
+      [>] Checking final.json
+      Running check: identity - python -I check.py
+      Check identity stdout:
+        Check identity > Independent fixture check: pass
+        [+] PASS identity
+        Check identity: raw exit 0
+      attempt 1/1  agent 3.0s   checks: [+] identity
+      [>] Saving results
+      [+] final.json
+        Record: factory/.apm/runs/run-2/record.json
+        Artifact: factory/.apm/runs/run-2/artifacts/final.json
+        Observed execution model: unknown
+        Logs: factory/.apm/runs/run-2/transcript.log
+        Logs may contain sensitive data. Review before sharing.
+
+[+] COMPLETE   2/2 contracts   2/2 checks   9.0s
+
+Outputs   factory/.apm/chains/chain-1/artifacts/
+          first.json  second.json  final.json
+    Record: factory/.apm/chains/chain-1/record.json
+Receipt   factory/.apm/chains/chain-1/receipt/
+          provenance  in-toto + SLSA v1
+          checks      in-toto test-result (2)
+          inventory   CycloneDX 1.5 (0 components)
+          unsigned: binds content, not identity; review before sharing
+
+Next      apmx audit factory/.apm/chains/chain-1/receipt
+    Summary: factory/.apm/chains/chain-1/receipt/summary.md
+    Factory definition: factory/.apm/chains/chain-1/receipt/definition.json
+    Production (in-toto / SLSA v1): factory/.apm/chains/chain-1/receipt/provenance.intoto.json
+    Dependency ABOM (CycloneDX 1.5): factory/.apm/chains/chain-1/receipt/abom.cdx.json
+    Check results (in-toto): factory/.apm/chains/chain-1/receipt/checks
+    SHA-256 file index: factory/.apm/chains/chain-1/receipt/index.json

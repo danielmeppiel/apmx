@@ -118,11 +118,13 @@ do not replace the example's original acceptance checks.
 
 APMX retains artifacts, their identities and the original check results.
 Missing outputs, failed or incomplete checks, and changed retained evidence
-block dependent work. Follow the printed paths:
+block dependent work. A completed run ends with copyable `Outputs`, `Receipt`
+and `Next` lines; on disk:
 
+- `.apm/chains/<id>/artifacts/` collects the completed factory's artifacts (`Outputs`).
+- `.apm/chains/<id>/receipt/` holds the standards receipt (`Receipt`).
 - `.apm/chains/<id>/record.json` connects the actual steps and handoffs.
-- `.apm/chains/<id>/artifacts/` collects the completed factory's artifacts.
-- `.apm/runs/<id>/record.json` records each contract's inputs and checks.
+- `.apm/runs/<id>/record.json` records each contract's inputs and checks (`--verbose` prints these paths).
 
 Every completed invocation also delivers a receipt: a CycloneDX ABOM,
 in-toto/SLSA producer statements, Test Result statements, exact supporting

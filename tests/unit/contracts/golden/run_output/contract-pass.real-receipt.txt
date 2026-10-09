@@ -1,0 +1,11 @@
+[+] COMPLETE   1/1 contract   1/1 check   <t>
+
+Outputs   .apm/runs/<run>/artifacts/
+          result.txt
+Receipt   .apm/runs/<run>/receipt/
+          provenance  in-toto + SLSA v1
+          checks      in-toto test-result (1)
+          inventory   CycloneDX 1.5 (0 components)
+          unsigned: binds content, not identity; review before sharing
+
+Next      apmx audit .apm/runs/<run>/receipt

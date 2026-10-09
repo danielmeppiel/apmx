@@ -693,7 +693,7 @@ def require_standard_delivery(run: Path, stdout: str, *, ambiguous_inventory: bo
     package = run / "receipt"
     if ambiguous_inventory:
         require(not package.exists() and not package.is_symlink(), "Failed export published a package")
-        require("Evidence delivery failed (command exit 23)" in stdout, "Missing delivery diagnostic")
+        require("Receipt export failed (command exit 23)" in stdout, "Missing delivery diagnostic")
         require(
             "official ABOM has missing or duplicate component identities" in stdout,
             "Expected the pinned backend's ambiguous-inventory refusal",
@@ -704,7 +704,8 @@ def require_standard_delivery(run: Path, stdout: str, *, ambiguous_inventory: bo
         require((package / name).is_file(), f"Automatic receipt delivery missing {name}")
     index = json.loads((package / "index.json").read_bytes())
     require(index.get("schema") == "apmx-evidence-package/1", "Unexpected standard package index")
-    require("Evidence package:" in stdout and "Summary:" in stdout, "Missing evidence paths")
+    require("\nReceipt   " in stdout and "in-toto" in stdout, "Missing receipt paths")
+    require("\nNext      apmx audit " in stdout, "Missing the apmx audit next step")
     return "delivered"
 
 

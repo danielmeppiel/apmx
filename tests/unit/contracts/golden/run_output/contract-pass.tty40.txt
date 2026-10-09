@@ -1,0 +1,31 @@
+[i] Execution: local (not sandboxed)
+  Agents and checks can use host files,
+  network and available logins.
+  Model usage may cost money. Run only
+  contracts you trust.
+
+Contract  first.contract.md   copilot /
+          fixture-model
+
+first   needs notes.md -> produces
+        first.json, second.json
+      attempt 1/1  agent 4.0s   checks:
+      [+] identity
+      [+] first.json, second.json
+
+[+] COMPLETE   1/1 contract   1/1 check
+    5.0s
+
+Outputs   .apm/runs/run-1/artifacts/
+          first.json  second.json
+Receipt   .apm/runs/run-1/receipt/
+          provenance  in-toto + SLSA v1
+          checks      in-toto
+          test-result (1)
+          inventory   CycloneDX 1.5 (0
+          components)
+          unsigned: binds content, not
+          identity; review before
+          sharing
+
+Next      apmx audit .apm/runs/run-1/receipt

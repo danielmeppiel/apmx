@@ -72,23 +72,22 @@ completed run look like this. Output is abbreviated and `<run-id>` is a
 placeholder:
 
 ```text
-Contract 1/1: handoff
-  Produces: handoff.json
-  Checks:
-    [+] PASS handoff
+Contract  handoff.contract.md   copilot / default model
 
-[+] Contract COMPLETE
-  Contract: 1/1 completed
-  Check: 1/1 passed
-Evidence:
-  Artifacts: 1 file retained
-  Directory: .apm/runs/<run-id>/artifacts
-  Record: .apm/runs/<run-id>/record.json
+handoff   needs notes.md -> produces handoff.json
+      attempt 1/1  agent 41s   checks: [+] handoff
+      [+] handoff.json
+
+[+] COMPLETE   1/1 contract   1/1 check   44s
+
+Outputs   .apm/runs/<run-id>/artifacts/
+          handoff.json
 ```
 
-**Open the printed Evidence directory and Record paths.** They are relative to the folder
-where you ran the command. The output is saved under `.apm/runs/`, not copied
-over a `handoff.json` at the top of that folder.
+**Open the printed Outputs path.** It is relative to the folder where you ran
+the command. The output is saved under `.apm/runs/`, not copied over a
+`handoff.json` at the top of that folder. Add `--verbose` to also see agent
+narration, captured inputs, check commands and checker output.
 
 The checker validates the JSON format and confirms there is one entry for
 each source ID. It does not establish that every summary is factually correct.

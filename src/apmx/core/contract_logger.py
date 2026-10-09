@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import os
 import re
+import shlex
 import sys
+import time
 from collections import deque
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from enum import Enum, IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, ClassVar
@@ -38,6 +43,28 @@ if TYPE_CHECKING:
     from rich.status import Status
 
     from apmx.contracts.resolution import ChainPlan, Graph
+
+# Display-only clock; tests replace it to make elapsed-time text deterministic.
+_clock = time.monotonic
+# Append-only output reports liveness at most this often during quiet work.
+LIVENESS_SECONDS = 30
+# Block bodies align under the contract name that follows "[i/N] ".
+BLOCK = 6
+TAIL_LINES = 5
+
+
+def _seconds(value: float) -> str:
+    value = max(0.0, value)
+    if value < 10:
+        return f"{value:.1f}s"
+    if value < 60:
+        return f"{value:.0f}s"
+    minutes, seconds = divmod(round(value), 60)
+    return f"{minutes}m{seconds:02d}s"
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
 class _ProseDisplay:
@@ -165,6 +192,7 @@ class _Role(str, Enum):
     SUCCESS = "success"
     DETAIL = "detail"
     EXTERNAL = "external"
+    TITLE = "title"
 
 
 class _Visibility(Enum):
@@ -211,10 +239,13 @@ class _DisplayLine:
     text: str
     role: _Role = _Role.INFO
     source: str = ""
-    level: _Level = _Level.BODY
+    level: int = _Level.BODY
     accent: str = ""
     layout: _Layout = _Layout.LITERAL
     dim_remainder: bool = False
+    hang: int = 0
+    # Summary rows wrap between words only, so paths and names stay copyable.
+    keep_words: bool = False
 
 
 @dataclass(frozen=True)
@@ -236,6 +267,7 @@ class _ContractDisplay:
         _Role.SUCCESS: _RoleStyle("check", "green"),
         _Role.DETAIL: _RoleStyle("", "dim"),
         _Role.EXTERNAL: _RoleStyle("", "dim cyan"),
+        _Role.TITLE: _RoleStyle("", "cyan"),
     }
     _outcomes: ClassVar[dict[Outcome, _Role]] = {
         Outcome.COMPLETE: _Role.SUCCESS,
@@ -252,6 +284,7 @@ class _ContractDisplay:
         self.disclosure_shown = False
         self.identity_shown = False
         self.models_shown: set[str] = set()
+        self.started = _clock()
 
     @classmethod
     def outcome_role(cls, outcome: Outcome) -> _Role:
@@ -305,8 +338,9 @@ class _ContractDisplay:
                 natural_wrap=True,
                 accent_length=accent_length,
                 body_style="dim" if line.dim_remainder else "default",
-                hanging_indent=len(prefix) if line.layout is _Layout.PROSE else None,
+                hanging_indent=len(prefix) + line.hang if line.layout is _Layout.PROSE else None,
                 capabilities=capabilities,
+                break_long_words=not line.keep_words,
             )
         except BrokenPipeError:
             self.disable()
@@ -326,18 +360,22 @@ class _ContractDisplay:
             and rich_console.is_terminal
         )
 
-    def start_activity(self, message: str) -> None:
+    def start_activity(self, message: str | Callable[[], str]) -> None:
+        """Animate one transient line; a callable label is re-read on every refresh."""
         if not self.animates():
             self.stop_activity()
             return
         from rich.text import Text
 
-        label = Text(
-            message + "...",
-            style=self._roles[_Role.INFO].color,
-            no_wrap=True,
-            overflow="ellipsis",
-        )
+        if callable(message):
+            label = _LiveLabel(message, self._roles[_Role.INFO].color)
+        else:
+            label = Text(
+                message + "...",
+                style=self._roles[_Role.INFO].color,
+                no_wrap=True,
+                overflow="ellipsis",
+            )
         try:
             if self.status is None:
                 self.status = console._get_console().status(
@@ -365,6 +403,77 @@ class _ContractDisplay:
         self.enabled = False
         self.stop_activity()
         console.silence_broken_pipe()
+
+
+class _LiveLabel:
+    """Rich renderable for the in-place attempt line; ASCII-truncated to one row."""
+
+    def __init__(self, render: Callable[[], str], color: str) -> None:
+        self.render = render
+        self.color = color
+
+    def __rich__(self):
+        from rich.text import Text
+
+        width = max(8, console.terminal_capabilities().width - 3)
+        text = self.render()
+        if len(text) > width:
+            text = text[: width - 3].rstrip() + "..."
+        return Text(text, style=self.color, no_wrap=True, overflow="crop")
+
+
+@dataclass
+class _AttemptView:
+    """Display-only summary of one attempt; outcomes stay with the engine/record owners."""
+
+    index: int
+    count: int
+    agent_clock: float | None = None
+    agent_started: float | None = None
+    agent_seconds: float | None = None
+    checks: list[tuple[str, int]] = field(default_factory=list)
+    tails: dict[str, deque[str]] = field(default_factory=dict)
+    notes: list[tuple[str, str]] = field(default_factory=list)
+    status: str = ""
+    stage: str = "preparing"
+    summarized: bool = False
+    liveness: float = 0.0
+
+
+@dataclass
+class _LeafView:
+    """One contract block shared by its leaf logger and every attempt logger."""
+
+    name: str = ""
+    header_shown: bool = False
+    budget: RepairBudget | None = None
+    last: _AttemptView | None = None
+    repair_stop: str = ""
+
+
+@dataclass
+class _FactoryNode:
+    index: int
+    name: str
+    needs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    budget: RepairBudget | None
+    producers: tuple[Path, ...]
+    consumers: tuple[Path, ...]
+    leaf: _LeafView = field(default_factory=_LeafView)
+    started: bool = False
+    complete: bool = False
+
+
+@dataclass
+class _FactoryView:
+    """Admitted graph shape for display: order, waits-on and handed-to lines."""
+
+    label: str
+    nodes: dict[Path, _FactoryNode]
+    width: int
+    failed: tuple[str, RunResult, _LeafView] | None = None
+    pending: tuple[str, tuple[Path, ...]] | None = None
 
 
 @dataclass(frozen=True)
@@ -530,6 +639,39 @@ class ContractLogger:
         self._apm_paths: tuple[tuple[str, str], ...] = ()
         # Message identities are admitted by the decoder's bounded correlation table.
         self._prose: dict[int, _ProseDisplay] = {}
+        self._leaf = _LeafView()
+        self._attempt: _AttemptView | None = None
+        self._factory: _FactoryView | None = None
+        self._invocation: str | None = None
+
+    def remember_invocation(
+        self,
+        selection: str,
+        *,
+        package_ref: str | None = None,
+        harness: str = "copilot",
+        model: str | None = None,
+        factory: bool = False,
+        allow_host_access: bool = False,
+    ) -> None:
+        """Keep the user's own selection so Next lines can name a copyable rerun."""
+        parts = ["apmx"]
+        if package_ref:
+            parts += ["--from", package_ref]
+            if selection not in {"", "."}:
+                parts.append(selection)
+        else:
+            if factory and not (Path(selection).is_absolute() or selection.startswith((".", "~"))):
+                selection = "./" + selection
+            parts.append(selection)
+        if harness != "copilot":
+            parts += ["--on", harness]
+        if model:
+            parts += ["--model", model]
+        if allow_host_access and not factory:
+            # Factories ask again interactively; a single contract only accepts the flag.
+            parts.append("--allow-host-access")
+        self._invocation = safe_text(shlex.join(parts))
 
     def start_activity(self, message: str, *, announce: bool = True) -> None:
         """Animate quiet work using the install spinner, never in retained logs."""
@@ -616,6 +758,9 @@ class ContractLogger:
             if detail
             else _Visibility.ALWAYS
         )
+        level = _Level.DETAIL if role is _Role.DETAIL else indent
+        if display is not None:
+            display = replace(display, level=display.level + self._block_offset(display.level))
         self._display.emit(
             display
             if display is not None
@@ -623,12 +768,26 @@ class ContractLogger:
                 safe_text(display_message) if display_message is not None else text,
                 role=role,
                 source=source,
-                level=_Level.DETAIL if role is _Role.DETAIL else _Level(indent),
+                level=level + self._block_offset(level),
                 accent=safe_text(accent),
                 layout=layout,
                 dim_remainder=dim_remainder,
             ),
             visibility=visibility,
+            verbose=self.verbose,
+        )
+
+    def _block_offset(self, level: int) -> int:
+        """Inside a contract block, indented lines align under the block body."""
+        return BLOCK - _Level.BODY if level and self._leaf.header_shown else 0
+
+    def _show(self, line: _DisplayLine, *, verbose_only: bool = False) -> None:
+        """Terminal-only summary line: never retained, never part of a record hash."""
+        self._display.emit(
+            replace(
+                line, text=safe_text(line.text), accent=safe_text(line.accent), keep_words=True
+            ),
+            visibility=_Visibility.VERBOSE if verbose_only else _Visibility.ALWAYS,
             verbose=self.verbose,
         )
 
@@ -819,19 +978,52 @@ class ContractLogger:
         model = self._field(event, "model", "default model")
         if self._preparation_notice_shown:
             self._retained_gap()
-        if self._step is None:
-            self._write(
-                f"Contract 1/1: {identity.removesuffix('.contract.md')}",
-                severity="heading",
-                indent=0,
-            )
-        self._write(f"Produces: {self._produces}")
+        if self._attempt is None:
+            self._attempt = _AttemptView(1, 1)
+        self._leaf.last = self._attempt
         needs = event.data.get("needs", ())
-        if isinstance(needs, tuple):
-            self._write("Needs: " + (", ".join(needs) if needs else "no declared input files"))
+        needs = needs if isinstance(needs, tuple) else ()
+        name = identity.removesuffix(".contract.md")
+        if not self._leaf.header_shown:
+            self._leaf.name = self._leaf.name or Path(name).name
+            if self._step is None:
+                self._display.gap()
+                self._show(
+                    _DisplayLine(
+                        f"Contract  {identity}   "
+                        f"{self._field(event, 'harness', 'copilot')} / {model}",
+                        role=_Role.TITLE,
+                        accent=f"Contract  {identity}",
+                        level=0,
+                        layout=_Layout.PROSE,
+                        hang=len("Contract  "),
+                    )
+                )
+                self._display.gap()
+                self._show(self._block_header(name, needs, self._produces, self._leaf.budget))
+            else:
+                self._show(
+                    _DisplayLine(
+                        self._flow(needs, self._produces),
+                        level=BLOCK,
+                        layout=_Layout.PROSE,
+                    )
+                )
+            self._leaf.header_shown = True
+        if self._step is None:
+            self._write(f"Contract 1/1: {name}", severity="heading", indent=0, retained_only=True)
+        # The block header already shows these facts; the transcript keeps them verbatim.
+        self._write(f"Produces: {self._produces}", retained_only=True)
+        self._write(
+            "Needs: " + (", ".join(needs) if needs else "no declared input files"),
+            retained_only=True,
+        )
         if not self._display.identity_shown:
             self._display.identity_shown = True
-            self._write(f"Harness: {self._field(event, 'harness', 'copilot')} / {model}")
+            self._write(
+                f"Harness: {self._field(event, 'harness', 'copilot')} / {model}",
+                retained_only=True,
+            )
             if model != "default model":
                 self._display.models_shown.add(model)
         self._write(f"Source: {self._path(source)}", severity="detail", detail=True)
@@ -850,7 +1042,8 @@ class ContractLogger:
             raise TypeError("input_captured requires an admitted FileEntry.")
         self._write(
             f"Found input: {entry.relative_path} "
-            f"({self._field(event, 'origin')}; captured {entry.size} bytes)"
+            f"({self._field(event, 'origin')}; captured {entry.size} bytes)",
+            detail=True,
         )
         self._write(f"Input SHA-256: {entry.sha256}", severity="detail", detail=True)
         record = self._field(event, "producer_record", "")
@@ -858,7 +1051,10 @@ class ContractLogger:
             self._write(f"Input record: {self._path(record)}", severity="detail", detail=True)
 
     def _workspace_captured(self, event: RunEvent) -> None:
-        self._write(f"Working copy: {event.data['files']} captured files; execution uses copies.")
+        self._write(
+            f"Working copy: {event.data['files']} captured files; execution uses copies.",
+            detail=True,
+        )
 
     def _phase(self, event: RunEvent) -> None:
         phase = self._field(event, "name")
@@ -874,13 +1070,32 @@ class ContractLogger:
             "checks": f"Checking {self._produces}",
             "record": "Saving results",
         }.get(phase)
+        attempt = self._attempt
+        if attempt is not None:
+            if phase == "execution" and attempt.agent_started is None:
+                attempt.agent_started = event.elapsed_seconds
+                attempt.agent_clock = _clock()
+            elif attempt.agent_started is not None and attempt.agent_seconds is None:
+                attempt.agent_seconds = event.elapsed_seconds - attempt.agent_started
+            attempt.stage = {
+                "preflight": "preparing",
+                "execution": "agent",
+                "capture": "saving output",
+                "checks": "checking",
+                "record": "saving results",
+            }.get(phase, attempt.stage)
+        if phase == "record":
+            self.stop_activity()
+            self._summarize_attempt()
+            if message:
+                self._write(message, severity="start", detail=True)
+            return
         if message:
-            self.start_activity(message, announce=False)
-            self._write(
-                message,
-                severity="start",
-                detail=False,
+            self._activity_label = message
+            self._display.start_activity(
+                self._live_label if attempt is not None else safe_text(message)
             )
+            self._write(message, severity="start", detail=True)
 
     def _attribution(self, event: RunEvent) -> str:
         source = {"harness": self._harness, "checker": "Check"}.get(event.source, event.source)
@@ -929,10 +1144,23 @@ class ContractLogger:
                 self._check_evidence = _CheckEvidence(name)
             if not self._check_evidence.total_lines:
                 self._display.emit(
-                    _DisplayLine(safe_text(f"Check {name} stdout:"), role=_Role.DETAIL),
-                    visibility=_Visibility.ALWAYS,
+                    _DisplayLine(
+                        safe_text(f"Check {name} stdout:"),
+                        role=_Role.DETAIL,
+                        level=self._block_offset(_Level.BODY) + _Level.BODY,
+                    ),
+                    visibility=_Visibility.VERBOSE,
+                    verbose=self.verbose,
                 )
             self._check_evidence.append(safe_text(text))
+        if self._attempt is not None:
+            if event.source == "checker":
+                tail = self._attempt.tails.setdefault(
+                    self._field(event, "label", ""), deque(maxlen=TAIL_LINES)
+                )
+                tail.extend(line for line in safe_text(text).split("\n") if line.strip())
+            elif text.strip() and not stderr:
+                self._attempt.status = safe_text(text.strip().splitlines()[-1], limit=256)
         displayed = None
         if event.data.get("prose") is True:
             identifier = event.data.get("prose_group")
@@ -949,7 +1177,7 @@ class ContractLogger:
             attribution=source,
             accent=text if tool_status == "failed" else "",
             display_message=displayed,
-            detail=False,
+            detail=not (stderr and event.source != "checker"),
             layout=_Layout.PROSE if not tool_status else _Layout.LITERAL,
             retained_limit=TEXT_LINE_BYTES if checker_stdout else None,
             display=(
@@ -1027,16 +1255,18 @@ class ContractLogger:
         self._checks_heading()
         name = self._field(event, "name")
         command = self._field(event, "command", "")
-        self._write(f"Running check: {name}" + (f" - {command}" if command else ""))
-        self.start_activity(
-            f"Checking {self._produces} ({self._field(event, 'name')})",
-            announce=False,
-        )
+        self._write(f"Running check: {name}" + (f" - {command}" if command else ""), detail=True)
+        self._activity_label = f"Checking {self._produces} ({name})"
+        if self._attempt is not None:
+            self._attempt.stage = f"checking {safe_text(name, limit=256)}"
+            self._display.start_activity(self._live_label)
+        else:
+            self.start_activity(self._activity_label, announce=False)
 
     def _checks_heading(self) -> None:
         if not self._checks_heading_shown:
             self._checks_heading_shown = True
-            self._write("Checks:", severity="heading")
+            self._write("Checks:", severity="heading", detail=True)
 
     def _check_finished(self, event: RunEvent) -> None:
         observation = event.data.get("observation")
@@ -1051,14 +1281,27 @@ class ContractLogger:
         raw = observation.process.returncode
         raw_text = "no exit status" if raw is None else f"raw exit {raw}"
         summary = f"{status} {observation.name}"
-        self._write(summary, severity=severity, accent=summary, indent=4)
+        # Inside an attempt the verdict is folded into the attempt line.
+        self._write(
+            summary, severity=severity, accent=summary, indent=4, detail=self._attempt is not None
+        )
         self._write(f"Check {observation.name}: {raw_text}", severity="detail", detail=True)
+        if self._attempt is not None:
+            self._attempt.checks.append(
+                (safe_text(observation.name, limit=256), observation.normalized)
+            )
         if observation.normalized != 0:
             if observation.normalized == 2:
+                reason = self._incomplete_check_reason(observation)
+                if self._attempt is not None:
+                    self._attempt.notes.append(
+                        (safe_text(observation.name, limit=256), safe_text(reason))
+                    )
                 self._write(
-                    f"apmx: check '{observation.name}': {self._incomplete_check_reason(observation)}",
+                    f"apmx: check '{observation.name}': {reason}",
+                    detail=self._attempt is not None,
                     display=_DisplayLine(
-                        safe_text(self._incomplete_check_reason(observation)),
+                        safe_text(reason),
                         level=_Level.DETAIL,
                         layout=_Layout.PROSE,
                     ),
@@ -1114,14 +1357,113 @@ class ContractLogger:
         if elapsed - self._last_evidence_activity >= HEARTBEAT_SECONDS:
             self._write(message, retained_only=True)
             self._last_evidence_activity = elapsed
+        if self._display.status is not None:
+            return
+        attempt = self._attempt
+        if not self.verbose and attempt is not None:
+            # Append-only output: a sparse, completed liveness line instead of animation.
+            if elapsed - attempt.liveness >= LIVENESS_SECONDS:
+                attempt.liveness = elapsed
+                self._show(
+                    _DisplayLine(
+                        f"still running {_seconds(elapsed)}: {self._live_status(attempt)}",
+                        role=_Role.DETAIL,
+                        level=BLOCK + 2,
+                        layout=_Layout.PROSE,
+                    )
+                )
+            return
         # Hidden metadata/tool/stdout events must not starve the human heartbeat.
         # This display-only clock cannot change transcript bytes or record hashes.
-        if (
-            self._display.status is None
-            and elapsed - self._last_human_activity >= HEARTBEAT_SECONDS
-        ):
-            self._display.emit(_DisplayLine(safe_text(message)))
+        if elapsed - self._last_human_activity >= HEARTBEAT_SECONDS:
+            self._display.emit(
+                _DisplayLine(safe_text(message), level=self._block_offset(_Level.BODY) + 2)
+            )
             self._last_human_activity = elapsed
+
+    def _live_status(self, attempt: _AttemptView) -> str:
+        if attempt.stage == "agent":
+            return attempt.status or "working"
+        return attempt.stage
+
+    def _live_label(self) -> str:
+        """In-place attempt line on an interactive terminal; recomputed per refresh."""
+        attempt = self._attempt
+        if attempt is None:
+            return safe_text(self._activity_label)
+        text = f"attempt {attempt.index}/{attempt.count}"
+        if attempt.agent_clock is not None:
+            agent = (
+                attempt.agent_seconds
+                if attempt.agent_seconds is not None
+                else _clock() - attempt.agent_clock
+            )
+            text += f"  agent {_seconds(agent)}"
+        return f"{text}   {self._live_status(attempt)}"
+
+    def _summarize_attempt(self) -> None:
+        """One completed line per attempt: the loop and its per-check verdicts."""
+        attempt = self._attempt
+        if attempt is None or attempt.summarized:
+            return
+        attempt.summarized = True
+        text = f"attempt {attempt.index}/{attempt.count}"
+        if attempt.agent_seconds is not None:
+            text += f"  agent {_seconds(attempt.agent_seconds)}"
+        if attempt.checks:
+            marks = {0: "[+]", 1: "[x]"}
+            text += "   checks: " + " ".join(
+                f"{marks.get(normalized, '[!]')} {name}" for name, normalized in attempt.checks
+            )
+        else:
+            text += "   checks: not run"
+        self._show(_DisplayLine(text, level=BLOCK, layout=_Layout.PROSE))
+
+    def _emit_tails(self, attempt: _AttemptView | None) -> None:
+        """Explain a failed attempt with the last lines of its failing checks."""
+        if attempt is None or self.verbose:
+            return
+        for name, normalized in attempt.checks:
+            if normalized == 0:
+                continue
+            for line in attempt.tails.get(name, ()):
+                self._show(_DisplayLine(f"{name}: {line}", role=_Role.DETAIL, level=BLOCK + 2))
+        for name, reason in attempt.notes:
+            self._show(
+                _DisplayLine(
+                    f"{name}: {reason}", level=BLOCK + 2, layout=_Layout.PROSE, hang=len(name) + 2
+                )
+            )
+
+    @staticmethod
+    def _flow(needs: tuple[str, ...], produces: str) -> str:
+        return ("needs " + ", ".join(needs) + " -> " if needs else "") + f"produces {produces}"
+
+    def _block_header(
+        self,
+        name: str,
+        needs: tuple[str, ...],
+        produces: str,
+        budget: RepairBudget | None,
+        *,
+        order: str = "",
+        width: int = 0,
+    ) -> _DisplayLine:
+        title = f"{order} {name}" if order else name
+        text = title.ljust(max(width, len(title)) + 3) + self._flow(needs, produces)
+        if budget is not None:
+            text += f"   budget {_plural(budget.max_attempts, 'attempt')}"
+        return _DisplayLine(
+            text,
+            role=_Role.TITLE,
+            accent=title,
+            level=0,
+            layout=_Layout.PROSE,
+            hang=BLOCK if order else len(title) + 3,
+        )
+
+    def _outputs_line(self, result: RunResult) -> str:
+        return ", ".join(item.relative_path for item in artifact_files(result.artifact))
 
     def _result(self, event: RunEvent) -> None:
         if self._finished:
@@ -1132,37 +1474,32 @@ class ContractLogger:
         self._finished = True
         self.stop_activity()
         self._flush_check_evidence(completion_observed=False)
-        leaf_detail = self._step is not None and result.outcome is Outcome.COMPLETE
-        if not leaf_detail:
-            self._retained_gap()
-        headline = f"Contract {result.outcome.name}"
-        timing = f"  {event.elapsed_seconds:.1f}s" if event.elapsed_seconds > 0 else ""
-        if not leaf_detail:
-            self._write(
-                headline + timing,
-                severity=self._display.outcome_role(result.outcome),
-                accent=headline,
-                indent=0,
-                dim_remainder=True,
-            )
-            self._result_explanation(result)
-        files = artifact_files(result.artifact)
-        if self._step is None or result.outcome is not Outcome.COMPLETE:
-            if result.outcome is Outcome.COMPLETE:
-                self._completion_counts(1, len(result.checks))
-            self._write("Evidence:", severity="heading", indent=0)
-            self._write(
-                f"Artifacts: {len(files)} {'file' if len(files) == 1 else 'files'} retained"
-            )
-            if files:
-                self._write(f"Directory: {self._path(result.run_directory / 'artifacts')}")
-            self._write(f"Record: {self._path(result.run_directory / 'record.json')}")
+        self._summarize_attempt()
+        factory = self._factory if self._step is not None else None
+        node = factory.nodes.get(self._step.contract) if factory and self._step else None
+        if result.outcome is Outcome.COMPLETE:
+            outputs = self._outputs_line(result)
+            if node is not None:
+                node.complete = True
+            if factory is not None and node is not None and node.consumers:
+                # Shown only after the chain owner admits the handoff (next chain_node).
+                factory.pending = (outputs, node.consumers)
+            elif outputs:
+                self._show(
+                    _DisplayLine(outputs, role=_Role.SUCCESS, level=BLOCK, layout=_Layout.PROSE)
+                )
         else:
-            self._write(
-                f"Record: {self._path(result.run_directory / 'record.json')}",
-                severity="detail",
-                detail=True,
-            )
+            self._emit_tails(self._leaf.last)
+            if factory is not None:
+                factory.failed = (self._leaf.name or "contract", result, self._leaf)
+        if self._step is None:
+            self._final_leaf(result)
+        files = artifact_files(result.artifact)
+        self._write(
+            f"Record: {self._path(result.run_directory / 'record.json')}",
+            severity="detail",
+            detail=True,
+        )
         for item in files:
             self._write(f"Artifact: {self._path(item.path)}", severity="detail", detail=True)
         for model in result.observed_models:
@@ -1184,64 +1521,170 @@ class ContractLogger:
             detail=True,
         )
 
-    def _result_explanation(self, result: RunResult) -> None:
+    def _headline(self, outcome: Outcome, text: str) -> None:
+        self._display.gap()
+        self._show(
+            _DisplayLine(
+                f"{outcome.name}   {text}",
+                role=self._display.outcome_role(outcome),
+                accent=outcome.name,
+                level=0,
+                layout=_Layout.PROSE,
+            )
+        )
+
+    def _labelled(self, label: str, lines: list[str], *, prose: bool = False) -> None:
+        """Aligned final-block rows; paths stay literal so they remain copyable."""
+        for index, text in enumerate(lines):
+            head = label.ljust(10) if index == 0 else " " * 10
+            self._show(
+                _DisplayLine(
+                    head + text,
+                    accent=label if index == 0 else "",
+                    level=0,
+                    layout=_Layout.PROSE if prose and index else _Layout.LITERAL,
+                    hang=10,
+                )
+            )
+
+    def _directory(self, path: Path) -> str:
+        return self._path(path).rstrip("/") + "/"
+
+    def _final_leaf(self, result: RunResult) -> None:
+        """Final block for a single contract: outcome, then Outputs or Saved/Next."""
+        elapsed = _seconds(_clock() - self._display.started)
+        if result.outcome is Outcome.COMPLETE:
+            checks = sum(check.normalized == 0 for check in result.checks)
+            self._headline(
+                result.outcome,
+                f"1/1 contract   {checks}/{len(result.checks)} "
+                f"{'check' if len(result.checks) == 1 else 'checks'}   {elapsed}",
+            )
+            self._outputs(result.run_directory / "artifacts", artifact_files(result.artifact))
+            return
+        self._headline(
+            result.outcome,
+            f"{self._failure_summary(self._leaf.name or 'contract', result, self._leaf)}   "
+            f"exit {int(result.outcome)}",
+        )
+        self._saved_and_next(self._saved_directory(result), result)
+
+    def _outputs(self, directory: Path, files: tuple) -> None:
+        if not files:
+            return
+        self._display.gap()
+        names = [item.relative_path for item in files]
+        self._labelled("Outputs", [self._directory(directory), "  ".join(names)], prose=True)
+
+    @staticmethod
+    def _saved_directory(result: RunResult) -> Path:
+        return result.run_directory
+
+    def _failure_summary(self, name: str, result: RunResult, leaf: _LeafView) -> str:
+        """Name what failed using recorded checks; never re-derive the outcome."""
+        attempt = leaf.last
+        if result.outcome is Outcome.REJECTED:
+            failed = [check.name for check in result.checks if check.normalized == 1]
+            text = (
+                f"{name} failed {'check' if len(failed) == 1 else 'checks'} " + ", ".join(failed)
+                if failed
+                else f"{name} was rejected"
+            )
+            if attempt is not None:
+                text += (
+                    f" after {attempt.index}/{attempt.count} "
+                    f"{'attempt' if attempt.count == 1 else 'attempts'}"
+                )
+            stop = {
+                "no_progress": "same output again",
+                "not_retryable": "not retryable",
+            }.get(leaf.repair_stop)
+            return text + (f" ({stop})" if stop else "")
+        reason, _ = self._result_explanation(result)
+        return f"{name}: {reason.rstrip('.')}"
+
+    def _saved_and_next(self, saved: Path | None, result: RunResult | None) -> None:
+        self._display.gap()
+        if saved is not None:
+            self._labelled("Saved", [f"{self._directory(saved)}   (attempt files + logs)"])
+        if result is not None and result.outcome is Outcome.REJECTED:
+            action = "Fix the contract or check, then rerun:"
+        elif result is not None:
+            action = self._result_explanation(result)[1]
+            action = action.removesuffix(" before retrying.").removesuffix(" before rerunning.")
+            action = f"{action.rstrip('.')}, then rerun:"
+        else:
+            action = "Resolve the reported problem, then rerun:"
+        rows = [(action, self._invocation or "")]
+        if self._invocation and not self.verbose:
+            rows.append(("More detail:", f"{self._invocation} --verbose"))
+        width = max(len(label) for label, _ in rows)
+        self._labelled(
+            "Next",
+            [f"{label.ljust(width)}  {command}".rstrip() for label, command in rows],
+        )
+
+    def _result_explanation(self, result: RunResult) -> tuple[str, str]:
         """Explain the recorded outcome; never promote or downgrade it here."""
         if result.outcome == Outcome.REJECTED:
-            self._write("Contract checks found a problem.")
-            self._write("Review the failed checks and saved output before retrying.")
-        elif result.outcome == Outcome.UNPROVEN:
-            if result.artifact is None:
-                self._write("The declared output could not be checked.")
-                self._write(
-                    f"Review the contract output path and {self._harness} diagnostics before retrying."
-                )
-            else:
-                self._write("Checks could not establish a result.")
-                self._write("Review incomplete checks and their prerequisites before retrying.")
-        elif result.outcome != Outcome.COMPLETE:
-            reason, action = {
-                "cancelled": ("Run interrupted.", "Review any saved output before rerunning."),
-                "producer_failed": (
-                    f"{self._harness} did not complete successfully.",
-                    f"Review {self._harness} diagnostics and logs before retrying.",
-                ),
-                "native_reported_failure": (
-                    f"{self._harness} reported a failure.",
-                    f"Review {self._harness} diagnostics and logs before retrying.",
-                ),
-                "native_protocol_error": (
-                    f"{self._harness} output could not be interpreted.",
-                    f"Review {self._harness} diagnostics and logs before retrying.",
-                ),
-                "native_completion_unobserved": (
-                    f"{self._harness} completion was not observed.",
-                    f"Review {self._harness} diagnostics and logs before retrying.",
-                ),
-                "attempt_deadline": (
-                    "The run exceeded its time limit.",
-                    "Review the contract workload before retrying.",
-                ),
-                "timeout": (
-                    "The process exceeded its time limit.",
-                    "Review the contract workload before retrying.",
-                ),
-                "producer_stop_unconfirmed": (
-                    f"{self._harness} may still be running.",
-                    "Inspect the reported process before retrying.",
-                ),
-                "checker_stop_unconfirmed": (
-                    "A check may still be running.",
-                    "Inspect the reported process before retrying.",
-                ),
-            }.get(
-                result.stop_reason,
-                (
-                    "The run stopped before it could finish.",
-                    "Resolve the reported error before retrying.",
-                ),
+            return (
+                "Contract checks found a problem.",
+                "Review the failed checks and saved output before retrying.",
             )
-            self._write(reason)
-            self._write(action)
+        if result.outcome == Outcome.UNPROVEN:
+            if result.artifact is None:
+                return (
+                    "The declared output could not be checked.",
+                    f"Review the contract output path and {self._harness} diagnostics"
+                    + " before retrying.",
+                )
+            return (
+                "Checks could not establish a result.",
+                "Review incomplete checks and their prerequisites before retrying.",
+            )
+        if result.outcome == Outcome.COMPLETE:
+            return "", ""
+        return {
+            "cancelled": ("Run interrupted.", "Review any saved output before rerunning."),
+            "producer_failed": (
+                f"{self._harness} did not complete successfully.",
+                f"Review {self._harness} diagnostics and logs before retrying.",
+            ),
+            "native_reported_failure": (
+                f"{self._harness} reported a failure.",
+                f"Review {self._harness} diagnostics and logs before retrying.",
+            ),
+            "native_protocol_error": (
+                f"{self._harness} output could not be interpreted.",
+                f"Review {self._harness} diagnostics and logs before retrying.",
+            ),
+            "native_completion_unobserved": (
+                f"{self._harness} completion was not observed.",
+                f"Review {self._harness} diagnostics and logs before retrying.",
+            ),
+            "attempt_deadline": (
+                "The run exceeded its time limit.",
+                "Review the contract workload before retrying.",
+            ),
+            "timeout": (
+                "The process exceeded its time limit.",
+                "Review the contract workload before retrying.",
+            ),
+            "producer_stop_unconfirmed": (
+                f"{self._harness} may still be running.",
+                "Inspect the reported process before retrying.",
+            ),
+            "checker_stop_unconfirmed": (
+                "A check may still be running.",
+                "Inspect the reported process before retrying.",
+            ),
+        }.get(
+            result.stop_reason or "",
+            (
+                "The run stopped before it could finish.",
+                "Resolve the reported error before retrying.",
+            ),
+        )
 
     def render_plan(self, plan: LeafPlan, inventory: tuple[FileEntry, ...]) -> None:
         """Show the admitted surface without printing source bodies or prompts."""
@@ -1267,7 +1710,7 @@ class ContractLogger:
             f"Time limits: run {plan.limits.attempt_seconds:g}s; "
             f"each check {plan.limits.check_seconds:g}s"
         )
-        self.repair_budget(plan.contract.budget)
+        self.repair_budget(plan.contract.budget, preview=True)
         self._write("Complete execution returns COMPLETE (0); this does not certify isolation.")
         self._write("To run, use apmx with --allow-host-access and without --plan.")
         self._write(f"Source: {self._path(source)}", severity="detail", detail=True)
@@ -1325,23 +1768,35 @@ class ContractLogger:
             _step=_StepContext(index, count, contract),
         )
         leaf._display_root = self._display_root
+        leaf._invocation = self._invocation
+        leaf._factory = self._factory
+        node = self._factory.nodes.get(contract) if self._factory else None
+        if node is not None:
+            leaf._leaf = node.leaf
         return leaf
 
     def new_attempt(self, *, index: int, count: int) -> ContractLogger:
         """Give each attempt a private transcript while retaining the factory step."""
-        self._write(f"Attempt {index} of {count}", severity="info")
+        self._write(f"Attempt {index} of {count}", severity="info", detail=True)
         attempt = ContractLogger(verbose=self.verbose, _display=self._display, _step=self._step)
         attempt._display_root = self._display_root
+        attempt._invocation = self._invocation
+        attempt._factory = self._factory
+        attempt._leaf = self._leaf
+        attempt._attempt = _AttemptView(index, count)
         return attempt
 
-    def repair_budget(self, budget: RepairBudget | None) -> None:
-        """Disclose authored execution bounds before confirmation or plan execution."""
+    def repair_budget(self, budget: RepairBudget | None, *, preview: bool = False) -> None:
+        """Disclose authored execution bounds; a run shows them in the contract header."""
         if budget is not None:
+            if not preview:
+                self._leaf.budget = budget
             self._write(
                 f"Attempts: up to {budget.max_attempts} "
                 f"{'attempt' if budget.max_attempts == 1 else 'attempts'}, "
                 f"{budget.max_seconds:g}s total for execution and checks. "
-                "Only rejected outputs can be retried; this is not a model spending limit."
+                "Only rejected outputs can be retried; this is not a model spending limit.",
+                detail=not preview,
             )
 
     def repair_finished(self, *, reason: str, record: Path, attempts: int) -> None:
@@ -1352,9 +1807,11 @@ class ContractLogger:
                 "not_retryable": "Stopped: this failure cannot be retried automatically.",
                 "no_progress": "Stopped: another attempt produced the same rejected output.",
                 "max_attempts": f"Stopped after {attempts} attempts: the output is still rejected.",
-            }[reason]
+            }[reason],
+            detail=True,
         )
-        self._write(f"Attempts record: {self._path(record)}")
+        self._leaf.repair_stop = reason
+        self._write(f"Attempts record: {self._path(record)}", detail=True)
 
     def select_factory_root(self, root: Path) -> None:
         self._display_root = self._caller_root
@@ -1385,10 +1842,10 @@ class ContractLogger:
         )
         catalog = tuple(contract.path for contract in graph.order)
         for index, contract in enumerate(graph.order, start=1):
-            self.chain_node(index, count, contract.path, catalog=catalog)
+            self._preview_node(index, count, contract.path, catalog=catalog)
             self._write("Produces: " + ", ".join(contract.outputs))
             self._write("Checks: " + ", ".join(check.name for check in contract.checks))
-            self.repair_budget(contract.budget)
+            self.repair_budget(contract.budget, preview=True)
             self._write(f"Source: {self._path(contract.path)}", severity="detail", detail=True)
             for value in contract.needs:
                 kind = (
@@ -1442,10 +1899,7 @@ class ContractLogger:
             return False
         return answer.endswith("\n") and answer.strip().casefold() in {"y", "yes"}
 
-    def chain_node(
-        self, index: int, count: int, contract: Path, *, catalog: tuple[Path, ...] = ()
-    ) -> None:
-        self._display.gap()
+    def _contract_identity(self, contract: Path, catalog: tuple[Path, ...]) -> str:
         if (
             catalog
             and sum(path.name.casefold() == contract.name.casefold() for path in catalog) == 1
@@ -1456,8 +1910,109 @@ class ContractLogger:
                 identity = contract.relative_to(self._caller_root).as_posix()
             except ValueError:
                 identity = self._path(contract)
-        identity = identity.removesuffix(".contract.md")
+        return identity.removesuffix(".contract.md")
+
+    def _preview_node(
+        self, index: int, count: int, contract: Path, *, catalog: tuple[Path, ...] = ()
+    ) -> None:
+        self._display.gap()
+        identity = self._contract_identity(contract, catalog)
         self._write(f"Contract {index}/{count}: {identity}", severity="heading", indent=0)
+
+    def factory_started(self, plan: ChainPlan) -> None:
+        """Show the admitted graph once: name, size and agent, before any contract runs."""
+        catalog = tuple(node.plan.contract.path for node in plan.nodes)
+        names = {path: self._contract_identity(path, catalog) for path in catalog}
+        nodes: dict[Path, _FactoryNode] = {}
+        for index, node in enumerate(plan.nodes, start=1):
+            contract = node.plan.contract
+            producers = tuple(
+                dict.fromkeys(e.producer for e in plan.graph.edges if e.consumer == contract.path)
+            )
+            consumers = tuple(
+                dict.fromkeys(e.consumer for e in plan.graph.edges if e.producer == contract.path)
+            )
+            nodes[contract.path] = _FactoryNode(
+                index,
+                names[contract.path],
+                contract.needs,
+                contract.outputs,
+                contract.budget,
+                producers,
+                consumers,
+                _LeafView(name=names[contract.path]),
+            )
+        root = plan.graph.root
+        source = plan.nodes[0].plan.source
+        label = source.package_ref if source and source.package_ref else root.name
+        order = len(f"[{len(nodes)}/{len(nodes)}]")
+        self._factory = _FactoryView(
+            safe_text(label or self._path(root), limit=256),
+            nodes,
+            order + 1 + max((len(name) for name in names.values()), default=0),
+        )
+        first = plan.nodes[0].plan
+        self._harness = self._harness_label(first.harness)
+        title = f"Factory  {self._factory.label}"
+        self._display.gap()
+        self._show(
+            _DisplayLine(
+                f"{title}   {_plural(len(nodes), 'contract')}   "
+                f"{first.harness} / {first.model or 'default model'}",
+                role=_Role.TITLE,
+                accent=title,
+                level=0,
+                layout=_Layout.PROSE,
+                hang=len("Factory  "),
+            )
+        )
+
+    def _flush_handoff(self, *, admitted: bool) -> None:
+        """Producer-side handoff line, claimed only after the chain owner admitted it."""
+        factory = self._factory
+        if factory is None or factory.pending is None:
+            return
+        outputs, consumers = factory.pending
+        factory.pending = None
+        names = ", ".join(factory.nodes[path].name for path in consumers if path in factory.nodes)
+        text = outputs + (f" -> handed to {names}" if admitted and names else "")
+        self._show(_DisplayLine(text, role=_Role.SUCCESS, level=BLOCK, layout=_Layout.PROSE))
+
+    def chain_node(
+        self, index: int, count: int, contract: Path, *, catalog: tuple[Path, ...] = ()
+    ) -> None:
+        self._flush_handoff(admitted=True)
+        self._display.gap()
+        identity = self._contract_identity(contract, catalog)
+        self._write(
+            f"Contract {index}/{count}: {identity}",
+            severity="heading",
+            indent=0,
+            retained_only=True,
+        )
+        node = self._factory.nodes.get(contract) if self._factory else None
+        if node is None:
+            self._show(
+                _DisplayLine(
+                    f"[{index}/{count}] {identity}",
+                    role=_Role.TITLE,
+                    accent=f"[{index}/{count}] {identity}",
+                    level=0,
+                )
+            )
+            return
+        node.started = True
+        node.leaf.header_shown = True
+        self._show(
+            self._block_header(
+                node.name,
+                node.needs,
+                ", ".join(node.outputs),
+                node.budget,
+                order=f"[{index}/{count}]",
+                width=self._factory.width,
+            )
+        )
 
     def execution_context(self, *, factory: bool = False) -> None:
         """Disclose the invocation's local execution profile before consent or action."""
@@ -1476,8 +2031,13 @@ class ContractLogger:
             )
             self._write("Run only contracts you trust.")
         else:
-            self._write("Agents and checks can use host files, network and available logins.")
-            self._write("Model usage may cost money. Run only contracts you trust.")
+            self._write(
+                "Agents and checks can use host files, network and available logins.",
+                layout=_Layout.PROSE,
+            )
+            self._write(
+                "Model usage may cost money. Run only contracts you trust.", layout=_Layout.PROSE
+            )
         self._display.gap()
 
     def render_chain_plan(self, plan: ChainPlan) -> None:
@@ -1517,72 +2077,88 @@ class ContractLogger:
     def chain_stopped(self, reason: str, *, outcome: Outcome, code: str) -> None:
         self._chain_stop = _StopContext(outcome, reason, code)
         self.stop_activity()
-        self._display.gap()
-        self._write(
-            reason,
-            severity="warning",
-            indent=0,
-            display=_DisplayLine(
-                safe_text(reason),
-                role=self._display.outcome_role(outcome),
-                level=_Level.HEADING,
-                layout=_Layout.PROSE,
-            ),
-        )
-
-    def render_chain_result(self, result: ChainResult) -> None:
-        self.stop_activity()
-        self._display.gap()
-        headline = f"Factory {result.outcome.name}"
-        self._write(
-            headline,
-            severity=self._display.outcome_role(result.outcome),
-            accent=headline,
-            dim_remainder=True,
-            indent=0,
-        )
-        if result.complete:
-            completed = len(result.runs)
-            passed = sum(check.normalized == 0 for run in result.runs for check in run.checks)
-            self._completion_counts(completed, passed)
-            self._write("Evidence:", severity="heading", indent=0)
-            count = sum(len(artifact_files(run.artifact)) for run in result.runs)
-            self._write(f"Artifacts: {count} {'file' if count == 1 else 'files'} retained")
-            self._write(f"Directory: {self._path(result.record_path.parent / 'artifacts')}")
-        else:
-            context = self._chain_stop
-            reason = (
-                context.reason
-                if context is not None and context.code == result.stop_reason
-                else "Factory stopped before all selected steps completed."
-            )
-            self._write(
-                f"Stop: {result.stop_reason}. Inspect the record before starting another run.",
-                display_message=reason,
-                layout=_Layout.PROSE,
-            )
-            self._display.emit(
+        self._write(reason, severity="warning", indent=0, retained_only=True)
+        factory = self._factory
+        if factory is None:
+            self._display.gap()
+            self._show(
                 _DisplayLine(
-                    "Inspect the factory record and reported diagnostics before starting another run.",
+                    reason,
+                    role=self._display.outcome_role(outcome),
+                    level=0,
                     layout=_Layout.PROSE,
                 )
             )
-            self._display.emit(
+            return
+        self._flush_handoff(admitted=False)
+        count = len(factory.nodes)
+        for node in factory.nodes.values():
+            if node.started:
+                continue
+            waiting = [
+                factory.nodes[path].name
+                for path in node.producers
+                if path in factory.nodes and not factory.nodes[path].complete
+            ]
+            order = f"[{node.index}/{count}]"
+            title = f"{order} {node.name}"
+            self._display.gap()
+            self._show(
                 _DisplayLine(
-                    safe_text(f"Stop reason: {result.stop_reason}"),
-                    role=_Role.DETAIL,
-                    level=_Level.DETAIL,
-                ),
-                visibility=_Visibility.VERBOSE,
-                verbose=self.verbose,
+                    title.ljust(factory.width + 3)
+                    + (
+                        "not started: waits on " + ", ".join(waiting)
+                        if waiting
+                        else "not started: factory stopped"
+                    ),
+                    role=_Role.TITLE,
+                    accent=title,
+                    dim_remainder=True,
+                    level=0,
+                    layout=_Layout.PROSE,
+                    hang=BLOCK,
+                )
             )
-        self._write(f"Record: {self._path(result.record_path)}")
 
-    def _completion_counts(self, contracts: int, checks: int) -> None:
-        contract_label = "Contract" if contracts == 1 else "Contracts"
-        check_label = "Check" if checks == 1 else "Checks"
-        self._write(f"{contract_label}: {contracts}/{contracts} completed")
-        self._write(f"{check_label}: {checks}/{checks} passed")
+    def render_chain_result(self, result: ChainResult) -> None:
+        self.stop_activity()
+        self._flush_handoff(admitted=result.complete)
+        elapsed = _seconds(_clock() - self._display.started)
+        directory = result.record_path.parent
+        if result.complete:
+            completed = len(result.runs)
+            checks = sum(len(run.checks) for run in result.runs)
+            passed = sum(check.normalized == 0 for run in result.runs for check in run.checks)
+            self._headline(
+                result.outcome,
+                f"{completed}/{completed} {'contract' if completed == 1 else 'contracts'}   "
+                f"{passed}/{checks} {'check' if checks == 1 else 'checks'}   {elapsed}",
+            )
+            files = tuple(item for run in result.runs for item in artifact_files(run.artifact))
+            self._outputs(directory / "artifacts", files)
+        else:
+            factory = self._factory
+            failed = factory.failed if factory is not None else None
+            context = self._chain_stop
+            if failed is not None:
+                name, run, leaf = failed
+                summary = self._failure_summary(name, run, leaf)
+                saved: Path | None = self._saved_directory(run)
+                explained: RunResult | None = run
+            else:
+                summary = (
+                    context.reason
+                    if context is not None and context.code == result.stop_reason
+                    else "Factory stopped before all selected steps completed."
+                ).rstrip(".")
+                saved = directory
+                explained = None
+            self._headline(result.outcome, f"{summary}   exit {int(result.outcome)}")
+            self._saved_and_next(saved, explained)
+            self._write(
+                f"Stop reason: {result.stop_reason}", severity="detail", detail=True, indent=0
+            )
+        self._write(f"Record: {self._path(result.record_path)}", severity="detail", detail=True)
 
     def render_result(self, result: ChainResult | RunResult) -> None:
         """Render only after command preparation contexts have finalized."""
@@ -1591,39 +2167,85 @@ class ContractLogger:
         else:
             self._result(RunEvent(result.run_id, 0, 0, "finished", "engine", {"result": result}))
 
+    @staticmethod
+    def _receipt_facts(path: Path) -> list[str]:
+        """Name only the standards whose documents the export actually wrote."""
+        facts = []
+        try:
+            provenance = json.loads((path / "provenance.intoto.json").read_bytes())
+            kind = str(provenance.get("predicateType", ""))
+            facts.append(
+                "provenance  in-toto" + (" + SLSA v1" if "slsa.dev/provenance/v1" in kind else "")
+            )
+        except (OSError, ValueError, AttributeError):
+            pass
+        checks = (
+            sorted((path / "checks").glob("*.intoto.json")) if (path / "checks").is_dir() else []
+        )
+        if checks:
+            facts.append(f"checks      in-toto test-result ({len(checks)})")
+        try:
+            inventory = json.loads((path / "abom.cdx.json").read_bytes())
+            version = inventory.get("specVersion")
+            components = inventory.get("components", [])
+            text = "inventory   CycloneDX" + (f" {version}" if isinstance(version, str) else "")
+            if isinstance(components, list):
+                text += f" ({_plural(len(components), 'component')})"
+            facts.append(text)
+        except (OSError, ValueError, AttributeError):
+            pass
+        return [safe_text(item) for item in facts]
+
+    @staticmethod
+    def _audit_available() -> bool:
+        """Only suggest `apmx audit` once this build ships the verifier."""
+        return importlib.util.find_spec("apmx.audit") is not None
+
     def evidence_package(self, path: Path | None) -> None:
-        """Report a delivered standards projection without changing recorded execution."""
+        """Report a delivered standards receipt without changing recorded execution."""
         if path is None:
             self._write(
-                "Evidence package: not applicable (no retained official APM inventory).",
+                "Receipt: not exported.",
                 severity="detail",
                 detail=True,
+                indent=0,
             )
             return
-        self._write(f"Evidence package: {self._path(path)}")
-        self._write(f"Summary: {self._path(path / 'summary.md')}")
-        self._write(f"Factory definition: {self._path(path / 'definition.json')}")
-        self._write(
-            f"Production (in-toto / SLSA v1): {self._path(path / 'provenance.intoto.json')}"
+        self._labelled(
+            "Receipt",
+            [
+                self._directory(path),
+                *self._receipt_facts(path),
+                "unsigned: binds content, not identity; review before sharing",
+            ],
+            prose=True,
         )
-        self._write(f"Dependency ABOM (CycloneDX 1.5): {self._path(path / 'abom.cdx.json')}")
-        self._write(f"Check results (in-toto): {self._path(path / 'checks')}/")
-        self._write(f"SHA-256 file index: {self._path(path / 'index.json')}")
-        self._write(
-            "SHA-256 subjects and materials bind the recorded factory, inputs, checks and outputs. "
-            "Evidence is unsigned: content binding, not authenticated builder identity.",
-            layout=_Layout.PROSE,
-        )
-        self._write("Includes project/source files. Review before sharing.")
+        self._display.gap()
+        if self._audit_available():
+            self._labelled("Next", [f"apmx audit {shlex.quote(self._path(path))}"])
+        elif (path / "summary.md").is_file():
+            self._labelled("Next", [f"read {self._path(path / 'summary.md')}"])
+        for label, name in (
+            ("Summary", "summary.md"),
+            ("Factory definition", "definition.json"),
+            ("Production (in-toto / SLSA v1)", "provenance.intoto.json"),
+            ("Dependency ABOM (CycloneDX 1.5)", "abom.cdx.json"),
+            ("Check results (in-toto)", "checks"),
+            ("SHA-256 file index", "index.json"),
+        ):
+            self._write(
+                f"{label}: {self._path(path / name)}", severity="detail", detail=True, indent=0
+            )
 
     def evidence_delivery_failed(self, reason: str) -> None:
         """A failed export cannot relabel an already finalized COMPLETE record."""
-        self._write("Evidence delivery failed (command exit 23).", severity="error", indent=0)
+        self._display.gap()
+        self._write("Receipt export failed (command exit 23).", severity="error", indent=0)
         self._write(reason)
         self._write(
-            "Recorded execution remains COMPLETE; export did not rewrite its record or artifacts."
+            "Recorded execution remains COMPLETE; export did not rewrite its record or outputs."
         )
         self._write(
-            "Inspect the retained record and source inventory, then retry the read-only "
-            "export described in docs/evidence.md; no model rerun is required."
+            "Inspect the saved run, then retry the read-only export described in "
+            "docs/evidence.md; no model rerun is required."
         )

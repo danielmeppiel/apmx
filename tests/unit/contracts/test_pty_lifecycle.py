@@ -150,7 +150,7 @@ def test_pty_streams_live_output_and_restores_terminal(
             if streamed_at is None and b"Native stderr ready" in output:
                 assert child.poll() is None
                 streamed_at = time.monotonic()
-            if b"Running Copilot" in output and child.poll() is None:
+            if b"attempt 1/1  agent" in output and child.poll() is None:
                 spinner_seen_while_running = True
             if (
                 interrupt
@@ -191,39 +191,43 @@ def test_pty_streams_live_output_and_restores_terminal(
     assert record["result"]["stop_reason"] == expected_reason
     assert record["producer"]["cleanup_confirmed"] is True
     assert record["producer"]["returncode"] is not None
-    assert text.count(b"PTY actor ready") == 1
+    # Narration is verbose detail; by default it only feeds the in-place attempt line.
+    assert text.count(b"Copilot > PTY actor ready") == int(verbose)
+    if not animate:
+        assert text.count(b"PTY actor ready") == int(verbose)
     assert b"PRIVATE_" not in output
     assert b"VERIFIED" not in text
     assert b"UNPROVEN" not in text
-    assert (b"Contract COMPLETE" in text) is not (interrupt or fail)
-    assert b"Copilot > PTY actor ready" in text
+    assert (b"[+] COMPLETE" in text) is not (interrupt or fail)
     assert b"Copilot stderr > Native stderr ready" in text
     assert b"(untrusted)" not in text
     assert b"native-advisory" not in text
     assert (b"raw exit" in text) is (verbose and not (interrupt or fail))
     assert text.count(b"[i] Execution: local (not sandboxed)") == 1
     plain_lines = text.replace(b"\r", b"")
-    assert b"Tool started: view" in text
-    assert b"\n            without losing its source or hiding\n" in plain_lines
-    assert b"\n            live progress.\n" in plain_lines
+    assert (b"Tool started: view" in text) is verbose
+    if verbose:
+        assert b"\n                rows without losing its source\n" in plain_lines
     if animate:
         assert b"\x1b[2;36m" in output
     else:
         assert b"\x1b" not in output
     assert "Tool started: view" in (records[0].parent / "transcript.log").read_text()
     if not interrupt and not fail:
-        assert b"Contract: 1/1 completed" in text and b"Check: 1/1 passed" in text
-        assert b"Directory: .apm/runs/" in text
-        assert b"Record: .apm/runs/" in text
+        assert b"[+] COMPLETE   1/1 contract   1/1 check" in text
+        assert b"Outputs   .apm/runs/" in text
+        assert (b"Record: .apm/runs/" in text) is verbose
         assert b"The run stopped" not in text
     if fail:
-        assert b"Copilot did not complete successfully." in text
-        assert b"Review Copilot diagnostics and logs before retrying." in text
+        words = b" ".join(text.split())
+        assert b"[x] HALTED handoff: Copilot did not complete successfully exit 22" in words
+        assert b"Review Copilot diagnostics and logs, then rerun:" in text
     if animate:
         assert spinner_seen_while_running
         assert b"\x1b[?25l" in output
         assert b"\x1b[?25h" in output
-        assert output.count(b"Running Copilot") >= 2
+        # The single in-place attempt line is redrawn with elapsed time and status.
+        assert output.count(b"attempt 1/1  agent") >= 2
     else:
         assert b"\x1b" not in output
     assert all(byte < 128 for byte in output)

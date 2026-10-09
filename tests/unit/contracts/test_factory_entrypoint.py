@@ -117,12 +117,8 @@ def test_selected_directory_is_actual_root_without_global_chdir(caller, monkeypa
     assert (calls[0][1].root / "seed.txt").read_bytes() == b"FACTORY INPUT"
     aggregate = document(root)
     assert (
-        "Record: " + Path(aggregate["result"]["record_path"]).relative_to(caller).as_posix()
+        "Outputs   " + Path(aggregate["artifacts"]["root"]).relative_to(caller).as_posix() + "/\n"
     ) in result.output
-    assert (
-        "Directory: " + Path(aggregate["artifacts"]["root"]).relative_to(caller).as_posix()
-        in result.output
-    )
     chdir.assert_not_called()
 
 
@@ -302,7 +298,7 @@ def test_explicit_flags_never_prompt_or_imply_other_permission(
     confirm.assert_not_called()
     if host:
         assert result.output.count("Execution: local") == 1
-        assert result.output.index("Execution: local") < result.output.index("Contract 1/2:")
+        assert result.output.index("Execution: local") < result.output.index("[1/2] ")
         assert "Package dependencies may be installed" in result.output
         assert_consent(caller, "flag", unproven)
         assert document(caller)["complete"] is unproven

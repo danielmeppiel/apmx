@@ -62,9 +62,9 @@ def test_both_cli_completion_paths_keep_delivery_separate(
     path, digest = captured[0]
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     assert json.loads(path.read_bytes())["execution"] == {"name": "COMPLETE", "exit_code": 0}
-    assert "Contract COMPLETE" in response.output
-    assert ("Evidence delivery failed" in response.output) is bool(failure)
-    assert ("Evidence package:" in response.output) is (failure is None)
+    assert "[+] COMPLETE" in response.output
+    assert ("Receipt export failed" in response.output) is bool(failure)
+    assert ("\nReceipt   " in response.output) is (failure is None)
     assert "apmx: HALTED" not in response.output
     assert "private filesystem error" not in response.output
 
@@ -77,9 +77,12 @@ def test_ordinary_run_without_dependencies_delivers_a_receipt(tmp_path, monkeypa
         main, ["job.contract.md", "--on", "copilot", "--allow-host-access"]
     )
     assert response.exit_code == 0, response.output
-    assert "Evidence package:" in response.output
     receipts = list(tmp_path.glob(".apm/runs/*/receipt"))
     assert len(receipts) == 1
+    relative = receipts[0].relative_to(tmp_path).as_posix()
+    assert f"\nReceipt   {relative}/\n" in response.output
+    assert "          inventory   CycloneDX 1.5 (0 components)\n" in response.output
+    assert f"\nNext      apmx audit {relative}\n" in response.output
     assert not list(tmp_path.glob(".apm/runs/*/evidence"))
     bom = json.loads((receipts[0] / "abom.cdx.json").read_bytes())
     assert bom["components"] == []
@@ -102,7 +105,7 @@ def test_rejected_run_gets_no_receipt_but_keeps_its_saved_attempt(tmp_path, monk
         main, ["job.contract.md", "--on", "copilot", "--allow-host-access"]
     )
     assert response.exit_code == 20, response.output
-    assert "Evidence package:" not in response.output
+    assert "Receipt" not in response.output and "apmx audit" not in response.output
     runs = list(tmp_path.glob(".apm/runs/*"))
     assert len(runs) == 1 and (runs[0] / "record.json").is_file()
     assert not (runs[0] / "receipt").exists() and not (runs[0] / "evidence").exists()

@@ -32,7 +32,9 @@ flowchart LR
 | `attempts/`, `candidates/` | What retained inputs, outputs and reconstructed tested files bind those claims? |
 | `index.json` | What files and hashes belong to this package? |
 
-The CLI prints the receipt and summary paths. Receipts live next to the completed
+A COMPLETE run ends with a `Receipt` block naming the receipt directory and the
+standards documents it contains, then `Next      apmx audit <receipt-dir>`;
+`--verbose` also lists each file, including `summary.md`. Receipts live next to the completed
 root record: `.apm/runs/<id>/receipt`, `.apm/controllers/<id>/receipt`, or
 `.apm/chains/<id>/receipt`. A completed repair includes its earlier rejected
 attempts, not just the selected output. A stopped root is not eligible.

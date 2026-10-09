@@ -148,13 +148,15 @@ def test_replaced_file_cannot_supply_a_continuation_to_a_partial_frame(tmp_path)
     assert any("replaced" in item.data["message"] for item in observed)
 
 
-def test_native_debug_visibility_is_explicit_without_changing_public_output(capsys):
-    logger = ContractLogger()
+@pytest.mark.parametrize("verbose", [False, True])
+def test_native_debug_visibility_is_explicit_without_changing_public_output(capsys, verbose):
+    logger = ContractLogger(verbose=verbose)
     events = EventEmitter("run", logger.on_event)
     events.emit("native_diagnostic", source="harness", text="Low-level plumbing")
     events.emit("activity", source="harness", text="Reading declared inputs")
     output = capsys.readouterr().out
-    assert "Low-level plumbing" not in output and "Reading declared inputs" in output
+    assert ("Low-level plumbing" in output) is verbose
+    assert ("Reading declared inputs" in output) is verbose
     logger.close()
 
 

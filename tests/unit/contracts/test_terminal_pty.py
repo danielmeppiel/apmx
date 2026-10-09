@@ -174,13 +174,13 @@ def test_real_pty_streams_before_completion_and_restores_terminal(
         text = output.decode("ascii").replace("\r", "")
         assert "\x1b" not in text
         lines = text.splitlines()
-        assert "Contract 1/1: long-source-name" in lines
-        assert "  Produces: handoff.json" in lines
-        assert ("long-source-name.contract.md" in text) is verbose
-        assert "  Record: record.json" in lines
-        words = " ".join(line.strip() for line in lines)
+        words = " ".join(text.split())
+        assert "Contract long-source-name.contract.md copilot / gpt-6-astra" in words
+        assert "long-source-name produces handoff.json" in words
+        assert ("Source: long-source-name.contract.md" in words) is verbose
+        assert any(line.startswith("Saved     ./") for line in lines)
         assert "Copilot stderr > Ready" in words
-        assert "Copilot > Useful stream before completion" in words
+        assert ("Copilot > Useful stream before completion" in words) is verbose
         if cancel:
             words = " ".join(line.strip() for line in text.splitlines())
             assert (

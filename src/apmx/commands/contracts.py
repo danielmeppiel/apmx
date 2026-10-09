@@ -32,6 +32,14 @@ def invoke_contract(
 
     if logger is None:
         logger = ContractLogger(verbose=verbose)
+    logger.remember_invocation(
+        contract,
+        package_ref=source.package_ref if source else None,
+        harness=harness,
+        model=model,
+        factory=factory_root is not None,
+        allow_host_access=allow_advisory,
+    )
     if not planning and factory_root is None:
         logger.execution_context()
     chain_result = None

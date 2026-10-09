@@ -342,7 +342,7 @@ def test_import_preparation_cleanup_failure_marks_aggregate_incomplete(
         ],
     )
     assert result.exit_code == 22 and len(calls) == 2, result.output
-    assert "Factory COMPLETE" not in result.output
+    assert "[+] COMPLETE" not in result.output
     data = json.loads(next((caller / ".apm/chains").glob("*/record.json")).read_bytes())
     if persistence_failure:
         assert "persistence is unconfirmed" in result.output
