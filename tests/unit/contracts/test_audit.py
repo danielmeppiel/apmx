@@ -316,6 +316,7 @@ def test_audit_is_reserved_but_dot_audit_runs_a_directory(tmp_path, monkeypatch)
         + "\n---\nWrite out.txt.\n"
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("apmx.runtime.utils.find_runtime_binary", lambda _: sys.executable)
     planned = CliRunner().invoke(main, ["./audit", "--plan"])
     assert planned.exit_code == 0, planned.output
     assert "job" in planned.output
