@@ -1,3 +1,6 @@
 # Preserve the reviewed upstream copyright document byte-for-byte.
 build/notices/libffi/*.txt -text
 build/notices/libffi/ubuntu-source-copyright.txt whitespace=-blank-at-eol
+
+# Hash-pinned upstream CycloneDX schemas must stay byte-identical on every platform.
+src/apmx/audit/schemas/* -text

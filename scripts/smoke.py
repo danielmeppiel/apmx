@@ -708,6 +708,30 @@ def require_standard_delivery(run: Path, stdout: str, *, ambiguous_inventory: bo
     return "delivered"
 
 
+def require_receipt_audit(
+    binary: Path, receipt: Path, cwd: Path, env: dict[str, str], *,
+    outputs: Path | None = None, offline: bool = False,
+) -> dict:
+    """The frozen `apmx audit` verifies a real receipt with its bundled schemas and APM."""
+    args = ["audit", str(receipt), *(["--offline"] if offline else [])]
+    text = run_binary(binary, args, cwd, env)
+    require(
+        text.returncode == 0 and "[+] VALID   (content-bound; not authenticated)" in text.stdout,
+        f"Frozen receipt audit failed: {text.stdout}\n{text.stderr}",
+    )
+    require(text.stdout.isascii() and "\x1b" not in text.stdout, "Audit output is not plain ASCII")
+    extra = ["--outputs", str(outputs)] if outputs is not None else []
+    machine = run_binary(binary, [*args, "--format", "json", *extra], cwd, env)
+    require(machine.returncode == 0, f"Frozen JSON audit failed: {machine.stdout}\n{machine.stderr}")
+    report = json.loads(machine.stdout)
+    require(report["result"] == "valid" and report["signed"] is False, "Unexpected audit report")
+    rows = {row["name"]: row["status"] for row in report["rows"]}
+    require(rows["Identity"] == "warn", "Audit must report the receipt as unsigned")
+    if outputs is not None:
+        require(report["facts"].get("outputsRehashed") is True, "Delivered outputs were not re-hashed")
+    return {"result": report["result"], "rows": rows, "facts": report["facts"]}
+
+
 def run_case(
     binary: Path, root: Path, actor: Path | None, selection: str, mode: str,
     *, fresh_home: bool = False, mixed_imports: bool = False,
@@ -1011,9 +1035,17 @@ def _run_case(
         delivery = require_standard_delivery(run, result.stdout, ambiguous_inventory=mixed_imports)
     else:
         require(not (run / "receipt").exists(), "A run that did not complete published a receipt")
+    audit = None
+    if delivery == "delivered":
+        audit = require_receipt_audit(binary, run / "receipt", caller, env)
+        if selection == "package":
+            require(
+                audit["facts"].get("apmAudit", {}).get("passed") is True,
+                "Bundled APM did not audit the package receipt's ingredients",
+            )
     return {
         "selection": selection, "mode": mode, "exit_code": result.returncode,
-        "evidence_delivery": delivery,
+        "evidence_delivery": delivery, "receipt_audit": audit,
         "actor": "hermetic Copilot JSONL protocol fixture; NOT live model inference",
         "backend_installation": installation,
         "fresh_home": fresh_home, "profile_changes": profile_changes,
@@ -1095,6 +1127,17 @@ def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
         json.loads((receipt / "abom.cdx.json").read_bytes())["components"] == [],
         "Dependency-free factory receipt must list zero CycloneDX components",
     )
+    audit = require_receipt_audit(binary, receipt, caller, env, outputs=view)
+    tampered = root / "tampered-receipt"
+    shutil.copytree(receipt, tampered)
+    forged = next(tampered.glob("attempts/*/artifacts/final.json"))
+    forged.chmod(0o600)
+    forged.write_text('{"source": "forged"}\n', encoding="utf-8")
+    rejected = run_binary(binary, ["audit", str(tampered)], caller, env)
+    require(
+        rejected.returncode == 1 and "[x] INVALID   Integrity: File hash mismatch" in rejected.stdout,
+        f"Frozen audit accepted a tampered receipt: {rejected.stdout}\n{rejected.stderr}",
+    )
     leaves = [json.loads(path.read_bytes()) for path in (factory / ".apm/runs").glob("*/record.json")]
     require(len(leaves) == 2, "Expected two factory leaf records")
     require({leaf["schema"] for leaf in leaves} == {"apm-contract-run/0.3"},
@@ -1126,6 +1169,7 @@ def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
     return {
         "preview_exit": preview.returncode, "exit_code": result.returncode,
         "contracts": 2, "checks": 2, "delivered_files": 3,
+        "receipt_audit": audit,
         "actor": "hermetic Copilot JSONL protocol fixture; NOT live model inference",
         "record": record,
     }

@@ -142,23 +142,39 @@ and publishes a completed directory by rename. It does not rewrite canonical
 records. The export has a 512 MiB byte bound. Raw records themselves still
 refer to original local evidence paths; relocate the **exported receipt**.
 
+## Verify a receipt: `apmx audit`
+
+```sh
+apmx audit .apm/chains/<id>/receipt
+```
+
+[`apmx audit`](audit.md) is the primary verifier. It reports Integrity,
+Standards, Factory, Checks, Ingredients, Outputs and Identity rows, delegates
+dependency trust to the bundled APM (`apm install --frozen` + `apm audit --ci`)
+and ends with `VALID (content-bound; not authenticated)` or `INVALID` and the
+first reason. The pinned CycloneDX schemas ship inside apmx, so structural
+verification works offline.
+
 ## Independent, offline verification
 
-The contributor scripts use pinned upstream in-toto protobuf bindings and
-CycloneDX JSON Schemas. They do **not** import APMX. From the source checkout:
+The single verifier lives in `src/apmx/audit/verifier.py`. It imports only the
+standard library and pinned upstream in-toto protobuf bindings, protobuf and
+jsonschema. `scripts/verify_evidence.py` is a thin wrapper that loads it **by
+file path**, so it does **not** import APMX. From the source checkout:
 
 ```sh
 python3 -m venv .venv-evidence
 .venv-evidence/bin/python -m pip install -r scripts/evidence-requirements.txt
-.venv-evidence/bin/python scripts/verify_evidence.py /path/to/receipt \
-  --schemas /path/to/schema-cache --fetch-schemas --require-capability
+.venv-evidence/bin/python scripts/verify_evidence.py /path/to/receipt --require-capability
 .venv-evidence/bin/python scripts/check_evidence_controls.py /path/to/receipt \
-  --schemas /path/to/schema-cache
+  --schemas src/apmx/audit/schemas
 ```
 
-Environment installation and `--fetch-schemas` require network access.
-Subsequent validation is offline: omit `--fetch-schemas`. Schema hashes and
-source commit pins are checked; use `--help` for the complete interface.
+Environment installation requires network access. Validation is offline and
+uses the hash-pinned schemas bundled in `src/apmx/audit/schemas/` unless you
+pass `--schemas DIR` (add `--fetch-schemas` to download the same pinned bytes
+into `DIR`). Schema hashes and source commit pins are checked; use `--help` for
+the complete interface.
 `--require-capability` is a demonstration gate for an actual selected capability,
 not a requirement for all possible inventories.
 

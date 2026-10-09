@@ -128,6 +128,7 @@ Every completed invocation also delivers a receipt: a CycloneDX ABOM,
 in-toto/SLSA producer statements, Test Result statements, exact supporting
 files and a generated summary.
 [Inspect and independently validate the standard files](docs/evidence.md).
+Verify a receipt with `apmx audit <receipt-dir>` ([audit](docs/audit.md)).
 These are unsigned content bindings, not authenticated attestations or proof
 that arbitrary prose is correct. Review captured source files before sharing.
 

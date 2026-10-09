@@ -1,7 +1,8 @@
 attrs==26.1.0
-in-toto-attestation @ git+https://github.com/in-toto/attestation@fd2609c16bcb0ac53443e2b4612977f997e8f9a5#subdirectory=python
+in-toto-attestation==0.9.3
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
-protobuf==7.34.0
+protobuf==7.36.2
 referencing==0.37.0
-rpds-py==2026.6.3
+rpds-py==2026.9.1
+typing-extensions==4.16.0 ; python_full_version < '3.13'

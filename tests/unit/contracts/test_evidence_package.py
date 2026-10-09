@@ -3,7 +3,6 @@
 import hashlib
 import importlib.util
 import json
-import os
 import shutil
 from pathlib import Path
 
@@ -231,16 +230,11 @@ def test_export_failure_does_not_mutate_canonical_completion(tmp_path, monkeypat
 
 
 def _independent_verifier():
-    pytest.importorskip("jsonschema")
-    pytest.importorskip("in_toto_attestation")
-    schemas = os.environ.get("APMX_EVIDENCE_SCHEMAS")
-    if not schemas:
-        pytest.skip("Set APMX_EVIDENCE_SCHEMAS to the pinned CycloneDX schema directory.")
     script = Path(__file__).resolve().parents[3] / "scripts/verify_evidence.py"
     spec = importlib.util.spec_from_file_location("verify_evidence_under_test", script)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module, Path(schemas)
+    return module, module.BUNDLED_SCHEMAS
 
 
 def test_independent_verifier_accepts_a_dependency_free_receipt(tmp_path, monkeypatch) -> None:

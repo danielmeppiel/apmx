@@ -66,6 +66,28 @@ def _matches_component(component: dict, dependency: LockedDependency) -> bool:
     )
 
 
+def lock_dependencies(lock: LockFile) -> list[dict]:
+    """The definition's normalized projection of a retained APM lock."""
+    dependencies = []
+    for dep in lock.get_all_dependencies():
+        local = dep.source == "local"
+        dependencies.append(
+            {
+                "repository": None if local else dep.repo_url,
+                "name": dep.name,
+                "source": dep.source,
+                "commit": dep.resolved_commit,
+                "version": dep.version,
+                "contentHash": dep.content_hash,
+                "virtualPath": dep.virtual_path,
+                "registryHash": dep.resolved_hash,
+                "skillSubset": sorted(dep.skill_subset),
+            }
+        )
+    dependencies.sort(key=lambda item: _json(item))
+    return dependencies
+
+
 def _empty_inventory() -> bytes:
     """A truthful CycloneDX 1.5 inventory for an execution that installed no APM packages."""
     return _json(
@@ -138,23 +160,7 @@ def _inventory(runs: tuple[RunResult, ...]) -> tuple[bytes, list[dict], list[dic
             "Inspect the retained lock for overlapping package references.",
             code="inventory_binding",
         )
-    dependencies = []
-    for dep in lock.get_all_dependencies():
-        local = dep.source == "local"
-        dependencies.append(
-            {
-                "repository": None if local else dep.repo_url,
-                "name": dep.name,
-                "source": dep.source,
-                "commit": dep.resolved_commit,
-                "version": dep.version,
-                "contentHash": dep.content_hash,
-                "virtualPath": dep.virtual_path,
-                "registryHash": dep.resolved_hash,
-                "skillSubset": sorted(dep.skill_subset),
-            }
-        )
-    dependencies.sort(key=lambda item: _json(item))
+    dependencies = lock_dependencies(lock)
     bindings = []
     for row in documents:
         for skill in row["imports"]:
@@ -588,7 +594,7 @@ def export_package(record_path: Path, destination: Path) -> Path:
             summary = (
                 "# APMX receipt\n\n"
                 "Unsigned local observations, not authenticated attestation or a sandbox. "
-                "See docs/evidence.md to verify it.\n\n"
+                "Verify it with `apmx audit <this-directory>`.\n\n"
                 f"Definition SHA-256: `{definition_ref['digest']['sha256']}`\n\n"
                 f"APM dependencies: {len(dependencies)}"
                 + (" (CycloneDX inventory lists zero components)" if not dependencies else "")

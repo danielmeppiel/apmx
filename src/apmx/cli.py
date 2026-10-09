@@ -18,11 +18,17 @@ from apmx.install.contract_source_validation import validate_reference
 from apmx.models.dependency.reference import DependencyReference
 from apmx.version import get_version
 
+AUDIT = "audit"
+
 
 class NativeCommand(click.Command):
-    """Keep the frozen MCP helper internal, without adding a public CLI operation."""
+    """Keep the frozen MCP helper internal; route the reserved `audit` word to its command.
 
-    def main(self, *args, **kwargs):
+    `apmx <target>` stays the run shorthand. Only a first argument of exactly
+    `audit` selects `apmx audit`; a directory named audit runs as ./audit.
+    """
+
+    def main(self, args=None, prog_name=None, **kwargs):
         if getattr(sys, "frozen", False) and os.environ.get("APMX_INTERNAL_ARTIFACT_SERVER"):
             from apmx.runtime.artifact_mcp import run_server
 
@@ -30,7 +36,16 @@ class NativeCommand(click.Command):
             if kwargs.get("standalone_mode", True):
                 raise SystemExit(code)
             return code
-        return super().main(*args, **kwargs)
+        arguments = list(sys.argv[1:] if args is None else args)
+        if arguments[:1] == [AUDIT]:
+            from apmx.audit.command import audit_command
+
+            configure_output_mode(detect_output_mode([]))
+            configure_process_tls_trust()
+            return audit_command.main(
+                arguments[1:], prog_name=f"{prog_name or 'apmx'} {AUDIT}", **kwargs
+            )
+        return super().main(arguments, prog_name, **kwargs)
 
 
 def _finish_result(
@@ -66,6 +81,11 @@ def _select_entry(
         raise click.UsageError(
             "No factory selected. Pass a local directory, .contract.md file, "
             "Git package reference, or --from PACKAGE_REF."
+        )
+    if contract == AUDIT:
+        raise click.UsageError(
+            "'audit' is reserved: use 'apmx audit RECEIPT_DIR' to verify a receipt, "
+            "or ./audit to run a local directory named audit."
         )
     selected = Path(contract).expanduser().absolute()
     if selected.is_dir():
@@ -105,7 +125,10 @@ def _select_entry(
         "and evidence belong to the calling directory.\n\n"
         "An existing positional directory is its own input, policy and evidence root. "
         "Use ./PATH to require a local directory; use --from to select a source package "
-        "even when a local directory has the same name."
+        "even when a local directory has the same name.\n\n"
+        "Every COMPLETE run delivers a receipt. Verify it with "
+        "'apmx audit RECEIPT_DIR' (see 'apmx audit --help'). 'audit' is reserved: "
+        "run a directory named audit as ./audit."
     ),
 )
 @click.argument("contract", required=False, type=str, metavar="[FACTORY_OR_CONTRACT_OR_PACKAGE]")
