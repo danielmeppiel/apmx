@@ -377,3 +377,21 @@ def test_rerun_hint_keeps_the_users_selection_and_drops_factory_consent(tmp_path
     assert logger._invocation == "apmx --from 'org/pkg#v1' --model m"
     logger.remember_invocation("dir with space", factory=True)
     assert logger._invocation == "apmx './dir with space'"
+
+
+def test_append_only_liveness_is_sparse_and_names_the_latest_status(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with _terminal(monkeypatch, mode="pipe") as terminal:
+        logger = ContractLogger()
+        _emit(logger, "selected", contract="job.contract.md", produces="out.txt", harness="copilot")
+        _emit(logger, "phase", at=1, name="execution")
+        _emit(logger, "activity", at=2, source="harness", text="Reading the request.")
+        for second in (5, 10, 31, 45, 62):
+            _emit(logger, "heartbeat", at=second, elapsed_seconds=second)
+        text = terminal.text.replace("\r\n", "\n")
+    liveness = [line for line in text.splitlines() if "still running" in line]
+    assert liveness == [
+        "        still running 31s: Reading the request.",
+        "        still running 1m02s: Reading the request.",
+    ]
+    assert "Reading the request." not in text.replace(liveness[0], "").replace(liveness[1], "")
