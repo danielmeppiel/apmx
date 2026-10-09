@@ -1,0 +1,12 @@
+Factory  factory   2 contracts   copilot / fixture-model
+
+[1/2] first    needs notes.md -> produces first.json, second.json
+               checks: identity   budget 3 attempts, 600s
+[2/2] second   needs notes.md, first.json*, second.json* -> produces final.json
+               checks: identity   1 attempt
+               * from an earlier contract
+
+Nothing ran. Run it with:  apmx ./factory --model fixture-model
+Unattended:                apmx ./factory --model fixture-model --allow-host-access --allow-unproven-inputs
+Runs are local and not sandboxed; APMX does not cap model charges.
+Handoffs: fully checked local outputs (--allow-unproven-inputs); assurance remains unproven.

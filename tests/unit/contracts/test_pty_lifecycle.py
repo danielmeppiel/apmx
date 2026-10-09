@@ -203,7 +203,8 @@ def test_pty_streams_live_output_and_restores_terminal(
     assert b"(untrusted)" not in text
     assert b"native-advisory" not in text
     assert (b"raw exit" in text) is (verbose and not (interrupt or fail))
-    assert text.count(b"[i] Execution: local (not sandboxed)") == 1
+    disclosure = b"[i] Not sandboxed: agents and checks can use host files, network and logins."
+    assert b" ".join(text.split()).count(disclosure) == 1
     plain_lines = text.replace(b"\r", b"")
     assert (b"Tool started: view" in text) is verbose
     if verbose:

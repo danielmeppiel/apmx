@@ -37,6 +37,13 @@
   running attempt in place; redirected, CI and `NO_COLOR` output stay
   append-only. Capture details, phase lines, narration, tool calls, check
   commands and checker output moved behind `--verbose`, which keeps them all.
+- `--plan` and the interactive consent preview are one compact work list
+  (`[i/N] name   needs -> produces`, checks and attempt budget, `*` for inputs
+  from an earlier contract) ending in "Nothing ran" and the run command; the
+  policy lecture moved to `--verbose`. The local-execution disclosure and the
+  package-loading consent are shorter with the same semantics and default No.
+- A single `.contract.md` accepts `--allow-unproven-inputs` as a no-op instead
+  of failing with exit 2; factory semantics are unchanged.
 - Evidence-delivery failure returns command exit 23 without changing a recorded
   COMPLETE outcome. Scripts must distinguish execution completion from package delivery.
 

@@ -1,0 +1,15 @@
+Contract  first.contract.md   copilot / fixture-model
+
+first   needs notes.md -> produces first.json, second.json
+        checks: identity   1 attempt
+
+Nothing ran. Run it with:  apmx first.contract.md --model fixture-model --allow-host-access
+Runs are local and not sandboxed; APMX does not cap model charges.
+    Time limits: run 1200s; each check 180s
+    Complete execution returns COMPLETE (0); this does not certify isolation.
+    Source: first.contract.md
+    Requested model: fixture-model
+    Native executable: /not/invoked/copilot
+    Baseline: 1 files, 33 bytes
+    Check identity: python -I checks/check.py
+    Policy: no-policy

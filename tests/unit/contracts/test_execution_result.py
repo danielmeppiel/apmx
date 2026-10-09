@@ -248,7 +248,10 @@ def test_actual_completed_cli_has_one_disclosure_and_evidence_hierarchy(
     )
     assert result.exit_code == 0, result.output
     text = result.output
-    assert text.count("[i] Execution: local (not sandboxed)") == 1
+    assert (
+        text.count("[i] Not sandboxed: agents and checks can use host files, network and logins.")
+        == 1
+    )
     assert text.index("host files") < text.index("Contract  job.contract.md")
     assert text.index("Model usage may cost money") < text.index("Contract  job.contract.md")
     assert "job   needs input.txt -> produces result.txt\n" in text

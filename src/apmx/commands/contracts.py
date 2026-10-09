@@ -72,7 +72,13 @@ def invoke_contract(
                 and not allow_unproven_inputs
                 and logger.can_confirm_factory()
             ):
-                logger.render_factory_work(graph, project_root=root, harness=harness)
+                logger.render_factory_work(
+                    graph,
+                    project_root=root,
+                    harness=harness,
+                    model=model,
+                    label=source.package_ref if source else None,
+                )
                 if not logger.confirm_factory():
                     raise ContractError(
                         "Factory not started: the local execution profile was not authorized.",

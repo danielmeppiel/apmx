@@ -52,8 +52,8 @@ apmx . --on opencode --allow-host-access --allow-unproven-inputs
 Add `--model provider/model` only after replacing that placeholder with an
 explicitly chosen native model identifier. Without `--model`, OpenCode retains
 its native configured/default selection. APMX never switches providers or
-falls back to another model after an error. Single-contract execution omits
-the factory-only `--allow-unproven-inputs`.
+falls back to another model after an error. Single-contract execution has no
+handoffs, so it accepts and ignores the factory-only `--allow-unproven-inputs`.
 
 The same `--from PACKAGE_REF .` route supports prepared source factories;
 this adapter does not fix the official APM standalone-resource archive gap

@@ -165,15 +165,15 @@ def test_interactive_yes_records_both_permissions_before_preparation(caller, mon
     assert result.exit_code == 0 and len(calls) == 2, result.output
     assert result.output.count("Run these 2 contracts with Copilot? [y/N]") == 1
     assert (
-        result.output.index("Contract 2/2: a-target")
-        < result.output.index("Execution: local")
+        result.output.index("[2/2] a-target")
+        < result.output.index("Not sandboxed:")
         < result.output.index("Run these 2 contracts")
     )
-    assert result.output.count("Execution: local") == 1
+    assert result.output.count("Not sandboxed:") == 1
     for notice in (
-        "host files, network and available logins",
-        "Required checks must pass before dependent work starts.",
-        "not sandboxed",
+        "host files, network and logins",
+        "* from an earlier contract",
+        "Not sandboxed",
         "Run only contracts you trust",
         "model usage may cost money",
     ):
@@ -297,9 +297,9 @@ def test_explicit_flags_never_prompt_or_imply_other_permission(
     )
     confirm.assert_not_called()
     if host:
-        assert result.output.count("Execution: local") == 1
-        assert result.output.index("Execution: local") < result.output.index("[1/2] ")
-        assert "Package dependencies may be installed" in result.output
+        assert result.output.count("Not sandboxed:") == 1
+        assert result.output.index("Not sandboxed:") < result.output.index("[1/2] ")
+        assert "Packages may be installed" in result.output
         assert_consent(caller, "flag", unproven)
         assert document(caller)["complete"] is unproven
     else:
@@ -313,8 +313,10 @@ def test_preview_never_prompts_and_changes_no_input(caller, monkeypatch):
     can_confirm = Mock(side_effect=AssertionError("preview must not even consider confirmation"))
     monkeypatch.setattr(ContractLogger, "can_confirm_factory", can_confirm)
     result = CliRunner().invoke(main, [str(caller), "--on", "copilot", "--plan"])
-    assert result.exit_code == 0 and "2 contracts / 2 artifacts / 2 planned checks" in result.output
-    assert "Execution:" not in result.output and "[y/N]" not in result.output
+    assert result.exit_code == 0
+    assert "Factory  caller   2 contracts   copilot / default model" in result.output
+    assert "Nothing ran. Run it with:  apmx " in result.output
+    assert "Not sandboxed:" not in result.output and "[y/N]" not in result.output
     assert calls == [] and before == {p.name: p.read_bytes() for p in caller.iterdir()}
     can_confirm.assert_not_called()
 

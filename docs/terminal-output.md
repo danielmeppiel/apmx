@@ -88,28 +88,55 @@ append-only: no cursor control, completed lines only, and a sparse
 `still running` line during long quiet work. Native stderr and engine
 diagnostics remain immediately visible in every mode.
 
-Before interactive factory consent, the work preview lists contract, artifact
-and planned-check counts, then every contract's Produces and Checks names.
-Contract identities match execution: a unique basename, or a root-relative
-path when names collide. Required files are visible in both modes, distinguished
-as starting inputs or earlier-stage outputs. During execution, `--verbose` emits
+`--plan` and interactive factory consent share one compact work preview:
+
+```text
+Factory  factory   2 contracts   copilot / default model
+
+[1/2] first    needs notes.md -> produces first.json, second.json
+               checks: identity   1 attempt
+[2/2] second   needs notes.md, first.json*, second.json* -> produces final.json
+               checks: identity   1 attempt
+               * from an earlier contract
+
+Nothing ran. Run it with:  apmx ./factory
+Unattended:                apmx ./factory --allow-host-access --allow-unproven-inputs
+Runs are local and not sandboxed; APMX does not cap model charges.
+```
+
+`--plan` ends with the three lines above; consent instead ends with the
+disclosure and the prompt. Contract identities match execution: a unique
+basename, or a root-relative path when names collide. `*` marks inputs that an
+earlier contract produces. The budget is the authored one, or `1 attempt`
+without a budget. `--verbose` adds sources, check commands, the `.apm/` save
+location, the handoff policy, limits and the consent rules.
+A single `.contract.md` previews the same way; its run command includes
+`--allow-host-access` because single contracts have no interactive consent. It
+accepts the factory-only `--allow-unproven-inputs` as a no-op (it has no handoffs).
+During execution, `--verbose` emits
 `Found input` only after the canonical workspace owner captures the actual file,
 with its origin, byte count, SHA-256 and upstream record, and shows each
 check's name and command before it starts. No check result is
-claimed before execution, and Evidence
-says where it **will be saved**, not that a record already exists.
+claimed before execution.
 
-The local-access, package-installation and cost disclosure follows the work
-preview exactly once, immediately before `Run these 4 contracts with Copilot?
-[y/N]` (or `Run this contract with Copilot? [y/N]` for one contract). The default
-is no; declining a local factory starts no package, model or check work. Headings are cyan,
-context and the prompt are neutral, and no success or warning color precedes
-execution. `--plan` shows the same work hierarchy and the selected handoff policy,
-without execution disclosure or a consent prompt. Explicit consent flags still
-disclose local execution before action.
+The disclosure is two lines:
 
-With `--from`, an interactive factory first explains the temporary workspace,
-APM dependency installation and possible network/login use, then asks
+```text
+[i] Not sandboxed: agents and checks can use host files, network and logins.
+    Packages may be installed; model usage may cost money. Run only contracts you trust.
+```
+
+For a single contract the second line omits package installation. It follows
+the work preview exactly once, immediately before `Run these 4 contracts with
+Copilot? [y/N]` (or `Run this contract with Copilot? [y/N]` for one contract).
+The default is no; declining a local factory starts no package, model or check
+work. Headings are cyan, context and the prompt are neutral, and no success or
+warning color precedes execution. `--plan` shows no disclosure or consent
+prompt. Explicit consent flags still disclose local execution before action.
+
+With `--from`, an interactive factory first explains in one sentence that
+loading installs APM dependencies in a temporary workspace and can use host
+files, network and logins, then asks
 `Load this factory and install its dependencies? [y/N]`. Accepting authorizes only loading;
 the resulting work preview still needs a separate execution confirmation. Decline
 the first prompt to prevent acquisition, or the second to prevent agents and checks

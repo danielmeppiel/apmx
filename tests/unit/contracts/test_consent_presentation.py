@@ -81,43 +81,33 @@ def test_work_precedes_single_disclosure_and_default_no(
     text = re.sub(r"\x1b\[[0-9;]*m", "", raw)
     words = " ".join(text.split())
     expected = [
-        "Factory: feature-factory",
-        "4 contracts / 5 artifacts / 6 planned checks",
-        "Contract 1/4: planning",
-        "Produces: plan.md",
-        "Checks: plan-sections",
-        "Contract 2/4: specification",
-        "Produces: spec.md",
-        "Contract 3/4: build",
-        "Produces: changes.diff, implementation.md",
-        "Checks: shipping-examples, checkout-regression, implementation-report-sections",
-        "Contract 4/4: review",
-        "Produces: review.md",
-        "Evidence: will be saved under feature-factory/.apm/",
-        "Required checks must pass before dependent work starts.",
-        "Execution: local (not sandboxed)",
-        "Agents and checks can access host files, network and available logins.",
-        "Package dependencies may be installed; model usage may cost money.",
-        "Run only contracts you trust.",
+        "Factory feature-factory 4 contracts copilot / default model",
+        "[1/4] planning needs request.md -> produces plan.md",
+        "checks: plan-sections 1 attempt",
+        "[2/4] specification needs plan.md* -> produces spec.md",
+        "[3/4] build needs spec.md* -> produces changes.diff, implementation.md",
+        "checks: shipping-examples, checkout-regression, implementation-report-sections 1 attempt",
+        "[4/4] review needs implementation.md* -> produces review.md",
+        "* from an earlier contract",
+        "[i] Not sandboxed: agents and checks can use host files, network and logins.",
+        "Packages may be installed; model usage may cost money. Run only contracts you trust.",
         "Run these 4 contracts with Copilot? [y/N]",
     ]
     position = 0
     for fragment in expected:
         position = words.index(fragment, position) + len(fragment)
-    assert words.count("Execution:") == 1
+    assert words.count("Not sandboxed:") == 1
     assert words.count("model usage may cost money") == 1
     assert ".contract.md" in words if verbose else ".contract.md" not in words
     assert ("check-shipping-examples" in words) is verbose
-    for name in ("plan.md", "spec.md", "implementation.md"):
-        assert f"Input: {name} (from an earlier step)" in words
-        assert f"Input: {name} (starting file)" not in words
-    assert "Input: request.md (starting file)" in words
+    assert ("Saved under: feature-factory/.apm/" in words) is verbose
+    assert "request.md*" not in words
     for forbidden in ("Final outputs:", "PASS", "COMPLETE", "PRIVATE_PROMPT"):
         assert forbidden not in words
     assert raw.isascii()
     assert not list(tmp_path.iterdir())
     if mode == "styled":
-        assert "\x1b[1;36mContract 1/4: planning" in raw
+        assert "\x1b[1;36m[1/4] planning\x1b[0m" in raw
         assert not re.search(r"\x1b\[[0-9;]*(?:32|33)m", raw)
     else:
         assert "\x1b" not in raw
@@ -134,8 +124,9 @@ def test_single_contract_grammar(tmp_path, monkeypatch, capsys, outputs, harness
     logger.render_factory_work(graph, project_root=graph.root, harness=harness)
     assert not logger.confirm_factory()
     output = capsys.readouterr().out
-    count = 1 if isinstance(outputs, str) else 2
-    assert f"1 contract / {count} artifact{'s' if count == 2 else ''} / 1 planned check" in output
+    produced = outputs if isinstance(outputs, str) else ", ".join(outputs)
+    assert f"Factory  {graph.root.name}   1 contract   {harness} / default model" in output
+    assert f"-> produces {produced}\n" in output
     assert f"Run this contract with {label}? [y/N]" in output
 
 
@@ -155,9 +146,7 @@ def test_collision_names_match_execution(tmp_path, capsys):
             index, 2, contract.path, catalog=tuple(item.path for item in graph.catalog)
         )
     execution = capsys.readouterr().out
-    previewed = [
-        line.split(": ", 1)[1] for line in preview.splitlines() if line.startswith("Contract ")
-    ]
+    previewed = [line.split()[1] for line in preview.splitlines() if line.startswith("[")]
     executed = [line.split("] ", 1)[1] for line in execution.splitlines() if line]
     assert previewed == executed == ["first/planning", "second/planning"]
 
@@ -214,8 +203,8 @@ raise SystemExit(0 if accepted else 21)
         assert b"[y/N]" in output, output.decode("ascii")
         assert child.poll() is None
         text = re.sub(r"\x1b\[[0-9;]*m", "", output.decode("ascii"))
-        assert text.index("Contract 4/4: review") < text.index("Execution: local")
-        assert text.count("Execution:") == 1 and "Final outputs:" not in text
+        assert text.index("[4/4] review") < text.index("Not sandboxed:")
+        assert text.count("Not sandboxed:") == 1 and "Final outputs:" not in text
         os.write(master, answer)
         assert child.wait(timeout=10) == (0 if answer == b"y\n" else 21)
         assert termios.tcgetattr(slave) == before

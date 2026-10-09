@@ -228,11 +228,24 @@ def _contract_pass(logger, root: Path, clock: _Clock) -> None:
     logger.evidence_package(_receipt(result.run_directory, checks=1))
 
 
+def _factory_plan(logger, root: Path, clock: _Clock) -> None:
+    budget = RepairBudget(max_attempts=3, max_seconds=600)
+    logger.render_chain_plan(_plan(root, budget))
+
+
+def _contract_plan(logger, root: Path, clock: _Clock) -> None:
+    plan = _plan(root).nodes[0].plan
+    logger.render_plan(plan, (FileEntry("notes.md", "0" * 64, 33, 0o644),))
+
+
 SCENARIOS = {
     "factory-pass": (_factory_pass, True),
     "factory-reject-retries": (_factory_reject, True),
     "contract-pass": (_contract_pass, False),
+    "factory-plan": (_factory_plan, True),
+    "contract-plan": (_contract_plan, False),
 }
+PLANS = {"factory-plan", "contract-plan"}
 
 
 def _render(tmp_path, monkeypatch, scenario: str, *, mode: str, width: int, verbose: bool) -> str:
@@ -243,6 +256,8 @@ def _render(tmp_path, monkeypatch, scenario: str, *, mode: str, width: int, verb
     monkeypatch.setattr(contract_logger, "_clock", clock)
     monkeypatch.setattr(ContractLogger, "_audit_available", staticmethod(lambda: True))
     driver, factory = SCENARIOS[scenario]
+    if not factory:
+        monkeypatch.chdir(root)
     with _terminal(monkeypatch, width=width, mode=mode) as terminal:
         logger = ContractLogger(verbose=verbose)
         if factory:
@@ -250,11 +265,11 @@ def _render(tmp_path, monkeypatch, scenario: str, *, mode: str, width: int, verb
                 "factory", model="fixture-model", factory=True, allow_host_access=True
             )
             logger.select_factory_root(root)
-            logger.execution_context(factory=True)
+            if scenario not in PLANS:
+                logger.execution_context(factory=True)
         else:
-            monkeypatch.chdir(root)
             logger.remember_invocation(
-                "first.contract.md", model="fixture-model", allow_host_access=True
+                "first.contract.md", model="fixture-model", allow_host_access=scenario not in PLANS
             )
         driver(logger, root, clock)
         raw = terminal.text
@@ -265,6 +280,7 @@ def _render(tmp_path, monkeypatch, scenario: str, *, mode: str, width: int, verb
 @pytest.mark.parametrize("profile", sorted(PROFILES))
 @pytest.mark.parametrize("scenario", sorted(SCENARIOS))
 def test_run_output_matches_golden_transcript(tmp_path, monkeypatch, scenario, profile):
+    """Run and --plan output, per terminal profile."""
     raw = _render(tmp_path, monkeypatch, scenario, **PROFILES[profile])
     assert "\x1b" not in raw
     assert all(" " <= character <= "~" or character == "\n" for character in raw)
@@ -292,7 +308,9 @@ def test_tty_rows_fit_the_width_except_unbreakable_paths(tmp_path, monkeypatch, 
             # Copyable paths/commands and literal checker output are never re-wrapped.
             if line.startswith("        identity: "):
                 continue
-            assert line.lstrip().startswith(("Outputs", "Receipt", "Saved", "Next", "More"))
+            assert line.lstrip().startswith(
+                ("Outputs", "Receipt", "Saved", "Next", "More", "Nothing ran", "Unattended")
+            )
             assert "/" in line or "apmx" in line
 
 
@@ -351,6 +369,33 @@ def test_verbose_keeps_todays_detail_behind_the_flag(tmp_path, monkeypatch):
         assert detail not in default
     for line in default.splitlines():
         assert line in verbose.splitlines()
+
+
+def test_plan_is_compact_and_truthful(tmp_path, monkeypatch):
+    factory = _render(tmp_path, monkeypatch, "factory-plan", mode="pipe", width=80, verbose=False)
+    assert factory.splitlines()[:2] == [
+        "Factory  factory   2 contracts   copilot / fixture-model",
+        "",
+    ]
+    for fact in (
+        "[1/2] first    needs notes.md -> produces first.json, second.json",
+        "               checks: identity   budget 3 attempts, 600s",
+        "[2/2] second   needs notes.md, first.json*, second.json* -> produces final.json",
+        "               checks: identity   1 attempt",
+        "               * from an earlier contract",
+        "Nothing ran. Run it with:  apmx ./factory --model fixture-model",
+        "Runs are local and not sandboxed; APMX does not cap model charges.",
+    ):
+        assert fact in factory
+    assert len(factory.splitlines()) <= 14
+    for lecture in ("Handoff policy", "Every run starts fresh", "Without --plan", "Evidence"):
+        assert lecture not in factory
+    single = _render(tmp_path, monkeypatch, "contract-plan", mode="pipe", width=80, verbose=False)
+    assert (
+        "Nothing ran. Run it with:  apmx first.contract.md --model fixture-model "
+        "--allow-host-access\n"
+    ) in single
+    assert "Unattended" not in single
 
 
 def test_missing_receipt_degrades_without_noise(tmp_path, monkeypatch):
