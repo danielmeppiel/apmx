@@ -50,7 +50,6 @@ def _run_checks(
     events: EventEmitter,
     deadline: float,
     observations: list[CheckObservation],
-    cancel_requested: Callable[[], bool] | None = None,
 ) -> str | None:
     """Run every eligible criterion against an independent captured subject."""
     for check in plan.contract.checks:
@@ -86,7 +85,6 @@ def _run_checks(
                 ),
                 events=events,
                 limits=plan.limits,
-                cancel_requested=cancel_requested,
             )
         decoder.finish()
         integrity_ok = integrity_ok and workspace.verify_check_integrity(
@@ -131,7 +129,6 @@ def run_contract(
     consent_source: str = "flag",
     allow_unproven_inputs: bool | None = None,
     announce_result: bool = True,
-    cancel_requested: Callable[[], bool] | None = None,
 ) -> RunResult:
     """Dispatch an authored budget without changing ordinary one-attempt execution."""
     runner = run_attempt
@@ -147,7 +144,6 @@ def run_contract(
         consent_source=consent_source,
         allow_unproven_inputs=allow_unproven_inputs,
         announce_result=announce_result,
-        cancel_requested=cancel_requested,
     )
 
 
@@ -196,7 +192,6 @@ def run_attempt(
     shared_deadline: float | None = None,
     repair_context: RepairContext | None = None,
     on_created: Callable[[records.AttemptStore], None] | None = None,
-    cancel_requested: Callable[[], bool] | None = None,
 ) -> RunResult:
     """Admit, execute, capture, assess and atomically record one fresh run."""
     _admit(plan, allow_advisory)
@@ -274,7 +269,6 @@ def run_attempt(
             on_started=lambda pid, pgid: store.update("execution", child_pid=pid, child_pgid=pgid),
             events=events,
             limits=plan.limits,
-            cancel_requested=cancel_requested,
         )
         decoder.finish()
         observed_models = tuple(decoder.observed_models)
@@ -321,16 +315,7 @@ def run_attempt(
         if not stop_reason:
             if artifact is not None:
                 events.emit("phase", name="checks")
-                stop_reason = _run_checks(
-                    plan,
-                    snapshot,
-                    artifact,
-                    store,
-                    events,
-                    deadline,
-                    checks,
-                    cancel_requested=cancel_requested,
-                )
+                stop_reason = _run_checks(plan, snapshot, artifact, store, events, deadline, checks)
             else:
                 events.emit(
                     "diagnostic",

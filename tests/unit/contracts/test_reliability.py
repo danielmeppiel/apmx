@@ -274,37 +274,6 @@ def test_natural_child_shutdown_is_not_an_operational_failure(tmp_path: Path, de
     assert b"closed" in chunks
 
 
-def test_external_cancel_requested_really_reaps_a_long_running_child(tmp_path: Path) -> None:
-    """The ``--tui`` cancel keybinding has no real OS signal to deliver; it can
-    only flip a flag read from another thread. This proves that flag alone is
-    enough for ``supervise_process`` to really terminate and reap a genuinely
-    spawned, still-running child, exactly like a timeout or SIGINT would."""
-    started = time.monotonic()
-    polls: list[bool] = []
-
-    def cancel_after_first_poll() -> bool:
-        requested = len(polls) > 0
-        polls.append(requested)
-        return requested
-
-    observation = process.supervise_process(
-        ProcessRequest(
-            (sys.executable, "-c", "import time; print('ready',flush=True); time.sleep(30)"),
-            tmp_path,
-            30,
-        ),
-        on_bytes=lambda *args: None,
-        cancel_requested=cancel_after_first_poll,
-        limits=ContractLimits(cleanup_seconds=0.4),
-    )
-    assert observation.stop_reason == "cancelled"
-    assert observation.cleanup_confirmed
-    assert "SIGTERM" in observation.signals
-    assert observation.returncode is not None and observation.returncode != 0
-    assert time.monotonic() - started < 2
-    assert any(polls)
-
-
 def test_truly_lingering_child_still_halts_within_cleanup_window(tmp_path: Path) -> None:
     started = time.monotonic()
     observation = process.supervise_process(

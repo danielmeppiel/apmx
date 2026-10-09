@@ -19,7 +19,6 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
 from ctypes import wintypes
 
 from apmx.utils.subprocess_env import _DLL_SEARCH_LOCK, external_process_env
@@ -440,17 +439,12 @@ def supervise_process(
     on_started: StartedSink | None = None,
     events: EventEmitter | None = None,
     limits: ContractLimits | None = None,
-    cancel_requested: Callable[[], bool] | None = None,
 ) -> ProcessObservation:
     """Observe an owned Windows job with bounded pipe draining and cleanup.
 
     ``pgid`` is always None: a Windows job is not a POSIX process group. Signals
     records the actual TerminateJobObject operation, not invented POSIX signals.
     No native fallback runs if safe pre-resume job assignment is unavailable.
-
-    ``cancel_requested``, when given, is polled every loop iteration like the
-    POSIX adapter's own parameter of the same name; see that module's
-    docstring for the rationale.
     """
     from .native_logs import NativeLogStream
     from .process import post_exit_grace
@@ -527,8 +521,6 @@ def supervise_process(
                             {"inspection": "owned_windows_job", "active_processes": active},
                         )
                         stop("lingering_children", leader_exited_at)
-                    elif cancel_requested is not None and cancel_requested():
-                        stop("cancelled", now)
                     elif now >= next_heartbeat and returncode is None:
                         next_heartbeat = now + HEARTBEAT_SECONDS
                         if events is not None:
