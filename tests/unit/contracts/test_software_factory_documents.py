@@ -206,8 +206,32 @@ def test_documentation_cannot_edit_the_accepted_application(documents: Path) -> 
     patch = documents / "documentation.diff"
     patch.write_bytes(patch.read_bytes().replace(b"docs/checkout.md", b"src/checkout.py"))
     code, report = invoke(documents, "documentation.py", "changes.diff", patch.name)
+    assert code == 2 and report["status"] == "error", report
+    assert report["detail"] == "Documentation changed the accepted application candidate."
+
+
+@pytest.mark.parametrize(
+    "checker", ["documentation.py", pytest.param("documented_checkout.py", marks=BDD)]
+)
+def test_documentation_patch_outside_its_profile_is_a_reconstructable_rejection(
+    documents: Path, tmp_path: Path, checker: str
+) -> None:
+    from apmx.contracts import check_subjects
+
+    (documents / "README.md").write_text("# Checkout project\n", encoding="ascii")
+    patch = documents / "documentation.diff"
+    patch.write_bytes(
+        patch.read_bytes()
+        + b"diff --git a/README.md b/README.md\nindex 1111111..2222222 100644\n"
+        + b"--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n"
+        + b"-# Checkout project\n+# Checkout project (docs)\n"
+    )
+    code, report = invoke(documents, checker, "changes.diff", patch.name)
     assert code == 1 and report["status"] == "failed", report
-    assert "it also changes src/checkout.py" in report["detail"], report
+    assert "it also changes README.md" in report["detail"], report
+    subject = report["subject"]
+    assert {"README.md", "docs/checkout.md"} <= set(subject["candidate_files"])
+    check_subjects.materialize_candidate(subject, documents, tmp_path / "reconstructed")
 
 
 @pytest.mark.parametrize(

@@ -359,8 +359,9 @@ Checker exit codes:
 - `2`: tooling, inputs, patch application or execution was invalid/incomplete,
   including malformed, unsafe or duplicate patch content.
 
-A patch outside its profile is an assessed rejection, so a budgeted stage can
-retry it with the checker's reason; malformed patches still stop the stage.
+A well-formed patch outside its profile that applies to the baseline is an
+assessed rejection, so a budgeted stage can retry it with the checker's reason.
+Malformed patches, or patches that do not apply, still stop the stage.
 
 Empty, filtered, skipped, undefined or pending Gherkin does not pass. External
 Behave configuration and environment selection are ignored. Missing optional
@@ -520,7 +521,11 @@ to protected check resources, existing tests and other paths (exit `1`), and
 refuses symlinks, modes and unsafe paths as invalid input (exit `2`).
 These are this example's patch requirements, not restrictions on all APMX
 artifact types. The separate docs profile permits only regular text edits to
-`docs/checkout.md` and requires every accepted non-doc byte to remain unchanged.
+`docs/checkout.md` and requires every accepted non-doc byte to remain unchanged:
+a docs patch touching other files is rejected (exit `1`), but one that edits the
+accepted application is invalid input (exit `2`). An out-of-profile rejection
+still reports the candidate it reconstructed, so receipts bind rejected attempts
+to real bytes.
 Arbitrary Python execution is not sandboxed.
 
 The deterministic fixture suite uses actual Git exports and real check

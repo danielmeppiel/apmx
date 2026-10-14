@@ -155,31 +155,47 @@ def test_invalid_patch_subject_is_operational_not_passing(
     assert not list(candidate.glob(".software-factory-check-*"))
 
 
-OUT_OF_PROFILE = (
-    b"diff --git a/docs/checkout.md b/docs/checkout.md\n"
-    b"index 1111111..2222222 100644\n"
-    b"--- a/docs/checkout.md\n"
-    b"+++ b/docs/checkout.md\n"
-    b"@@ -1 +1 @@\n"
-    b"-# Checkout\n"
-    b"+# Checkout page\n"
-)
+def _edit_first_line(root: Path, name: str) -> bytes:
+    """A well-formed one-line Git hunk that really applies to the supplied file."""
+    first, second = (root / name).read_bytes().split(b"\n", 2)[:2]
+    return (
+        f"diff --git a/{name} b/{name}\nindex 1111111..2222222 100644\n"
+        f"--- a/{name}\n+++ b/{name}\n@@ -1,2 +1,2 @@\n".encode()
+        + b"-"
+        + first
+        + b"\n+"
+        + first
+        + b" (edited)\n "
+        + second
+        + b"\n"
+    )
+
+
+def _reconstructs(root: Path, subject: dict, tmp_path: Path) -> None:
+    """The receipt exporter can rebuild exactly the candidate the checker rejected."""
+    from apmx.contracts import check_subjects
+
+    target = tmp_path / "reconstructed"
+    check_subjects.materialize_candidate(subject, root, target)
+    assert set(subject["candidate_files"]) == {
+        path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_file()
+    }
 
 
 @pytest.mark.parametrize("checker", ["regression.py", pytest.param("acceptance.py", marks=BDD)])
-@pytest.mark.parametrize("fault", ("extra-file", "protected", "missing-file"))
+@pytest.mark.parametrize("fault", ("extra-file", "check-resource", "missing-file"))
 def test_well_formed_patch_outside_the_profile_is_an_assessed_rejection(
-    candidate: Path, checker: str, fault: str
+    candidate: Path, tmp_path: Path, checker: str, fault: str
 ) -> None:
     """A producer editing the wrong files is rejected (exit 1), so repair can retry it."""
     patch = candidate / "changes.diff"
     raw = patch.read_bytes()
     if fault == "extra-file":
-        patch.write_bytes(raw + OUT_OF_PROFILE)
+        patch.write_bytes(raw + _edit_first_line(candidate, "docs/checkout.md"))
         expected = "it also changes docs/checkout.md"
-    elif fault == "protected":
-        patch.write_bytes(raw.replace(b"src/pricing.py", b"checks/steps.py"))
-        expected = "it also changes checks/steps.py; it does not change src/pricing.py"
+    elif fault == "check-resource":
+        patch.write_bytes(raw + _edit_first_line(candidate, "checks/acceptance.py"))
+        expected = "it also changes checks/acceptance.py"
     else:
         start = raw.index(b"diff --git a/src/checkout.py")
         end = raw.index(b"diff --git ", start + 1)
@@ -188,14 +204,27 @@ def test_well_formed_patch_outside_the_profile_is_an_assessed_rejection(
     code, report = invoke(candidate, checker, "changes.diff")
     assert code == 1 and report["status"] == "failed", report
     assert expected in report["detail"] and "Change exactly" in report["detail"], report
-    assert report["subject"] is None and report["observed"] == []
+    assert report["observed"] == []
+    subject = report["subject"]
+    assert subject["patch"] == hashlib.sha256(patch.read_bytes()).hexdigest()
+    if fault != "missing-file":
+        assert expected.removeprefix("it also changes ") in subject["candidate_files"]
+    _reconstructs(candidate, subject, tmp_path)
     assert not list(candidate.glob(".software-factory-check-*"))
 
 
-def test_malformed_section_outside_the_profile_stays_operational(candidate: Path) -> None:
-    """Scope is judged only after every section is well formed."""
+@pytest.mark.parametrize("fault", ("malformed", "does-not-apply"))
+def test_out_of_profile_sections_that_are_not_valid_patches_stay_operational(
+    candidate: Path, fault: str
+) -> None:
+    """Scope is judged only for well-formed patches that apply to the baseline."""
     patch = candidate / "changes.diff"
-    patch.write_bytes(patch.read_bytes() + OUT_OF_PROFILE.replace(b"@@ -1 +1 @@", b"@@ -1,3 +1 @@"))
+    extra = _edit_first_line(candidate, "docs/checkout.md")
+    if fault == "malformed":
+        extra = extra.replace(b"@@ -1,2 +1,2 @@", b"@@ -1,3 +1,2 @@")
+    else:
+        extra = extra.replace(b"docs/checkout.md", b"docs/missing.md")
+    patch.write_bytes(patch.read_bytes() + extra)
     code, report = invoke(candidate, "regression.py", "changes.diff")
     assert code == 2 and report["status"] == "error", report
 

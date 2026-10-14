@@ -89,6 +89,64 @@ def prepare_example(root: Path, renamed: bool = False) -> dict[str, tuple[str, .
     return deliveries
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("behave") is None,
+    reason="Optional example integration: install apmx[factory] (Behave==1.3.3).",
+)
+def test_out_of_scope_build_attempt_is_repaired_and_the_receipt_audits(
+    caller: Path, monkeypatch: pytest.MonkeyPatch, private_preparation: None
+) -> None:
+    """Real-model shape: build also edits docs/checkout.md, is rejected, then repaired.
+
+    The rejected attempt's check reports must still bind a reconstructable
+    candidate, or receipt export fails (exit 23) after a COMPLETE run.
+    """
+    prepare_example(caller)
+    install(caller, limits=ContractLimits())
+    expected = outputs(caller.parent)
+    first, second = (caller / "docs/checkout.md").read_bytes().split(b"\n", 2)[:2]
+    scope_creep = expected["changes.diff"] + (
+        b"diff --git a/docs/checkout.md b/docs/checkout.md\n"
+        b"index 1111111..2222222 100644\n"
+        b"--- a/docs/checkout.md\n+++ b/docs/checkout.md\n@@ -1,2 +1,2 @@\n"
+        + b"-"
+        + first
+        + b"\n+"
+        + first
+        + b" (edited)\n "
+        + second
+        + b"\n"
+    )
+    builds = []
+
+    def produce(plan, *_):
+        files = plan.contract.outputs
+        produced = dict(expected)
+        if "changes.diff" in files:
+            builds.append(plan)
+            if len(builds) == 1:
+                produced["changes.diff"] = scope_creep
+        writes = "\n".join(f"Path({name!r}).write_bytes({produced[name]!r})" for name in files)
+        return "from pathlib import Path\n" + writes
+
+    producer(monkeypatch, body=produce)
+    monkeypatch.chdir(caller.parent)
+    result = CliRunner().invoke(
+        main,
+        [str(caller), "--on", "copilot", "--allow-host-access", "--allow-unproven-inputs"],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(builds) == 2
+    assert "attempt 1/3" in result.output and "attempt 2/3" in result.output
+    (receipt,) = caller.glob(".apm/chains/*/receipt")
+    audit = CliRunner().invoke(main, ["audit", str(receipt), "--offline", "--format", "json"])
+    assert audit.exit_code == 0, audit.output
+    report = json.loads(audit.output)
+    assert report["result"] == "valid"
+    assert report["facts"]["rejectedAttempts"] == 1
+    assert report["facts"]["checksPassed"] == report["facts"]["checks"] == 9
+
+
 def test_factory_check_names_describe_the_proven_outcomes() -> None:
     actual = {
         name: tuple(load_frontmatter_document(EXAMPLE / "contracts" / name).metadata["verify"])
