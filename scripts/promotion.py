@@ -200,7 +200,9 @@ def release_notes(version: str, commit: str) -> str:
             "- The five-stage software-factory example can repair out-of-profile patches and "
             "documentation link mistakes within declared build and documentation budgets.\n"
             "- Ctrl+C during a POSIX agent run is a cooperative stop that still confirms "
-            "cleanup only once the process group is gone.\n\n"
+            "cleanup only once the process group is gone.\n"
+            "- apmx's internal Git operations no longer start Git's background maintenance, "
+            "which could change a captured `.git` while it was copied and halt the run.\n\n"
             f"See the [v0.5.0 changelog](https://github.com/{REPOSITORY}/blob/v{version}/"
             "CHANGELOG.md).\n\n"
         )
