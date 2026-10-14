@@ -7,6 +7,7 @@ import os
 import tarfile
 import tempfile
 import unittest
+import unittest.mock
 import zipfile
 from pathlib import Path
 
@@ -227,3 +228,75 @@ class ReleaseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RenameRetryTest(unittest.TestCase):
+    """Windows AV/indexer handles on fresh files are retried, boundedly, then fail closed."""
+
+    def _flaky(self, failures: int):
+        from scripts import release
+
+        calls = []
+        real = Path.rename
+
+        def rename(path, target):
+            calls.append(path)
+            if len(calls) <= failures:
+                raise PermissionError(5, "Access is denied", str(path))
+            return real(path, target)
+
+        return release, calls, rename
+
+    def test_transient_windows_permission_error_is_retried_then_succeeds(self):
+        release, calls, rename = self._flaky(2)
+        slept = []
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary, "extracted")
+            source.mkdir()
+            destination = Path(temporary, "apm")
+            with unittest.mock.patch.object(Path, "rename", rename):
+                release.rename_with_retry(source, destination, windows=True, sleep=slept.append)
+            self.assertTrue(destination.is_dir())
+            self.assertFalse(source.exists())
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(slept, list(release.RENAME_DELAYS[:2]))
+
+    def test_exhausted_retries_raise_the_original_error(self):
+        release, calls, rename = self._flaky(100)
+        slept = []
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary, "extracted")
+            source.mkdir()
+            with (
+                unittest.mock.patch.object(Path, "rename", rename),
+                self.assertRaises(PermissionError) as raised,
+            ):
+                release.rename_with_retry(
+                    source, Path(temporary, "apm"), windows=True, sleep=slept.append
+                )
+            self.assertTrue(source.is_dir())
+        self.assertEqual(raised.exception.errno, 5)
+        self.assertEqual(len(calls), len(release.RENAME_DELAYS) + 1)
+        self.assertEqual(slept, list(release.RENAME_DELAYS))
+
+    def test_other_platforms_and_errors_are_never_retried(self):
+        release, calls, rename = self._flaky(1)
+        slept = []
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary, "extracted")
+            source.mkdir()
+            with (
+                unittest.mock.patch.object(Path, "rename", rename),
+                self.assertRaises(PermissionError),
+            ):
+                release.rename_with_retry(
+                    source, Path(temporary, "apm"), windows=False, sleep=slept.append
+                )
+            with self.assertRaises(FileNotFoundError):
+                release.rename_with_retry(
+                    Path(temporary, "missing"),
+                    Path(temporary, "x"),
+                    windows=True,
+                    sleep=slept.append,
+                )
+        self.assertEqual((len(calls), slept), (1, []))
