@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 import click
 
 from . import change as changes
+from . import identity as identities
 from . import policy as policies
 from . import verifier
 from .ingredients import FAIL, PASS, UNAVAILABLE, WARN, audit_ingredients
@@ -58,6 +59,11 @@ class Audit:
     reason: str | None = None
     exit_code: int = EXIT_VALID
     selection: str | None = None
+    signer: str | None = None
+
+    @property
+    def assurance(self) -> str:
+        return f"authenticated: {self.signer}" if self.signer else ASSURANCE
 
     def fail(self, name: str, detail: str, notes: list[str] | None = None) -> None:
         self.rows[name] = Row(name, "fail", detail, notes or [])
@@ -227,14 +233,62 @@ def run_audit(
         audit.rows["Revocation"] = Row("Revocation", "info", "policy has no factories section")
     else:
         audit.verdict("Revocation", policies.evaluate_revocation(rules, list(receipt.bindings)))
-    unsigned = policies.evaluate_unsigned(rules) if rules is not None else None
-    if unsigned is None:
+    _identity(audit, root, receipt, rules, structural=structural, offline=offline)
+    return audit
+
+
+def _identity(
+    audit: Audit,
+    root: Path,
+    receipt: verifier.Receipt,
+    rules: policies.FactoryPolicy | None,
+    *,
+    structural: bool,
+    offline: bool,
+) -> None:
+    """Verify a signature only against the workflows the policy trusts."""
+    if rules is None:
         audit.rows["Identity"] = Row(
             "Identity", "warn", "unsigned: proves content binding, not who ran it"
         )
+        return
+    if not structural:
+        audit.rows["Identity"] = Row("Identity", "skipped", "not evaluated (earlier failure)")
+        return
+    if not rules.signers:
+        detail = "not authenticated: policy names no factories.signers"
+        verdict = policies.evaluate_unsigned(
+            rules, "factories.require_signed is set but factories.signers is empty"
+        )
+        if verdict is None:
+            audit.rows["Identity"] = Row("Identity", "warn", detail)
+        else:
+            audit.verdict("Identity", verdict)
+        return
+    if offline:
+        result = identities.Identity("unavailable", "signature not checked (offline)")
     else:
-        audit.verdict("Identity", unsigned, ["receipts are signed in CI; see docs/audit.md"])
-    return audit
+        result = identities.verify(
+            root / "index.json",
+            str(receipt.facts["definitionSha256"]),
+            rules.signers,
+            default_repository=identities.repository(policies.repository_root(Path.cwd())),
+        )
+    audit.facts["identity"] = {"status": result.status, **result.facts}
+    notes = [_ascii(note) for note in result.notes]
+    if result.status == "signed":
+        audit.signer = result.signer
+        audit.rows["Identity"] = Row("Identity", "pass", _ascii(result.detail), notes)
+    elif result.status == "unsigned":
+        verdict = policies.evaluate_unsigned(rules, result.detail)
+        if verdict is None:
+            audit.rows["Identity"] = Row("Identity", "warn", _ascii(result.detail), notes)
+        else:
+            audit.verdict("Identity", verdict, notes)
+    elif rules.require_signed:
+        audit.incomplete("Identity", _ascii(result.detail), notes)
+    else:
+        audit.rows["Identity"] = Row("Identity", "warn", _ascii(result.detail), notes)
 
 
 def to_json(audit: Audit) -> str:
@@ -246,8 +300,8 @@ def to_json(audit: Audit) -> str:
             "result": audit.result,
             "exitCode": audit.exit_code,
             "reason": audit.reason,
-            "assurance": ASSURANCE,
-            "signed": False,
+            "assurance": audit.assurance,
+            "signed": audit.signer is not None,
             "rows": [
                 {"name": row.name, "status": row.status, "detail": row.detail, "notes": row.notes}
                 for row in (audit.rows[name] for name in DISPLAY)
@@ -338,14 +392,14 @@ def to_text(audit: Audit, *, color: bool = False) -> str:
         header += f"   ({_ascii(audit.selection)})"
     if isinstance(contracts, int):
         header += f"   {contracts} contract{'s' if contracts != 1 else ''}"
-    lines = [header + "   unsigned", ""]
+    lines = [header + ("   signed" if audit.signer else "   unsigned"), ""]
     for name in DISPLAY:
         row = audit.rows[name]
         lines.append(f"{mark(row.status)} {name:<13} {row.detail}")
         lines.extend(f"{'':<18}{note}" for note in row.notes)
     lines.append("")
     if audit.result == "valid":
-        lines.append(f"{mark('pass')} VALID   ({ASSURANCE})")
+        lines.append(f"{mark('pass')} VALID   ({audit.assurance})")
     elif audit.result == "invalid":
         lines.append(f"{mark('fail')} INVALID   {audit.reason}")
     else:

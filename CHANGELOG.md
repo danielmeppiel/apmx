@@ -4,6 +4,16 @@
 
 ### Added
 
+- `apmx audit` verifies signed receipts. With `factories.signers`, the Identity
+  row finds the receipt's GitHub artifact attestation by its `index.json`
+  digest and verifies it with `gh attestation verify` against those workflows,
+  then re-checks subject, receipt and definition digests and the signer
+  itself. `require_signed` rejects unsigned receipts (exit 1) and treats a
+  signature it could not check as INCOMPLETE (exit 2).
+- `.github/actions/setup` installs the native apmx release archive after
+  checking its SHA-256 against the release's checksum file, its manifest and
+  an optional pinned digest. `.github/actions/attest` signs a receipt after
+  `apmx audit --offline` finds it VALID.
 - `apmx audit` needs no flags. Locally it audits the newest COMPLETE run under
   `./.apm/`; in a GitHub pull request it audits the receipt the PR adds and
   binds the PR's change (merge-base..head) to it: every changed file must be a
