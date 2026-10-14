@@ -62,9 +62,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # Install apmx from its release archive (see docs/install.md), then:
+      - uses: danielmeppiel/apmx/.github/actions/setup@main   # pin a commit SHA
+        with:
+          version: "0.5.0"
       - run: apmx audit
+        env:
+          GH_TOKEN: ${{ github.token }}   # gh attestation verify, for the Identity row
 ```
+
+The setup action downloads the native release archive for the runner and
+installs it only if its SHA-256 matches the release's `.sha256` file, the
+release manifest and, if you give one, the `sha256` input. Pin `sha256` to
+trust a digest you reviewed rather than the release's own checksum files.
 
 ## Policy: one `apm-policy.yml`, one apmx section
 
@@ -196,11 +205,66 @@ never launched for a receipt that is already invalid.
 | Ingredients | Dependency trust, delegated to APM (see below). |
 | Revocation | No selected capability matches a `factories.revoked` entry (exact `purl` and `bodySha256`, which only the receipt records). Package-level rules such as `dependencies.deny` stay APM's, in the Ingredients row. |
 | Outputs | The aggregate and per-attempt production subjects bind exactly the delivered artifacts. In a PR, the change is bound; with `--outputs`, the delivered files are re-hashed. |
-| Identity | `[!] unsigned` today: receipts prove content binding, not who ran it. With `factories.require_signed`, an unsigned receipt is rejected. |
+| Identity | With `factories.signers`, the receipt's GitHub artifact attestation is verified against those workflows (see [Signed receipts](#signed-receipts)). Without signers, `[!]`: the receipt proves content binding, not who ran it. With `factories.require_signed`, an unsigned receipt is rejected (exit 1), and one whose signature could not be checked is INCOMPLETE. |
 
 The CycloneDX schemas (`bom-1.5`, `spdx`, `jsf-0.82`, pinned by SHA-256 at the
 upstream commit noted in `NOTICE`) ship inside apmx. Structural audit
 therefore works offline.
+
+## Signed receipts
+
+A receipt is signed in CI by
+[`.github/actions/attest`](../.github/actions/attest/action.yml). The action
+runs `apmx audit --offline` on the receipt from an empty directory, so no
+policy or PR context changes what is signed, and refuses anything that is not
+VALID. It then creates a GitHub artifact attestation (Sigstore, keyless, via
+the job's OIDC token) whose subject is the SHA-256 of the receipt's
+`index.json`, which binds every other receipt file. The predicate,
+`https://github.com/danielmeppiel/apmx/attestation/receipt/v1`, records the
+receipt digest, the factory definition digest, the outputs, and whether the
+checks ran in a separate job (`separate-job`) or the agent's own job
+(`same-job`).
+
+```yaml
+  attest:   # a job that runs no agent and no candidate code
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - uses: danielmeppiel/apmx/.github/actions/setup@main
+      - uses: actions/download-artifact@v4
+        with: { name: receipt, path: receipt }
+      - uses: danielmeppiel/apmx/.github/actions/attest@main
+        with: { receipt: receipt, checks: separate-job }
+```
+
+`apmx audit` finds the attestation by that digest, the way `npm audit
+signatures` does, so nobody passes it a signature. For each
+`factories.signers` entry it runs `gh attestation verify index.json --repo
+<repo> --signer-workflow <workflow> --predicate-type <apmx> --cert-oidc-issuer
+https://token.actions.githubusercontent.com --deny-self-hosted-runners`. It
+then re-checks the verified statement itself: the subject and predicate name
+this receipt's digest and definition, the certificate's signer is that
+workflow (at the entry's `@<ref>`, if pinned), and the runner was
+GitHub-hosted. Attestations are looked up in the repository being audited
+(`GITHUB_REPOSITORY`, or the `origin` remote), which is where a reusable
+`run.yml` called from that repository stores them. `gh` needs a token
+(`GH_TOKEN: ${{ github.token }}` in Actions).
+
+| Attestation | Identity row | With `require_signed` |
+| --- | --- | --- |
+| Verified from an allowed signer | `[+] signed by <workflow>@<ref>`; final line `VALID (authenticated: <workflow>)` | pass |
+| None, or none that matches this receipt | `[!] unsigned: no attestation from factories.signers` | `[x]`, exit 1 (`[!]` with `factories.enforcement: warn`) |
+| Could not be checked (no `gh`, network, auth, `--offline`) | `[!] signature could not be checked` | INCOMPLETE, exit 2 |
+
+**Assumptions.** Verification trusts `gh attestation verify` (GitHub CLI) and
+the Sigstore public-good instance it uses, and GitHub's OIDC issuer for
+workflow identity. A `signers` entry trusts every run of that workflow file
+unless `@<ref>` pins the signer workflow's ref (for example a release tag). The signature says which
+workflow vouched for a structurally VALID receipt. It does not make the
+producing agent trustworthy; the producer workflow must keep the agent out of
+the signing job (see `run.yml`).
 
 ## Ingredients: APM owns dependency trust
 
@@ -251,8 +315,8 @@ and that its files are bound by content to this factory definition, these
 ingredients and these check results. It does not authenticate who ran the
 factory. Anyone who can rewrite every file and hash can forge a
 self-consistent receipt; `factories.allow` limits which definitions are
-accepted, but only a signature from an allowed CI workflow (`require_signed`)
-says who produced it. VALID is not a sandbox, a correctness guarantee or
+accepted, and only a signature from an allowed CI workflow (`require_signed`
+with `signers`) says who produced it. VALID is not a sandbox, a correctness guarantee or
 permission to merge or deploy.
 
 ## Independent verification

@@ -1,0 +1,55 @@
+name: Attest an apmx receipt
+description: >
+  Sign an apmx receipt with a GitHub artifact attestation (Sigstore, keyless).
+  The receipt is first audited with `apmx audit --offline`; only a VALID
+  receipt is signed. The subject is the receipt's index.json, which binds
+  every other receipt file. Run it in a job that runs no agent and no
+  candidate code: it needs `id-token: write` and `attestations: write`.
+  Requires apmx on PATH (danielmeppiel/apmx/.github/actions/setup).
+inputs:
+  receipt:
+    description: Path to the receipt directory (contains index.json).
+    required: true
+  checks:
+    description: >
+      How the receipt's checks ran: separate-job (a fresh runner without the
+      agent, as in run.yml) or same-job (the agent's own job). Recorded in the
+      signed predicate and shown by `apmx audit`.
+    required: false
+    default: same-job
+  github-token:
+    description: Token used by actions/attest.
+    required: false
+    default: ${{ github.token }}
+outputs:
+  receipt-sha256:
+    description: SHA-256 of the signed index.json.
+    value: ${{ steps.predicate.outputs.sha256 }}
+  definition-sha256:
+    description: Factory definition digest recorded in the predicate.
+    value: ${{ steps.predicate.outputs.definition }}
+  attestation-id:
+    description: ID of the created attestation.
+    value: ${{ steps.attest.outputs.attestation-id }}
+  attestation-url:
+    description: URL of the created attestation.
+    value: ${{ steps.attest.outputs.attestation-url }}
+runs:
+  using: composite
+  steps:
+    - id: predicate
+      shell: bash
+      env:
+        RECEIPT: ${{ inputs.receipt }}
+        CHECKS: ${{ inputs.checks }}
+      run: |
+        python="$(command -v python3 || command -v python)"
+        "$python" "$GITHUB_ACTION_PATH/predicate.py" --receipt "$RECEIPT" --checks "$CHECKS" \
+          --output "$RUNNER_TEMP/apmx-receipt-predicate.json"
+    - id: attest
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-path: ${{ steps.predicate.outputs.subject }}
+        predicate-type: https://github.com/danielmeppiel/apmx/attestation/receipt/v1
+        predicate-path: ${{ steps.predicate.outputs.predicate }}
+        github-token: ${{ inputs.github-token }}

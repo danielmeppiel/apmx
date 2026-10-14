@@ -1,0 +1,42 @@
+name: Set up apmx
+description: >
+  Install the native apmx release archive and put apmx on PATH. The archive's
+  SHA-256 must match its .sha256 file, the release manifest and, if given, the
+  sha256 input. No Python packages, no pip.
+inputs:
+  version:
+    description: apmx release version, for example 0.5.0.
+    required: false
+    default: "0.5.0"
+  sha256:
+    description: >
+      Optional SHA-256 of the archive for this runner's target. Pin it to trust
+      a reviewed digest rather than the release's own checksum files.
+    required: false
+    default: ""
+  token:
+    description: Token for downloading release assets (rate limits only; assets are public).
+    required: false
+    default: ${{ github.token }}
+outputs:
+  path:
+    description: Directory containing the apmx executable.
+    value: ${{ steps.install.outputs.path }}
+  sha256:
+    description: Verified SHA-256 of the installed archive.
+    value: ${{ steps.install.outputs.sha256 }}
+  version:
+    description: Installed apmx version.
+    value: ${{ steps.install.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_SHA256: ${{ inputs.sha256 }}
+        INPUT_TOKEN: ${{ inputs.token }}
+      run: |
+        python="$(command -v python3 || command -v python)"
+        "$python" "$GITHUB_ACTION_PATH/install.py"

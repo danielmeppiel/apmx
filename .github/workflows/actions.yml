@@ -1,0 +1,50 @@
+name: Actions
+
+# Exercises the composite actions this repository publishes against a real
+# release. No signing: the attest action is covered by unit tests here and
+# end to end by run.yml.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    name: setup (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - id: apmx
+        uses: ./.github/actions/setup
+        with:
+          version: "0.4.2"
+      - name: The verified release is on PATH
+        env:
+          DIGEST: ${{ steps.apmx.outputs.sha256 }}
+        run: |
+          apmx --version | grep -F "0.4.2"
+          [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
+      - id: wrong-pin
+        name: A wrong sha256 pin must refuse to install
+        continue-on-error: true
+        uses: ./.github/actions/setup
+        with:
+          version: "0.4.2"
+          sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      - name: Refusal is fail-closed
+        env:
+          OUTCOME: ${{ steps.wrong-pin.outcome }}
+        run: test "$OUTCOME" = failure

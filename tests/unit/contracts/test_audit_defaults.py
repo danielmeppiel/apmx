@@ -195,13 +195,15 @@ def test_require_signed_is_a_gate_that_top_level_warn_cannot_soften(
     _fake_apm(monkeypatch)
     result = _audit()
     assert result.exit_code == 1, result.output
-    assert _rows(result.output)["Identity"].startswith("[x] Identity      unsigned, but")
+    assert _rows(result.output)["Identity"].startswith(
+        "[x] Identity      factories.require_signed is set but factories.signers is empty"
+    )
     (work / "apm-policy.yml").write_text(
         "factories:\n  enforcement: warn\n  require_signed: true\n"
     )
     result = _audit()
     assert result.exit_code == 0, result.output
-    assert _rows(result.output)["Identity"].startswith("[!] Identity      unsigned, but")
+    assert _rows(result.output)["Identity"].startswith("[!] Identity      factories.require_signed")
     (work / "apm-policy.yml").write_text("enforcement: off\nfactories:\n  require_signed: true\n")
     result = _audit()
     assert result.exit_code == 0, result.output
