@@ -74,7 +74,7 @@ Factory  factory   2 contracts   copilot / fixture-model
         Record: factory/.apm/runs/attempt-3/record.json
         Artifact: factory/.apm/runs/attempt-3/artifacts/first.json
         Artifact: factory/.apm/runs/attempt-3/artifacts/second.json
-        Observed execution model: unknown
+        Observed execution model: not reported by Copilot
         Logs: factory/.apm/runs/attempt-3/transcript.log
         Logs may contain sensitive data. Review before sharing.
       Stopped after 3 attempts: the output is still rejected.

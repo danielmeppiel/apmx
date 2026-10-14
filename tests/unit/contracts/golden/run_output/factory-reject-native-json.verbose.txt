@@ -1,0 +1,74 @@
+[i] Not sandboxed: agents and checks can use host files, network and logins.
+    Packages may be installed; model usage may cost money. Run only contracts you trust.
+
+Factory  factory   2 contracts   copilot / fixture-model
+
+[1/2] first    needs notes.md -> produces first.json, second.json   budget 2 attempts
+      Attempts: up to 2 attempts, 300s total for execution and checks. Only rejected outputs can be retried; this is not a model spending limit.
+      Attempt 1 of 2
+        Source: factory/first.contract.md
+        Run: run
+        Record directory: factory/.apm/runs/attempt-1
+      [>] Capturing files for Copilot
+      Found input: notes.md (application; captured 33 bytes)
+        Input SHA-256: 0000000000000000000000000000000000000000000000000000000000000000
+      Working copy: 3 captured files; execution uses copies.
+      [>] Running Copilot
+      Copilot > Hermetic fixture progress.
+        Copilot > Tool started: view
+      Copilot > An oversized native debug line was omitted.
+      Copilot > Native public output is still streamed; inspect this run's private logs.
+      Copilot > A native debug file was replaced or truncated; mirroring stopped.
+      Copilot > Native public output is still streamed; inspect this run's private logs.
+      Copilot stderr > ERROR service=llm modelID=small-model error={"error": {"name": "AI_APICallError", "prompt": "You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. "}}
+      [>] Saving output
+      Checks:
+      [>] Checking first.json, second.json
+      Running check: identity - python -I check.py
+      Check identity stdout:
+        Check identity > {"check": "documentation", "observed": [{"detail": "Local documentation link is not a captured file: ../checks/cases.py", "id": "links", "status": "failed"}], "required": ["links"], "schema": "software-factory-check/1", "status": "failed", "subject": {"files": {"src/file0.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file1.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file10.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file11.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file12.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file13.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file14.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file15.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file16.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file17.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file18.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file19.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file2.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file3.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file4.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file5.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file6.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file7.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file8.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file9.py": "0000000000000000000000000000000000000000000000000000000000000000"}}}
+        [x] FAIL identity
+        Check identity: raw exit 1
+        apmx: check 'identity': Check 'identity' exited 1.
+      attempt 1/2  agent 5.0s   checks: [x] identity
+      [>] Saving results
+      Attempt 2 of 2
+        Source: factory/first.contract.md
+        Run: run
+        Record directory: factory/.apm/runs/attempt-2
+      [>] Capturing files for Copilot
+      Found input: notes.md (application; captured 33 bytes)
+        Input SHA-256: 0000000000000000000000000000000000000000000000000000000000000000
+      Working copy: 3 captured files; execution uses copies.
+      [>] Running Copilot
+      Copilot > Hermetic fixture progress.
+        Copilot > Tool started: view
+      Copilot stderr > ERROR service=llm modelID=small-model error={"error": {"name": "AI_APICallError", "prompt": "You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. You are a title generator. "}}
+      [>] Saving output
+      Checks:
+      [>] Checking first.json, second.json
+      Running check: identity - python -I check.py
+      Check identity stdout:
+        Check identity > {"check": "documentation", "observed": [{"detail": "Local documentation link is not a captured file: ../checks/cases.py", "id": "links", "status": "failed"}], "required": ["links"], "schema": "software-factory-check/1", "status": "failed", "subject": {"files": {"src/file0.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file1.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file10.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file11.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file12.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file13.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file14.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file15.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file16.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file17.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file18.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file19.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file2.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file3.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file4.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file5.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file6.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file7.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file8.py": "0000000000000000000000000000000000000000000000000000000000000000", "src/file9.py": "0000000000000000000000000000000000000000000000000000000000000000"}}}
+        [x] FAIL identity
+        Check identity: raw exit 1
+        apmx: check 'identity': Check 'identity' exited 1.
+      attempt 2/2  agent 4.0s   checks: [x] identity
+      [>] Saving results
+        Record: factory/.apm/runs/attempt-2/record.json
+        Artifact: factory/.apm/runs/attempt-2/artifacts/first.json
+        Artifact: factory/.apm/runs/attempt-2/artifacts/second.json
+        Observed execution model: not reported by Copilot
+        Logs: factory/.apm/runs/attempt-2/transcript.log
+        Logs may contain sensitive data. Review before sharing.
+      Stopped after 2 attempts: the output is still rejected.
+      Attempts record: factory/.apm/controllers/c/record.json
+
+[2/2] second   not started: waits on first
+
+[x] REJECTED   first failed check identity after 2/2 attempts   exit 20
+
+Saved     factory/.apm/runs/attempt-2/   (attempt files + logs)
+Next      Fix the contract or check, then rerun:  apmx ./factory --model fixture-model
+    Stop reason: upstream_rejected
+    Record: factory/.apm/chains/chain-1/record.json

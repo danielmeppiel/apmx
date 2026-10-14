@@ -55,6 +55,9 @@ class NativeLogStream:
                 severity="warning",
                 message=message,
                 action="Native public output is still streamed; inspect this run's private logs.",
+                scope="native_debug",
+                # Size limits only affect the --verbose mirror; anomalies stay visible.
+                routine=key in {"line", "limit"},
             )
 
     def _line(self, value: bytes) -> None:

@@ -27,7 +27,7 @@ Factory  factory   2 contracts   copilot / fixture-model
         Record: factory/.apm/runs/run-1/record.json
         Artifact: factory/.apm/runs/run-1/artifacts/first.json
         Artifact: factory/.apm/runs/run-1/artifacts/second.json
-        Observed execution model: unknown
+        Observed execution model: not reported by Copilot
         Logs: factory/.apm/runs/run-1/transcript.log
         Logs may contain sensitive data. Review before sharing.
       [+] first.json, second.json -> handed to second
@@ -60,7 +60,7 @@ Factory  factory   2 contracts   copilot / fixture-model
       [+] final.json
         Record: factory/.apm/runs/run-2/record.json
         Artifact: factory/.apm/runs/run-2/artifacts/final.json
-        Observed execution model: unknown
+        Observed execution model: not reported by Copilot
         Logs: factory/.apm/runs/run-2/transcript.log
         Logs may contain sensitive data. Review before sharing.
 

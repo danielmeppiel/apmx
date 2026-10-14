@@ -839,7 +839,10 @@ def test_result_model_fallback_does_not_repeat_initial_identity(
     output = capsys.readouterr().out
     assert output.count("model-a") == 1
     assert "Observed execution model: model-a" not in output
-    assert ("Observed execution model: unknown" in output) is (verbose and not observed)
+    assert ("Observed execution model: not reported by Copilot" in output) is (
+        verbose and not observed
+    )
+    assert "Observed execution model: unknown" not in output
     assert ("Observed execution model: model-b" in output) is (verbose and bool(observed))
 
 
