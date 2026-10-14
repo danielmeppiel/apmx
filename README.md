@@ -168,17 +168,42 @@ Receipt   feature-factory/.apm/chains/<id>/receipt   5 contracts   unsigned
 ```
 
 For dependencies, `apmx audit` reinstalls the recorded lock with the bundled
-APM and runs `apm audit --ci`. Add `--policy <source>` to enforce an
-organization's APM policy. `--format json` suits CI gates. Receipts are
-**unsigned**: they prove content binding, not who ran the factory, and they
-include captured source files, so review them before sharing. See
-[audit](docs/audit.md).
+APM and runs `apm audit --ci` under your discovered `apm-policy.yml`.
+`--format json|sarif` suits CI gates. Local receipts are **unsigned**: they
+prove content binding, not who ran the factory. Receipts also include captured
+source files, so review them before sharing. See [audit](docs/audit.md).
 
 **Local execution is not a sandbox.** Agents and checks can use host files,
 network and logins; model usage may cost money. An interactive factory asks
 before it executes, defaulting to No. Exit codes: **0** COMPLETE, **20**
 REJECTED, **21** UNPROVEN (never success), **22** HALTED, **23** receipt export
 failed after a COMPLETE run. See [results](docs/results.md).
+
+## Accept factory PRs by proof
+
+Run the factory in CI with [`run.yml`](.github/workflows/run.yml). The agent,
+the checks of record and the signature each run in a separate job. The
+receiving repository pins what it accepts in its `apm-policy.yml`:
+
+```yaml
+factories:
+  allow: ["acme/checkout-factory@sha256:<definition digest>"]
+  require_signed: true
+  signers:
+    - { workflow: danielmeppiel/apmx/.github/workflows/run.yml, repo: acme/factories }
+```
+
+Then it gates every pull request with one step. `apmx audit` finds the receipt
+the PR adds, binds the PR's change to its outputs, reads the policy from the PR
+base and verifies the signature:
+
+```yaml
+- uses: danielmeppiel/apmx/.github/actions/setup@main   # pin a commit SHA
+- run: apmx audit
+  env: { GH_TOKEN: "${{ github.token }}" }
+```
+
+See the [example](examples/accept-factory-prs/README.md).
 
 ## Go further
 
