@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Added
+
+- `apmx audit` needs no flags. Locally it audits the newest COMPLETE run under
+  `./.apm/`; in a GitHub pull request it audits the receipt the PR adds and
+  binds the PR's change (merge-base..head) to it: every changed file must be a
+  receipt output (or an unchanged recorded input) with the same SHA-256 at
+  head. `RECEIPT_DIR`, `--outputs`, `--policy` and `--offline` are overrides;
+  `--format sarif` emits SARIF 2.1.0.
+- `apmx audit` discovers `apm-policy.yml` like `apm audit` (repository file,
+  read from the PR base in a PR, then the org policy) through the bundled APM.
+  New `factories` (`allow`, `require_signed`, `signers`) and
+  `security.integrity.deny_hashes` sections add a factory allowlist, a
+  Revocation row (also applying `dependencies.deny` to the receipt) and an
+  unsigned-receipt rule. No policy is reported as `[i] Policy  none found`; a
+  policy that cannot be loaded is INCOMPLETE (exit 2). Until APM ships these
+  sections, apmx reads only these keys from the files APM resolved.
+- `apmx audit <receipt-dir>` verifies a receipt row by row: integrity
+  (SHA-256 index), standards (in-toto Statement v1, SLSA Provenance v1,
+  CycloneDX 1.5), factory, checks, outputs (`--outputs` re-hashes delivered
+  files) and ingredients, delegated to the bundled APM via
+  `apm install --frozen` + `apm audit --ci [--policy]`. It reports receipts as
+  unsigned. Exit 0 valid, 1 invalid/policy failure, 2 usage, missing receipt or
+  unavailable ingredients; `--offline` and `--format json` are supported.
+  `audit` is now a reserved word; run a directory named audit as `./audit`.
+- The receipt verifier moved into `apmx.audit` with bundled pinned schemas;
+  `scripts/verify_evidence.py` is a thin wrapper that still runs without
+  importing APMX. Its runtime dependencies (`in-toto-attestation` from PyPI,
+  `protobuf`, `jsonschema`, `referencing`) are now main dependencies.
+- Capture the consumer project implicitly and run a five-stage source factory
+  that delivers checked code and documentation patches without per-file workspace declarations.
+- Support opt-in bounded repair with fixed inputs/checks, a shared deadline and
+  retained rejected-attempt history; contracts without a budget remain single-attempt.
+- Export eligible completed runs automatically as portable CycloneDX,
+  in-toto/SLSA and Test Result evidence, with independent verification tools.
+- Run the same source factory through the native OpenCode 1.2.24 profile;
+  genuine Copilot and OpenCode rehearsals completed the same definition.
+
 ## 0.5.0 - 2026-10-14
 
 ### Added

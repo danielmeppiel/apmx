@@ -38,6 +38,14 @@ needs_backend = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_policy_or_pull_request(tmp_path_factory, monkeypatch) -> None:
+    """Audit from a directory with no apm-policy.yml, no git remote and no PR event."""
+    for name in ("GITHUB_ACTIONS", "GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path_factory.mktemp("audit-cwd"))
+
+
 @pytest.fixture
 def plain_receipt(tmp_path, monkeypatch) -> Path:
     _, result = _execute(tmp_path, monkeypatch)
@@ -173,10 +181,13 @@ def test_local_policy_failure_is_invalid(deps_receipt, tmp_path) -> None:
 
 
 @needs_backend
-def test_policy_that_is_not_enforced_is_unavailable(deps_receipt) -> None:
+def test_policy_that_cannot_be_loaded_is_unavailable(deps_receipt) -> None:
     result = _audit(deps_receipt, "--policy", "org")
     assert result.exit_code == 2, result.output
-    assert "policy org was not enforced" in result.output
+    rows = _rows(result.output)
+    assert rows["Policy"].startswith("[!] Policy") and "could not be loaded" in rows["Policy"]
+    assert "not evaluated (policy could not be loaded)" in rows["Ingredients"]
+    assert "INCOMPLETE   Policy:" in result.output
 
 
 @needs_backend
@@ -262,7 +273,7 @@ def test_frozen_replay_may_reassign_a_shared_skill_owner() -> None:
 def test_policy_and_offline_are_exclusive(plain_receipt) -> None:
     result = _audit(plain_receipt, "--offline", "--policy", "org")
     assert result.exit_code == 2
-    assert "cannot be combined with --offline" in result.output
+    assert "--offline can only read a local --policy file" in result.output
 
 
 def test_tampered_output_fails_integrity(plain_receipt) -> None:
@@ -369,7 +380,13 @@ def test_json_format_is_machine_readable(plain_receipt) -> None:
     assert report["schema"] == "apmx-audit/1"
     assert (report["result"], report["exitCode"], report["signed"]) == ("valid", 0, False)
     assert [row["name"] for row in report["rows"]] == list(command.DISPLAY)
-    assert {row["status"] for row in report["rows"]} == {"pass", "warn"}
+    assert {row["status"] for row in report["rows"]} == {"pass", "warn", "info"}
+    assert report["rows"][0] == {
+        "name": "Policy",
+        "status": "info",
+        "detail": "none found",
+        "notes": report["rows"][0]["notes"],
+    }
     assert report["facts"]["outputs"] == ["result.txt"]
     assert report["facts"]["apmDependencies"] == 0
     (plain_receipt / "extra.txt").write_text("smuggled")

@@ -126,8 +126,8 @@ def _select_entry(
         "An existing positional directory is its own input, policy and evidence root. "
         "Use ./PATH to require a local directory; use --from to select a source package "
         "even when a local directory has the same name.\n\n"
-        "Every COMPLETE run delivers a receipt. Verify it with "
-        "'apmx audit RECEIPT_DIR' (see 'apmx audit --help'). 'audit' is reserved: "
+        "Every COMPLETE run delivers a receipt. Verify the newest with 'apmx audit', "
+        "or one with 'apmx audit RECEIPT_DIR' (see 'apmx audit --help'). 'audit' is reserved: "
         "run a directory named audit as ./audit."
     ),
 )
