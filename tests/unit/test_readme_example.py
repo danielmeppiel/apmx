@@ -16,22 +16,23 @@ ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples/contracts/first-contract"
 
 
-def test_readme_first_command_runs_a_factory() -> None:
-    """Run the factory itself, without a chain switch or terminal-step selection."""
+def test_readme_opens_with_plan_run_audit() -> None:
+    """The first commands preview, run and audit a factory, with nothing else required."""
     snippets = re.findall(
         r"```(?:sh|bash)\n(.*?)\n```", (ROOT / "README.md").read_text(), re.DOTALL
     )
     assert snippets
-    command = shlex.split(snippets[0])
-    assert command[0] == "apmx"
-    assert Path(command[1]).parts == ("feature-factory",)
-    assert len(command) == 4
-    assert set(command[2:]) == {"--on", "copilot"}
-    assert command[command.index("--on") + 1] == "copilot"
+    commands = [shlex.split(line, comments=True) for line in snippets[0].splitlines()]
+    assert commands == [
+        ["apmx", "./feature-factory", "--plan"],
+        ["apmx", "./feature-factory"],
+        ["apmx", "audit", "<receipt>"],
+    ]
+    assert Path(commands[1][1]).parts == ("feature-factory",)
 
 
 def test_readme_teaches_the_real_planning_contract_before_running() -> None:
-    """Introduce one ordinary artifact before the multi-output implementation."""
+    """Introduce one ordinary artifact before showing a factory run."""
     readme = (ROOT / "README.md").read_text()
     snippets = re.findall(r"```(?:markdown|yaml)\n---\n(.*?)\n---", readme, re.DOTALL)
     assert len(snippets) == 1
@@ -39,7 +40,7 @@ def test_readme_teaches_the_real_planning_contract_before_running() -> None:
     planning = ROOT / "examples/contracts/software-factory/contracts/planning.contract.md"
     actual = yaml.safe_load(planning.read_text().split("---", 2)[1])
     assert documented == actual
-    assert readme.index(snippets[0]) < readme.index("```sh")
+    assert readme.index(snippets[0]) < readme.index("$ apmx ./feature-factory")
 
 
 def test_readme_multiple_artifacts_match_the_implementation_contract() -> None:
