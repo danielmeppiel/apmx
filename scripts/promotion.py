@@ -176,6 +176,30 @@ def release_notes(version: str, commit: str) -> str:
             "relabel v0.4.1 assets. The earlier v0.4.0 tag and failed-candidate record also "
             "remain unchanged.\n\n"
         )
+    if version == "0.5.0":
+        patch_notes = (
+            "## Changes in v0.5.0\n\n"
+            "- Run a five-stage source factory that captures the consumer project implicitly "
+            "and delivers checked code and documentation patches without per-file workspace "
+            "declarations.\n"
+            "- Opt in to bounded repair with fixed inputs and checks, a shared deadline and "
+            "retained rejected attempts; contracts without a budget remain single-attempt.\n"
+            "- Run the same source factory through the native OpenCode 1.2.24 profile as well "
+            "as native Copilot.\n"
+            "- Every COMPLETE run delivers an unsigned receipt (CycloneDX 1.5, in-toto/SLSA "
+            "and Test Result evidence) under `receipt/`, formerly `evidence/`. Receipt export "
+            "failure returns command exit 23 without changing the recorded COMPLETE outcome.\n"
+            "- Verify a receipt with `apmx audit <receipt-dir>`, delegated to the bundled APM. "
+            "`audit` is now a reserved word; run a directory named audit as `./audit`.\n"
+            f"- Bundle official APM {APM_BACKEND_VERSION}, which fails preparation before any "
+            "producer launches when a packaged contract's publisher ref is unavailable or "
+            "incompatible with a consumer pin.\n"
+            "- Default run output and `--plan` are compact; details remain under `--verbose`.\n"
+            "- Ctrl+C during a POSIX agent run is a cooperative stop that still confirms "
+            "cleanup only once the process group is gone.\n\n"
+            f"See the [v0.5.0 changelog](https://github.com/{REPOSITORY}/blob/v{version}/"
+            "CHANGELOG.md).\n\n"
+        )
     return (
         f"Standalone apmx {version}; candidate commit `{commit}`.\n\n{patch_notes}"
         "## What's new since v0.2.0\n\n"

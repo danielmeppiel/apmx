@@ -8,18 +8,12 @@ it must deliver, and the checks that must pass before another task can use them.
 Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
-**Released and development behavior are different.** The experimental
-[v0.4.2 downloads](https://github.com/danielmeppiel/apmx/releases/tag/v0.4.2)
-contain the earlier four-stage Copilot implementation. Follow the
-[native installation guide](docs/install.md#install-a-prebuilt-archive) for
-those immutable assets.
-
-This development checkout adds implicit project capture, a five-stage factory,
-bounded repair, portable evidence and a native
-[OpenCode profile](docs/opencode.md), alongside Copilot. Follow the
-[development example setup](examples/contracts/software-factory/README.md#set-up)
-with this checkout selected, not the older pinned source. Authenticate in your
-chosen harness; its installation and model access remain external prerequisites.
+**Install** the experimental
+[v0.5.0 release](https://github.com/danielmeppiel/apmx/releases/tag/v0.5.0)
+with the [native installation guide](docs/install.md#install-a-prebuilt-archive).
+It runs contracts through native Copilot or the native
+[OpenCode profile](docs/opencode.md); authenticate in your chosen harness, whose
+installation and model access remain external prerequisites.
 
 ## Three commands
 
@@ -191,7 +185,7 @@ packages and skills when needed, with no separate APM installation.
 - [Factory setup, artifacts and manual recovery](examples/contracts/software-factory/README.md)
 - [Write your first contract](examples/contracts/first-contract/README.md)
 - [Reuse a packaged task and skill](examples/contracts/packaged-job/README.md)
-- [Use the development OpenCode profile](docs/opencode.md)
+- [Use the OpenCode profile](docs/opencode.md)
 - [Report a problem or contribute](https://github.com/danielmeppiel/apmx/issues) - include a small example and remove secrets from logs.
 
 APMX is an independent project by Daniel Meppiel, licensed under Apache-2.0

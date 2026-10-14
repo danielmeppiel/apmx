@@ -1,13 +1,13 @@
-# Development OpenCode profile
+# OpenCode profile
 
-The unpublished source adapter accepts `--on opencode` through the same
+Since v0.5.0, APMX accepts `--on opencode` through the same
 preparation, execution, capture, checking, bounded repair and record owners as
 Copilot. It does not add a second execution engine, dependency resolver or
 acceptance model. Contract bodies, selected capabilities, original application
 bytes, handoffs and checks are unchanged; only the native invocation and
 observation adapter differ.
 
-**The development source route has genuine native proof.** On 2026-10-06,
+**The source route has genuine native proof.** On 2026-10-06,
 OpenCode 1.2.24 completed the same five-stage factory definition as Copilot:
 nine checks, seven outputs, unchanged original consumer/package and automatic
 standard evidence delivery. The authored three-attempt/600-second build

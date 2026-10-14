@@ -204,7 +204,7 @@ From the source checkout, supply the trusted archive hash and checker interprete
 
 ```sh
 python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
-  --archive /absolute/path/to/apmx-0.4.2-macos-arm64.tar.gz \
+  --archive /absolute/path/to/apmx-0.5.0-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --python /absolute/path/to/checker-environment/bin/python \
   --verifier-python /absolute/path/to/independent-verifier/bin/python \

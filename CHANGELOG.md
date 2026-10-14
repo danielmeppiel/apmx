@@ -2,70 +2,76 @@
 
 ## [Unreleased]
 
+## 0.5.0 - 2026-10-14
+
 ### Added
 
-- `apmx audit <receipt-dir>` verifies a receipt row by row: integrity
-  (SHA-256 index), standards (in-toto Statement v1, SLSA Provenance v1,
-  CycloneDX 1.5), factory, checks, outputs (`--outputs` re-hashes delivered
-  files) and ingredients, delegated to the bundled APM via
-  `apm install --frozen` + `apm audit --ci [--policy]`. It reports receipts as
-  unsigned. Exit 0 valid, 1 invalid/policy failure, 2 usage, missing receipt or
-  unavailable ingredients; `--offline` and `--format json` are supported.
-  `audit` is now a reserved word; run a directory named audit as `./audit`.
-- The receipt verifier moved into `apmx.audit` with bundled pinned schemas;
-  `scripts/verify_evidence.py` is a thin wrapper that still runs without
-  importing APMX. Its runtime dependencies (`in-toto-attestation` from PyPI,
-  `protobuf`, `jsonschema`, `referencing`) are now main dependencies.
-- Capture the consumer project implicitly and run a five-stage source factory
-  that delivers checked code and documentation patches without per-file workspace declarations.
-- Support opt-in bounded repair with fixed inputs/checks, a shared deadline and
-  retained rejected-attempt history; contracts without a budget remain single-attempt.
-- Export eligible completed runs automatically as portable CycloneDX,
-  in-toto/SLSA and Test Result evidence, with independent verification tools.
-- Run the same source factory through the native OpenCode 1.2.24 profile;
-  genuine Copilot and OpenCode rehearsals completed the same definition.
+- Run a source factory without per-file workspace declarations. APMX captures
+  the consumer project implicitly and runs a five-stage factory that delivers
+  checked code and documentation patches.
+- Opt in to bounded repair. A contract with an attempt budget retries with fixed
+  inputs and checks under one shared deadline and retains every rejected
+  attempt. Contracts without a budget remain single-attempt.
+- Run the same source factory through the native OpenCode 1.2.24 profile as
+  well as native Copilot; genuine Copilot and OpenCode rehearsals completed the
+  same definition.
+- Get a portable receipt for every COMPLETE run, with or without APM
+  dependencies: CycloneDX 1.5 inventory (explicitly zero components when there
+  are none), in-toto/SLSA provenance and Test Result evidence. Receipts live in
+  `.apm/<runs|chains|controllers>/<id>/receipt/` (formerly `evidence/`).
+  REJECTED and HALTED runs get no receipt.
+- Verify a receipt with `apmx audit <receipt-dir>`: integrity (SHA-256 index),
+  standards (in-toto Statement v1, SLSA Provenance v1, CycloneDX 1.5), factory,
+  checks, outputs (`--outputs` re-hashes delivered files) and ingredients,
+  delegated to the bundled APM via `apm install --frozen` and
+  `apm audit --ci [--policy]`. Receipts are reported as unsigned. Exit 0 valid,
+  1 invalid or policy failure, 2 usage, missing receipt or unavailable
+  ingredients; `--offline` and `--format json` are supported. `audit` is now a
+  reserved word: run a directory named audit as `./audit`.
+- The receipt verifier lives in `apmx.audit` with bundled pinned schemas;
+  `scripts/verify_evidence.py` remains a thin wrapper that runs without
+  importing APMX. `in-toto-attestation`, `protobuf`, `jsonschema` and
+  `referencing` are now main dependencies.
 
 ### Changed
 
 - Bundle official APM 0.33.0 (source commit `18c4c43`) instead of 0.30.0. APM
   now verifies every immutable requirement (microsoft/apm#3061): a packaged
-  contract whose publisher ref is unavailable or incompatible with a consumer pin
-  fails preparation before any producer launches, rather than the consumer pin
-  silently winning. `apmx audit` keeps its workarounds for microsoft/apm#3194 and
-  microsoft/apm#3195, both still present in 0.33.0, and treats `manifest-missing`
-  as a no-policy check when deciding whether `--policy` was enforced. It now
-  compares deployed file hashes by path, since 0.33.0 can reassign a skill shared
-  by a package and its transitive local dependency to either owner on replay.
-- Every COMPLETE run now delivers a receipt (`.apm/<runs|chains|controllers>/<id>/receipt/`,
-  formerly `evidence/`), with or without APM dependencies. Without dependencies the
-  CycloneDX 1.5 inventory explicitly lists zero components. REJECTED/HALTED runs get no receipt.
+  contract whose publisher ref is unavailable or incompatible with a consumer
+  pin fails preparation before any producer launches, instead of the consumer
+  pin silently winning. `apmx audit` keeps its workarounds for
+  microsoft/apm#3194 and microsoft/apm#3195, treats `manifest-missing` as a
+  no-policy check when deciding whether `--policy` was enforced, and compares
+  deployed file hashes by path.
 - Default run output tells one compact story per contract: `needs -> produces`,
-  one `attempt n/N` line with per-check marks, producer-side handoff lines,
+  one `attempt n/N` line with per-check marks, producer handoff lines,
   `not started: waits on` for blocked contracts, and a final COMPLETE/REJECTED
-  block with Outputs, Receipt and `Next  apmx audit <receipt>`. Interactive color terminals update the
-  running attempt in place; redirected, CI and `NO_COLOR` output stay
-  append-only. Capture details, phase lines, narration, tool calls, check
-  commands and checker output moved behind `--verbose`, which keeps them all.
-- `--plan` and the interactive consent preview are one compact work list
-  (`[i/N] name   needs -> produces`, checks and attempt budget, `*` for inputs
-  from an earlier contract) ending in "Nothing ran" and the run command; the
-  policy lecture moved to `--verbose`. The local-execution disclosure and the
-  package-loading consent are shorter with the same semantics and default No.
+  block with Outputs, Receipt and `Next  apmx audit <receipt>`. Interactive
+  color terminals update the running attempt in place; redirected, CI and
+  `NO_COLOR` output stay append-only. Capture details, phases, narration, tool
+  calls, check commands and checker output remain available with `--verbose`.
+- `--plan` and the interactive consent preview show one compact work list
+  (`[i/N] name   needs -> produces`, checks, attempt budget, `*` for inputs from
+  an earlier contract) ending in "Nothing ran" and the run command. The
+  local-execution disclosure and package-loading consent are shorter with the
+  same semantics and default No; the policy detail moved to `--verbose`.
 - A single `.contract.md` accepts `--allow-unproven-inputs` as a no-op instead
   of failing with exit 2; factory semantics are unchanged.
-- Evidence-delivery failure returns command exit 23 without changing a recorded
-  COMPLETE outcome. Scripts must distinguish execution completion from package delivery.
+- Receipt export failure returns command exit 23 without changing a recorded
+  COMPLETE outcome. Scripts must distinguish execution completion from receipt
+  delivery.
 
 ### Fixed
 
-- Bind native CI to the selected build interpreter and exercise automatic
-  evidence delivery and explicit ambiguous-inventory refusal in frozen acceptance.
-- Ctrl+C during a POSIX agent run is now a cooperative stop request. Previously, an
-  interrupt that landed inside `Popen.poll()` could leave apmx blind to the agent's exit
-  and record `cleanup_confirmed: false` after the full cleanup window. An interrupt at
-  the supervision loop boundary could also escape without a producer record. Group
-  signals that macOS rejects with EPERM for exiting or zombie members no longer abort
-  supervision; cleanup is still confirmed only once the group is gone.
+- Ctrl+C during a POSIX agent run is a cooperative stop request. An interrupt
+  inside `Popen.poll()` no longer leaves apmx blind to the agent's exit and
+  records `cleanup_confirmed: false` after the full cleanup window; an
+  interrupt at the supervision loop boundary no longer escapes without a
+  producer record; and macOS EPERM for exiting or zombie group members no
+  longer aborts supervision. Cleanup is still confirmed only once the group is
+  gone.
+- Native CI binds to the selected build interpreter and its frozen acceptance
+  exercises automatic receipt delivery and explicit ambiguous-inventory refusal.
 
 ## 0.4.2 - 2026-09-18
 

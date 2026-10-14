@@ -1,6 +1,6 @@
 # Execution results and record migration
 
-The 0.4.2 source separates **execution** from **assurance**. The contract
+Since 0.4.0, the source separates **execution** from **assurance**. The contract
 format (`needs`, `produces`, `verify`) and consent flags are unchanged.
 
 | Execution outcome | Exit | Meaning |
@@ -14,7 +14,7 @@ Preview also exits 0, but performs no execution and issues no completion
 record. Check labels are PASS, FAIL and INCOMPLETE; raw process observations
 remain in the record.
 
-Development source also uses command exit **23** when execution is COMPLETE
+Since v0.5.0, APMX also uses command exit **23** when execution is COMPLETE
 but delivery of its [receipt](evidence.md) fails.
 This is not a new execution outcome: the canonical COMPLETE record and
 artifacts are not rewritten. Retry the read-only export, not the model run.
@@ -75,7 +75,7 @@ unconfirmed cleanup are explicit export failures, not revised execution
 outcomes. The BOM describes supplied inventory; it is not an input allegedly
 read by the model, nor proof that every installed capability was used.
 
-Current development source automatically exports a portable
+Since v0.5.0, APMX automatically exports a portable
 [receipt](evidence.md) after every completed execution and all
 preparation cleanup. It adds no CLI command or flag. The package includes
 ordinary CycloneDX inventory, in-toto/SLSA producer statements and in-toto
@@ -89,7 +89,7 @@ hashes is not a trusted attestation.
 
 ## Record versions
 
-Current development additionally records the versioned
+Since v0.5.0, records additionally include the versioned
 [implicit project selection](workspace.md): per-leaf `baseline.selection_schema`
 and `baseline.project_digest`, and a factory's retained `project_capture`.
 These fields distinguish application identity from stage handoffs and checker
@@ -135,14 +135,14 @@ for new-schema receipts. Do not rename old UNPROVEN/21 or VERIFIED/0 records.
 
 ## Current release versus historical downloads
 
-The v0.4.2 source and fresh native release report COMPLETE/0 for successful
-native execution after exact evidence finalization. The immutable v0.4.0 and
+The v0.5.0 source and native release, like v0.4.2 before it, report COMPLETE/0
+for successful native execution after exact evidence finalization. The immutable v0.4.0 and
 v0.4.1 tags record failed release-preparation candidates; no release or native
 assets were published for either tag. Historical v0.3.2 native
 binaries and the immutable `be9c5be` source/demo still report UNPROVEN/21. The
 installation guide's pinned fallback reproduces that historical behavior, not
 the redesign. No v0.3.2 asset, manifest or historical media is rebuilt or
-reused by v0.4.2. Match every adapter to its record version; current smoke
-fixtures target v0.4.2, not old binaries. For scripts running v0.4.2, replace
+reused by v0.4.2 or later. Match every adapter to its record version; current smoke
+fixtures target v0.5.0, not old binaries. For scripts running v0.4.2 or later, replace
 old exit-21 completion special cases with exit 0 success handling; do not apply
 that migration to v0.3.2 binaries.

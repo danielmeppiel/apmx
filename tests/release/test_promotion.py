@@ -37,6 +37,17 @@ class PromotionTests(unittest.TestCase):
         notes = promotion.release_notes("0.4.2", "a" * 40)
         self.assertIn(f"pinned official APM {pin['version']} backend", notes)
 
+    def test_v050_notes_summarize_the_minor_release(self):
+        notes = promotion.release_notes("0.5.0", "a" * 40)
+        self.assertIn("## Changes in v0.5.0", notes)
+        self.assertIn("apmx audit <receipt-dir>", notes)
+        self.assertIn("OpenCode 1.2.24", notes)
+        self.assertIn("bounded repair", notes)
+        self.assertIn(f"Bundle official APM {promotion.APM_BACKEND_VERSION}", notes)
+        self.assertIn("blob/v0.5.0/CHANGELOG.md", notes)
+        self.assertIn("COMPLETE (0)", notes)
+        self.assertNotIn("## Changes in v0.4.2", notes)
+
     def test_v042_notes_preserve_failed_v041_candidate_truth(self):
         notes = promotion.release_notes("0.4.2", "a" * 40)
         self.assertIn("No GitHub release or native assets were published for v0.4.1", notes)
