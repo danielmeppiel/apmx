@@ -6,7 +6,9 @@ import selectors
 import shutil
 import signal
 import subprocess
+import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 from apmx.utils.git_env import get_git_executable, git_long_paths_args
@@ -40,8 +42,32 @@ def _group_exists(pgid: int) -> bool:
 
 
 def _signal_group(pgid: int, selected: signal.Signals) -> None:
-    with contextlib.suppress(ProcessLookupError):
+    # macOS reports EPERM for a group whose members are exiting or orphaned
+    # zombies. Signalling is best effort; only _group_exists confirms cleanup.
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pgid, selected)
+
+
+@contextlib.contextmanager
+def _deferred_interrupts() -> Iterator[list[int]]:
+    """Turn Ctrl+C into a cancellation request observed between safe points.
+
+    An asynchronous KeyboardInterrupt can land inside ``Popen.poll()`` after it
+    takes its private waitpid lock, leaving every later poll blind to the exit,
+    or on the supervision loop's back-edge, outside the cancellation handler.
+    """
+    requests: list[int] = []
+    if (
+        threading.current_thread() is not threading.main_thread()
+        or signal.getsignal(signal.SIGINT) is not signal.default_int_handler
+    ):
+        yield requests
+        return
+    previous = signal.signal(signal.SIGINT, lambda signum, frame: requests.append(signum))
+    try:
+        yield requests
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 def _observe_group(pgid: int, timeout_seconds: float) -> tuple[dict[str, object], ...]:
@@ -102,6 +128,32 @@ def supervise_process(
         )
     if os.name != "posix":
         return ProcessObservation(None, error="Unsupported process execution platform.")
+    with _deferred_interrupts() as interrupts:
+        observation = _supervise_posix(
+            request,
+            on_bytes=on_bytes,
+            on_started=on_started,
+            events=events,
+            limits=limits,
+            started=started,
+            interrupts=interrupts,
+        )
+    if interrupts and observation.stop_reason != "cancelled":
+        # No managed process consumed the request; keep Ctrl+C's usual propagation.
+        raise KeyboardInterrupt
+    return observation
+
+
+def _supervise_posix(
+    request: ProcessRequest,
+    *,
+    on_bytes: ByteSink,
+    on_started: StartedSink | None,
+    events: EventEmitter | None,
+    limits: ContractLimits,
+    started: float,
+    interrupts: list[int],
+) -> ProcessObservation:
     from .native_logs import NativeLogStream
 
     native_logs = NativeLogStream(request.log_directory, events)
@@ -128,6 +180,17 @@ def supervise_process(
     leader_exited_at: float | None = None
     residual_group: tuple[dict[str, object], ...] = ()
     selector = selectors.DefaultSelector()
+
+    def cancel() -> None:
+        nonlocal stop_reason, stop_started
+        stop_reason = "cancelled"
+        if stop_started is None:
+            stop_started = time.monotonic()
+            if events is not None:
+                events.emit("stop_requested", reason=stop_reason)
+            _signal_group(pgid, signal.SIGTERM)
+            sent.append("SIGTERM")
+
     try:
         for stream, pipe in (("stdout", child.stdout), ("stderr", child.stderr)):
             if pipe is None:
@@ -142,6 +205,8 @@ def supervise_process(
             events.emit("process_started", pid=child.pid, pgid=pgid)
         while True:
             try:
+                if interrupts and stop_reason != "cancelled":
+                    cancel()
                 now = time.monotonic()
                 native_logs.poll()
                 returncode = child.poll()
@@ -202,13 +267,8 @@ def supervise_process(
                         selector.unregister(key.fileobj)
                         key.fileobj.close()
             except KeyboardInterrupt:
-                stop_reason = "cancelled"
-                if stop_started is None:
-                    stop_started = time.monotonic()
-                    if events is not None:
-                        events.emit("stop_requested", reason=stop_reason)
-                    _signal_group(pgid, signal.SIGTERM)
-                    sent.append("SIGTERM")
+                # Raised by a callback, or by Ctrl+C when it could not be deferred.
+                cancel()
     finally:
         # An exception in a drain/record callback must not strand a child.
         if not cleanup_confirmed:
@@ -224,6 +284,11 @@ def supervise_process(
         for pipe in (child.stdout, child.stderr):
             if pipe is not None:
                 pipe.close()
+    if interrupts and stop_reason != "cancelled":
+        # Ctrl+C arrived after the last loop check; the observed cleanup still stands.
+        stop_reason = "cancelled"
+        if events is not None:
+            events.emit("stop_requested", reason=stop_reason)
     native_logs.finish()
     if events is not None and stop_reason is not None:
         events.emit("stop_observed", confirmed=cleanup_confirmed, reason=stop_reason)

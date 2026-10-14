@@ -51,6 +51,12 @@
 
 - Bind native CI to the selected build interpreter and exercise automatic
   evidence delivery and explicit ambiguous-inventory refusal in frozen acceptance.
+- Ctrl+C during a POSIX agent run is now a cooperative stop request. Previously, an
+  interrupt that landed inside `Popen.poll()` could leave apmx blind to the agent's exit
+  and record `cleanup_confirmed: false` after the full cleanup window. An interrupt at
+  the supervision loop boundary could also escape without a producer record. Group
+  signals that macOS rejects with EPERM for exiting or zombie members no longer abort
+  supervision; cleanup is still confirmed only once the group is gone.
 
 ## 0.4.2 - 2026-09-18
 
