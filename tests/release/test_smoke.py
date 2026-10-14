@@ -1033,7 +1033,7 @@ class SmokeFixtureTests(unittest.TestCase):
             self.assertFalse((caller / ".agents").exists())
             self.assertTrue(proof["native_lock_relocated_unchanged"])
             self.assertFalse(stages[0].exists())
-            self.assertIn("publisher-version-does-not-exist", (package / "apm.yml").read_text())
+            self.assertIn(f"ref: {revision}\n", (package / "apm.yml").read_text())
 
     def test_mixed_actor_rejects_unselected_prompt_and_changed_supporting_resource(self):
         for failure in (None, "unselected", "resource"):

@@ -211,8 +211,10 @@ That same tenth case also generates a real consumer lock with native APM against
 a genuine Git repository tagged `v9` with package version `9.0.0`. A hermetic SSH
 transport serves actual Git objects; it does not replace APM, its resolver,
 checkout, or lock writer. The packaged contract names the same Git dependency
-with a deliberately nonexistent publisher ref. The run must still use the
-consumer's exact commit, version, and context bytes, retain its original lock
+by the consumer's exact commit SHA, an equivalent spelling of `v9`; APM rejects
+an unavailable or incompatible publisher ref
+([microsoft/apm#3061](https://github.com/microsoft/apm/pull/3061)). The run must
+still use the consumer's exact commit, version, and context bytes, retain its original lock
 byte-for-byte, preserve that entry in the effective native lock, and leave both
 caller and package snapshots unchanged. This is package identity precedence,
 not a same-basename local-directory approximation.

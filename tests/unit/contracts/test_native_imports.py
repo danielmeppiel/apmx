@@ -421,7 +421,7 @@ def test_unavailable_publisher_ref_fails_closed_under_consumer_pins(fixture, tmp
     assert all((caller / name).read_bytes() == data for name, data in before.items())
     (package / "apm.yml").write_text(
         "name: packaged-handoff\nversion: 0.1.0\ndependencies:\n  apm:\n"
-        f"    - git: {url}\n      ref: v9\n"
+        f"    - git: {url}\n      ref: {revision}\n"
     )
     source_before = source_hash(package, LIMITS)
     with prepare_contract_source(
