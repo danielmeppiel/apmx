@@ -235,6 +235,30 @@ def test_no_policy_audit_reports_only_baseline_checks(deps_receipt, tmp_path) ->
     assert reported <= _BASELINE_CHECKS
 
 
+def _lock(owner: str, digest: str = "a" * 64) -> bytes:
+    files = (
+        "  deployed_files:\n  - .agents/skills/style/SKILL.md\n"
+        f"  deployed_file_hashes:\n    .agents/skills/style/SKILL.md: sha256:{digest}\n"
+    )
+    return (
+        "lockfile_version: '1'\ndependencies:\n"
+        f"- repo_url: _local/package\n  local_path: /src/package\n"
+        f"{files if owner == 'package' else ''}"
+        "- repo_url: _local/style\n  local_path: ./skills/style\n  depth: 2\n"
+        f"{files if owner == 'style' else ''}"
+    ).encode()
+
+
+def test_frozen_replay_may_reassign_a_shared_skill_owner() -> None:
+    from apmx.audit.ingredients import _drifted
+
+    # APM 0.33.0 attributes a package-bundled transitive skill to either entry.
+    assert _drifted(_lock("package"), _lock("style")) == []
+    assert _drifted(_lock("package"), _lock("style", "b" * 64)) == ["/src/package"]
+    assert _drifted(_lock("style"), _lock("package", "b" * 64)) == ["./skills/style"]
+    assert _drifted(_lock("package"), _lock("none")) == ["/src/package"]
+
+
 def test_policy_and_offline_are_exclusive(plain_receipt) -> None:
     result = _audit(plain_receipt, "--offline", "--policy", "org")
     assert result.exit_code == 2

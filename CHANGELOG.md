@@ -33,7 +33,9 @@
   fails preparation before any producer launches, rather than the consumer pin
   silently winning. `apmx audit` keeps its workarounds for microsoft/apm#3194 and
   microsoft/apm#3195, both still present in 0.33.0, and treats `manifest-missing`
-  as a no-policy check when deciding whether `--policy` was enforced.
+  as a no-policy check when deciding whether `--policy` was enforced. It now
+  compares deployed file hashes by path, since 0.33.0 can reassign a skill shared
+  by a package and its transitive local dependency to either owner on replay.
 - Every COMPLETE run now delivers a receipt (`.apm/<runs|chains|controllers>/<id>/receipt/`,
   formerly `evidence/`), with or without APM dependencies. Without dependencies the
   CycloneDX 1.5 inventory explicitly lists zero components. REJECTED/HALTED runs get no receipt.

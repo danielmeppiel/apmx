@@ -89,9 +89,12 @@ exact `apm.yml` and `apm.lock.yaml`. For an audit, apmx:
    receipt's lock. For changed local-path packages, `apm install --frozen`
    rewrites lock hashes from whatever it finds instead of failing
    ([microsoft/apm#3194](https://github.com/microsoft/apm/issues/3194)), so
-   apmx compares them and then restores the retained lock bytes. It also checks that every selected skill body matches the
-   receipt's `bodySha256`, and that the pinned APM derives exactly the
-   receipt's CycloneDX components from the retained lock.
+   apmx compares them and then restores the retained lock bytes. Deployed file
+   hashes are compared by path rather than by owning dependency, because APM
+   0.33.0 can attribute a skill shared by a package and its transitive local
+   dependency to either entry on replay. It also checks that every selected
+   skill body matches the receipt's `bodySha256`, and that the pinned APM
+   derives exactly the receipt's CycloneDX components from the retained lock.
 4. Runs `apm audit --ci --no-fail-fast` against the retained lock. This covers
    hidden-Unicode content scanning, lock consistency, install-replay drift
    and, with `--policy`, org policy.
