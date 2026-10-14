@@ -111,10 +111,17 @@ jobs:
       - name: Install the Copilot CLI
         if: ${{ !inputs.hermetic-actor && inputs.harness == 'copilot' }}
         run: npm install --global --no-fund --no-audit @github/copilot
-      - name: Run the factory (agent; untrusted outputs)
-        working-directory: caller
+      - name: Copy the factory out of the Git checkout
+        # apmx refuses native runs inside a Git repository with remotes (fail-closed
+        # no-policy prerequisite), so the factory runs from a plain copy.
         env:
-          FACTORY: ${{ inputs.factory }}
+          FACTORY: caller/${{ inputs.factory }}
+        run: |
+          python3 -c 'import os, shutil; shutil.copytree(os.environ["FACTORY"], os.environ["RUNNER_TEMP"] + "/factory", ignore=shutil.ignore_patterns(".git", ".apm"))'
+      - name: Run the factory (agent; untrusted outputs)
+        working-directory: ${{ runner.temp }}
+        env:
+          FACTORY: ${{ runner.temp }}/factory
           HARNESS: ${{ inputs.harness }}
           MODEL: ${{ inputs.model }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.agent-token }}
@@ -124,7 +131,7 @@ jobs:
           apmx "${args[@]}"
       - name: Collect the producer receipt
         env:
-          FACTORY: caller/${{ inputs.factory }}
+          FACTORY: ${{ runner.temp }}/factory
         run: |
           python3 - <<'PY'
           import os, shutil
@@ -176,10 +183,16 @@ jobs:
         with:
           name: apmx-producer-receipt
           path: ${{ runner.temp }}/producer-receipt
-      - name: Re-check the outputs here (no agent) and write the receipt of record
-        run: apmx check "$RUNNER_TEMP/producer-receipt" "caller/$FACTORY"
+      - name: Copy the factory out of the Git checkout
+        # apmx refuses native runs inside a Git repository with remotes (fail-closed
+        # no-policy prerequisite), so the factory runs from a plain copy.
         env:
-          FACTORY: ${{ inputs.factory }}
+          FACTORY: caller/${{ inputs.factory }}
+        run: |
+          python3 -c 'import os, shutil; shutil.copytree(os.environ["FACTORY"], os.environ["RUNNER_TEMP"] + "/factory", ignore=shutil.ignore_patterns(".git", ".apm"))'
+      - name: Re-check the outputs here (no agent) and write the receipt of record
+        working-directory: ${{ runner.temp }}
+        run: apmx check "$RUNNER_TEMP/producer-receipt" "$RUNNER_TEMP/factory"
       - id: record
         name: Package the receipt of record and a delivery overlay
         env:
@@ -188,8 +201,8 @@ jobs:
           python3 - <<'PY'
           import json, os, shutil
           from pathlib import Path, PurePosixPath
-          factory = Path("caller", os.environ["FACTORY"])
           temp = Path(os.environ["RUNNER_TEMP"])
+          factory = temp / "factory"
           (index,) = [p for p in factory.glob(".apm/*/*/receipt/index.json")]
           receipt = index.parent
           shutil.copytree(receipt, temp / "receipt")
