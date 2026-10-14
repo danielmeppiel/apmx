@@ -1,0 +1,11 @@
+# Copy to the root of the repository that receives factory pull requests.
+# APM keeps its own keys; apmx reads only `factories`.
+factories:
+  allow:
+    # The definition digest of the factory you reviewed (the Factory row shows it).
+    - "acme/checkout-factory@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  require_signed: true
+  signers:
+    - workflow: danielmeppiel/apmx/.github/workflows/run.yml
+      repo: acme/factories   # where the factory ran
+  revoked: []

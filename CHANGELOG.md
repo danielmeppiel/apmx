@@ -4,6 +4,10 @@
 
 ### Added
 
+- Example and README section "Accept factory PRs by proof": one `factories`
+  policy section and one `apmx audit` workflow step accept signed factory pull
+  requests (`examples/accept-factory-prs`). It replaces the draft receiving-side
+  gate of #10.
 - `apmx check PRODUCER_RECEIPT [FACTORY]` re-checks a producer's outputs where
   no agent ran: only the output bytes are replayed (harness `replay`), the
   factory's own checks rerun, and a new receipt of record is written; a

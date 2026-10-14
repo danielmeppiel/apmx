@@ -1,0 +1,12 @@
+# .github/workflows/audit.yml in the receiving repository
+on: pull_request
+permissions: { contents: read, attestations: read }
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: danielmeppiel/apmx/.github/actions/setup@main   # pin a commit SHA
+      - run: apmx audit
+        env: { GH_TOKEN: "${{ github.token }}" }
