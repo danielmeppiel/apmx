@@ -114,6 +114,9 @@ observation, not an assessment of the result or proof of causal improvement.
 This native JSONL version does not report model identity. Requested model
 selection is recorded separately; observed models remain unknown rather than
 being inferred from the request, configuration or a successful process exit.
+`--verbose` says so: `Observed execution model: not reported by OpenCode`.
+Native debug logs may name models, including internal title calls, but they are
+untrusted diagnostics and are not recorded as the execution model.
 The adapter does not manufacture a native exit-code envelope either.
 
 [Bounded repair](repair.md) retains the same budgets, frozen inputs/checks,

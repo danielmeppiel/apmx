@@ -33,7 +33,7 @@ Outputs   .apm/runs/run-1/artifacts/
         Record: .apm/runs/run-1/record.json
         Artifact: .apm/runs/run-1/artifacts/first.json
         Artifact: .apm/runs/run-1/artifacts/second.json
-        Observed execution model: unknown
+        Observed execution model: not reported by Copilot
         Logs: .apm/runs/run-1/transcript.log
         Logs may contain sensitive data. Review before sharing.
 Receipt   .apm/runs/run-1/receipt/

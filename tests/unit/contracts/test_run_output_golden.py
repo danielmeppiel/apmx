@@ -95,7 +95,50 @@ def _emit(logger, kind, at=0.0, source="engine", **data):
     logger.on_event(RunEvent("run", 1, at, kind, source, data))
 
 
-def _attempt(logger, root: Path, spec, run: str, *, normalized: int, agent: float) -> RunResult:
+ROUTINE_NOTICE = "An oversized native debug line was omitted."
+ANOMALY_NOTICE = "A native debug file was replaced or truncated; mirroring stopped."
+NOTICE_ACTION = "Native public output is still streamed; inspect this run's private logs."
+REASON = "Local documentation link is not a captured file: ../checks/cases.py"
+JSON_REPORT = json.dumps(
+    {
+        "check": "documentation",
+        "observed": [{"detail": REASON, "id": "links", "status": "failed"}],
+        "required": ["links"],
+        "schema": "software-factory-check/1",
+        "status": "failed",
+        "subject": {"files": {f"src/file{index}.py": "0" * 64 for index in range(20)}},
+    },
+    sort_keys=True,
+)
+
+
+def _native_notices(logger, at: float) -> None:
+    """What NativeLogStream emits for each attempt of a real Copilot run."""
+    for message, routine in ((ROUTINE_NOTICE, True), (ANOMALY_NOTICE, False)):
+        _emit(
+            logger,
+            "diagnostic",
+            at=at,
+            source="harness",
+            severity="warning",
+            message=message,
+            action=NOTICE_ACTION,
+            scope="native_debug",
+            routine=routine,
+        )
+
+
+def _attempt(
+    logger,
+    root: Path,
+    spec,
+    run: str,
+    *,
+    normalized: int,
+    agent: float,
+    checker_text: str | None = None,
+    native: bool = False,
+) -> RunResult:
     """One engine attempt in its real event order."""
     name, needs, produces = spec
     outputs = (produces,) if isinstance(produces, str) else produces
@@ -126,6 +169,8 @@ def _attempt(logger, root: Path, spec, run: str, *, normalized: int, agent: floa
         text="Tool started: view",
         tool_status="started",
     )
+    if native:
+        _native_notices(logger, at=0.45)
     _emit(logger, "phase", at=0.2 + agent, name="capture")
     _emit(logger, "phase", at=0.3 + agent, name="checks")
     _emit(logger, "check_started", at=0.3 + agent, name="identity", command="python -I check.py")
@@ -136,7 +181,7 @@ def _attempt(logger, root: Path, spec, run: str, *, normalized: int, agent: floa
         at=0.4 + agent,
         source="checker",
         label="identity",
-        text=f"Independent fixture check: {verdict}",
+        text=checker_text or f"Independent fixture check: {verdict}",
     )
     _emit(logger, "check_finished", at=0.5 + agent, observation=_check(normalized))
     _emit(logger, "phase", at=0.6 + agent, name="record")
@@ -222,6 +267,53 @@ def _factory_reject(logger, root: Path, clock: _Clock) -> None:
     )
 
 
+def _factory_reject_native_json(logger, root: Path, clock: _Clock) -> None:
+    """A real-model shape: native log notices every attempt and a long JSON check report."""
+    budget = RepairBudget(max_attempts=2, max_seconds=300)
+    plan = _plan(root, budget)
+    logger.factory_started(plan)
+    catalog = tuple(node.plan.contract.path for node in plan.nodes)
+    first = plan.nodes[0].plan.contract.path
+    logger.chain_node(1, 2, first, catalog=catalog)
+    leaf = logger.new_leaf(index=1, count=2, contract=first)
+    leaf.repair_budget(budget)
+    for index, agent in enumerate((5.0, 4.0), start=1):
+        attempt = leaf.new_attempt(index=index, count=2)
+        result = _attempt(
+            attempt,
+            root,
+            FIRST,
+            f"attempt-{index}",
+            normalized=1,
+            agent=agent,
+            checker_text=JSON_REPORT,
+            native=True,
+        )
+    _emit(attempt, "finished", result=result)
+    leaf.repair_finished(
+        reason="max_attempts", record=root / ".apm/controllers/c/record.json", attempts=2
+    )
+    leaf.close()
+    logger.chain_stopped(
+        "Predecessor stopped: REJECTED. Inspect its record.",
+        outcome=Outcome.REJECTED,
+        code="upstream_rejected",
+    )
+    logger.close()
+    clock.now = 11.0
+    chain = root / ".apm" / "chains" / "chain-1"
+    logger.render_result(
+        ChainResult(
+            "chain-1",
+            chain / "record.json",
+            Outcome.REJECTED,
+            False,
+            (result,),
+            "upstream_rejected",
+        )
+    )
+
+
 def _contract_pass(logger, root: Path, clock: _Clock) -> None:
     result = _attempt(logger, root, FIRST, "run-1", normalized=0, agent=4.0)
     clock.now = 5.0
@@ -242,6 +334,7 @@ def _contract_plan(logger, root: Path, clock: _Clock) -> None:
 SCENARIOS = {
     "factory-pass": (_factory_pass, True),
     "factory-reject-retries": (_factory_reject, True),
+    "factory-reject-native-json": (_factory_reject_native_json, True),
     "contract-pass": (_contract_pass, False),
     "factory-plan": (_factory_plan, True),
     "contract-plan": (_contract_plan, False),
@@ -307,7 +400,10 @@ def test_tty_rows_fit_the_width_except_unbreakable_paths(tmp_path, monkeypatch, 
     for line in raw.splitlines():
         if len(line) > width:
             # Copyable paths/commands and literal checker output are never re-wrapped.
-            if line.startswith("        identity: "):
+            if line.startswith("        identity: ") and "excerpt" not in line:
+                continue
+            # Attributed native harness text is literal, like checker output.
+            if line.startswith("      Copilot > "):
                 continue
             assert line.lstrip().startswith(
                 ("Outputs", "Receipt", "Saved", "Next", "More", "Nothing ran", "Unattended")
@@ -478,3 +574,76 @@ def test_real_no_dependency_receipt_renders_and_its_next_command_verifies(tmp_pa
     audit = CliRunner().invoke(main, command[1:])
     assert audit.exit_code == 0, audit.output
     assert audit.output.rstrip().endswith("[+] VALID   (content-bound; not authenticated)")
+
+
+def test_native_log_notices_are_once_per_run_and_routine_ones_need_verbose(tmp_path, monkeypatch):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    scenario = "factory-reject-native-json"
+    default = _render(tmp_path / "a", monkeypatch, scenario, **PROFILES["redirected"])
+    verbose = _render(tmp_path / "b", monkeypatch, scenario, **PROFILES["verbose"])
+    # Two attempts each emitted both notices.
+    assert ROUTINE_NOTICE not in default
+    assert default.count(ANOMALY_NOTICE) == 1
+    assert default.count(NOTICE_ACTION) == 1
+    assert verbose.count(ROUTINE_NOTICE) == 1
+    assert verbose.count(ANOMALY_NOTICE) == 1
+
+
+def test_native_log_notices_stay_in_the_retained_transcript(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with _terminal(monkeypatch, mode="pipe"):
+        logger = ContractLogger()
+        _native_notices(logger, at=0.1)
+        _native_notices(logger, at=0.2)
+        retained = b"".join(logger._transcript.head).decode("ascii")
+    assert retained.count(ROUTINE_NOTICE) == 2
+    assert retained.count(ANOMALY_NOTICE) == 2
+
+
+def test_rejection_shows_a_bounded_reason_not_the_raw_json_report(tmp_path, monkeypatch):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    scenario = "factory-reject-native-json"
+    default = _render(tmp_path / "a", monkeypatch, scenario, **PROFILES["redirected"])
+    verbose = _render(tmp_path / "b", monkeypatch, scenario, **PROFILES["verbose"])
+    assert '{"check"' not in default and "src/file19.py" not in default
+    flat = " ".join(default.split())
+    assert f"identity: {REASON}" in flat
+    assert flat.count("(excerpt; full check output: rerun with --verbose") == 1
+    assert "transcript.log in the Saved run)" in flat
+    assert JSON_REPORT in verbose
+
+
+@pytest.mark.parametrize(
+    ("line", "expected", "condensed"),
+    [
+        ("Independent fixture check: reject", "Independent fixture check: reject", False),
+        ("x" * 500, "x" * 197 + "...", True),
+        (json.dumps({"status": "error", "detail": "Patch  is\noutside"}), "Patch is outside", True),
+        ('{"reason": "budget exhausted", "detail": "ignored"}', "budget exhausted", True),
+        (
+            json.dumps(
+                {
+                    "status": "failed",
+                    "observed": [
+                        {
+                            "id": "acceptance",
+                            "status": "failed",
+                            "observed": [
+                                {"id": "below", "status": "passed"},
+                                {"id": "Free delivery at 5000 cents", "status": "failed"},
+                            ],
+                        },
+                    ],
+                }
+            ),
+            "failed: Free delivery at 5000 cents",
+            True,
+        ),
+        ('{"status": "failed", "observed": []}', '{"status": "failed", "observed": []}', False),
+        ("{not json " + "y" * 300, ("{not json " + "y" * 300)[:197] + "...", True),
+    ],
+)
+def test_check_excerpt_is_bounded_and_prefers_a_stated_reason(line, expected, condensed):
+    assert contract_logger._check_excerpt(line) == (expected, condensed)

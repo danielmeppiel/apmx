@@ -51,6 +51,53 @@ LIVENESS_SECONDS = 30
 # Block bodies align under the contract name that follows "[i/N] ".
 BLOCK = 6
 TAIL_LINES = 5
+# Default-mode check excerpts stay short; --verbose and the saved log keep everything.
+EXCERPT_CHARS = 200
+_REASON_KEYS = ("reason", "message", "detail", "error")
+_FAILED_STATUSES = frozenset({"failed", "fail", "error", "rejected"})
+
+
+def _json_reason(value: object, depth: int = 0) -> str | None:
+    """Find a human reason in a checker's JSON report without assuming its schema."""
+    if depth > 3 or not isinstance(value, dict):
+        return None
+    for key in _REASON_KEYS:
+        text = value.get(key)
+        if isinstance(text, str) and text.strip():
+            return " ".join(text.split())
+    failed: list[str] = []
+    for item in value.values():
+        if not isinstance(item, list):
+            continue
+        for row in item[:200]:
+            if not isinstance(row, dict) or row.get("status") not in _FAILED_STATUSES:
+                continue
+            reason = _json_reason(row, depth + 1)
+            if reason:
+                return reason
+            identifier = row.get("id", row.get("name"))
+            if isinstance(identifier, str) and identifier:
+                failed.append(identifier)
+    if failed:
+        shown = ", ".join(failed[:5])
+        return f"failed: {shown}" + (f" (+{len(failed) - 5} more)" if len(failed) > 5 else "")
+    return None
+
+
+def _check_excerpt(line: str) -> tuple[str, bool]:
+    """Return a bounded, readable excerpt and whether it condensed the original line."""
+    text = line.strip()
+    condensed = False
+    if text.startswith("{") and len(text) > 2:
+        try:
+            reason = _json_reason(json.loads(text))
+        except (ValueError, RecursionError):
+            reason = None
+        if reason:
+            text, condensed = reason, True
+    if len(text) > EXCERPT_CHARS:
+        text, condensed = text[: EXCERPT_CHARS - 3].rstrip() + "...", True
+    return text, condensed
 
 
 def _seconds(value: float) -> str:
@@ -284,6 +331,7 @@ class _ContractDisplay:
         self.disclosure_shown = False
         self.identity_shown = False
         self.models_shown: set[str] = set()
+        self.native_notices_shown: set[tuple[str, str]] = set()
         self.started = _clock()
 
     @classmethod
@@ -1218,17 +1266,28 @@ class ContractLogger:
         severity = self._field(event, "severity", "info")
         if severity not in {"info", "warning", "error"}:
             severity = "info"
-        self._write(
-            self._field(event, "message"),
-            severity=severity,
-            attribution=self._attribution(event) if event.source != "engine" else None,
-        )
+        message = self._field(event, "message")
         action = self._field(event, "action", "")
+        detail = False
+        retained_only = False
+        if event.data.get("scope") == "native_debug":
+            # Mirroring notices concern the --verbose native debug stream. Each one is
+            # shown once per run; routine size limits stay behind --verbose. The
+            # transcript always retains them.
+            key = (message, action)
+            retained_only = key in self._display.native_notices_shown
+            self._display.native_notices_shown.add(key)
+            detail = event.data.get("routine") is True
+        attribution = self._attribution(event) if event.source != "engine" else None
+        self._write(
+            message,
+            severity=severity,
+            attribution=attribution,
+            detail=detail,
+            retained_only=retained_only,
+        )
         if action:
-            self._write(
-                action,
-                attribution=self._attribution(event) if event.source != "engine" else None,
-            )
+            self._write(action, attribution=attribution, detail=detail, retained_only=retained_only)
 
     def _process_started(self, event: RunEvent) -> None:
         pid = event.data.get("pid")
@@ -1429,18 +1488,39 @@ class ContractLogger:
         self._show(_DisplayLine(text, level=BLOCK, layout=_Layout.PROSE))
 
     def _emit_tails(self, attempt: _AttemptView | None) -> None:
-        """Explain a failed attempt with the last lines of its failing checks."""
+        """Explain a failed attempt with a bounded excerpt of its failing checks."""
         if attempt is None or self.verbose:
             return
+        condensed = False
         for name, normalized in attempt.checks:
             if normalized == 0:
                 continue
             for line in attempt.tails.get(name, ()):
-                self._show(_DisplayLine(f"{name}: {line}", role=_Role.DETAIL, level=BLOCK + 2))
+                text, shortened = _check_excerpt(line)
+                condensed = condensed or shortened
+                self._show(
+                    _DisplayLine(
+                        f"{name}: {text}",
+                        role=_Role.DETAIL,
+                        level=BLOCK + 2,
+                        layout=_Layout.PROSE if shortened else _Layout.LITERAL,
+                        hang=len(name) + 2,
+                    )
+                )
         for name, reason in attempt.notes:
             self._show(
                 _DisplayLine(
                     f"{name}: {reason}", level=BLOCK + 2, layout=_Layout.PROSE, hang=len(name) + 2
+                )
+            )
+        if condensed:
+            self._show(
+                _DisplayLine(
+                    "(excerpt; full check output: rerun with --verbose, or read "
+                    "transcript.log in the Saved run)",
+                    role=_Role.DETAIL,
+                    level=BLOCK + 2,
+                    layout=_Layout.PROSE,
                 )
             )
 
@@ -1516,7 +1596,12 @@ class ContractLogger:
                 self._write(f"Observed execution model: {model}", severity="detail", detail=True)
                 self._display.models_shown.add(model)
         if not result.observed_models:
-            self._write("Observed execution model: unknown", severity="detail", detail=True)
+            # OpenCode's JSON event stream carries no model field; never guess one.
+            self._write(
+                f"Observed execution model: not reported by {self._harness}",
+                severity="detail",
+                detail=True,
+            )
         if result.stop_reason:
             self._write(f"Stop reason: {result.stop_reason}", severity="detail", detail=True)
         self._write(

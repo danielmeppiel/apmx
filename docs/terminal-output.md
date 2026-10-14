@@ -31,8 +31,12 @@ Receipt   factory/.apm/chains/<id>/receipt/
 Next      apmx audit factory/.apm/chains/<id>/receipt
 ```
 
-When checks reject an output, the block shows every attempt, the last lines
-of the failing check's output, contracts that never started, and what to do:
+When checks reject an output, the block shows every attempt, a short excerpt
+of the failing check's last output lines, contracts that never started, and
+what to do. A JSON report line is condensed to its `reason`, `message`,
+`detail` or `error` text, or to the IDs of its failed rows; any other line
+longer than 200 characters is cut with `...`. A condensed excerpt ends with a
+pointer to `--verbose` and the run's `transcript.log`, which keep the full output:
 
 ```text
 [1/2] first    needs notes.md -> produces first.json, second.json   budget 3 attempts
@@ -67,7 +71,10 @@ apmx ./feature-factory --on copilot --verbose
 
 Copilot producers run with `--log-level all` in a private, per-attempt log
 directory. OpenCode producers use `--print-logs --log-level DEBUG`.
-`--verbose` also mirrors these native debug diagnostics live.
+`--verbose` also mirrors these native debug diagnostics live. Notices about
+that mirror, such as an omitted oversized native debug line, appear only with
+`--verbose`. Notices that a native log changed or could not be read appear
+once per run in default output. Every notice stays in the retained transcript.
 Configuration/authentication inventory probes remain quiet. Public JSON event
 decoders still exclude private reasoning and retained-only protocol events.
 Native debug diagnostics are less structured and may contain sensitive native

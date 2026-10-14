@@ -1,0 +1,36 @@
+[i] Not sandboxed: agents and checks can
+    use host files, network and logins.
+    Packages may be installed; model
+    usage may cost money. Run only
+    contracts you trust.
+
+Factory  factory   2 contracts   copilot
+         / fixture-model
+
+[1/2] first    needs notes.md ->
+      produces first.json, second.json
+      budget 2 attempts
+      Copilot > A native debug file was replaced or truncated; mirroring stopped.
+      Copilot > Native public output is still streamed; inspect this run's private logs.
+      attempt 1/2  agent 5.0s   checks:
+      [x] identity
+      attempt 2/2  agent 4.0s   checks:
+      [x] identity
+        identity: Local documentation
+                  link is not a captured
+                  file:
+                  ../checks/cases.py
+        (excerpt; full check output:
+        rerun with --verbose, or read
+        transcript.log in the Saved run)
+
+[2/2] second   not started: waits on
+      first
+
+[x] REJECTED   first failed check
+    identity after 2/2 attempts   exit
+    20
+
+Saved     factory/.apm/runs/attempt-2/   (attempt files + logs)
+Next      Fix the contract or check, then rerun:  apmx ./factory --model fixture-model
+          More detail:                            apmx ./factory --model fixture-model --verbose
