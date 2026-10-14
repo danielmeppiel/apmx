@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import re
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -108,6 +109,7 @@ def test_archive_members_outside_the_bundle_are_refused(tmp_path, member) -> Non
         _install(tmp_path)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS archive symlinks need POSIX links")
 def test_internal_symlinks_install_but_escaping_links_are_refused(tmp_path) -> None:
     root = "apmx-macos-arm64"
     members = {
