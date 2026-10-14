@@ -151,12 +151,15 @@ the factory:
 $ apmx audit feature-factory/.apm/chains/<id>/receipt --outputs ./delivered
 Receipt   feature-factory/.apm/chains/<id>/receipt   5 contracts   unsigned
 
+[i] Policy        none found
+                  APM reports absent: no apm-policy.yml applies
 [+] Integrity     all <n> files match index.json (SHA-256)
 [+] Standards     in-toto Statement v1, SLSA Provenance v1, CycloneDX 1.5: schema-valid
 [+] Factory       definition sha256:...  5 contracts, 9 checks
 [+] Checks        9/9 passed (in-toto test-result)
 [+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
                   installed bytes match CycloneDX inventory and recorded hashes
+[i] Revocation    no policy: nothing revoked to check
 [+] Outputs       7/7 delivered files match receipt subjects (re-hashed)
                   7 files bound: changes.diff documentation.diff documentation.md ...
 [!] Identity      unsigned: proves content binding, not who ran it
