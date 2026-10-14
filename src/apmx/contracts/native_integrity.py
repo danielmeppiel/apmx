@@ -28,7 +28,7 @@ def verify_inventory_package(
 ) -> tuple[str, ...]:
     """Return only lock-proven managed metadata omitted from the hash preimage.
 
-    APM 0.30 writes each remote root's .apm-pin after recording package hashes.
+    APM (0.30 through 0.33) writes each remote root's .apm-pin after recording package hashes.
     A nested virtual package's marker therefore changes its ancestor's tree.
     Ordinary package bytes and the original native expected hashes stay authoritative.
     """

@@ -30,11 +30,12 @@ from . import verifier
 
 PASS, WARN, FAIL, UNAVAILABLE = "pass", "warn", "fail", "unavailable"
 _LOCK_NAMES = ("apm.lock.yaml", "apm.lock")
-# `apm audit --ci` checks that run without any policy (APM 0.30.0). Any other check
+# `apm audit --ci` checks that run without any policy (APM 0.30.0-0.33.0). Any other check
 # name proves that a policy was actually loaded and enforced.
 _BASELINE_CHECKS = frozenset(
     {
         "lockfile-exists",
+        "manifest-missing",
         "ref-consistency",
         "deployment-ledger-owners",
         "deployed-files-present",

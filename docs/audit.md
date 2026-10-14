@@ -86,9 +86,10 @@ exact `apm.yml` and `apm.lock.yaml`. For an audit, apmx:
    agent-skills --no-trust-bin --no-policy`. Scripts are disabled
    (`APM_NO_SCRIPTS=1`); no receipt code runs.
 3. Confirms that the reinstall recorded the same content hashes as the
-   receipt's lock. For local packages, APM 0.30.0 rewrites lock hashes from
-   whatever it finds, so apmx compares them and then restores the retained
-   lock bytes. It also checks that every selected skill body matches the
+   receipt's lock. For changed local-path packages, `apm install --frozen`
+   rewrites lock hashes from whatever it finds instead of failing
+   ([microsoft/apm#3194](https://github.com/microsoft/apm/issues/3194)), so
+   apmx compares them and then restores the retained lock bytes. It also checks that every selected skill body matches the
    receipt's `bodySha256`, and that the pinned APM derives exactly the
    receipt's CycloneDX components from the retained lock.
 4. Runs `apm audit --ci --no-fail-fast` against the retained lock. This covers
@@ -99,8 +100,9 @@ exact `apm.yml` and `apm.lock.yaml`. For an audit, apmx:
 **Policy decision.** Without `--policy`, the audit runs with `--no-policy`, so
 APM's org auto-discovery never silently applies a policy you did not choose.
 With `--policy`, apmx requires evidence that APM actually enforced it. APM
-skips enforcement with only a warning when a policy cannot be fetched, so apmx
-reports such a run as `INCOMPLETE` (exit 2), never as a pass. `--policy org`
+skips enforcement with only a warning and exits 0 when an explicit policy
+cannot be loaded ([microsoft/apm#3195](https://github.com/microsoft/apm/issues/3195)),
+so apmx reports such a run as `INCOMPLETE` (exit 2), never as a pass. `--policy org`
 needs a git remote to discover the organization. The temporary audit project
 has none, so pass `owner/repo`, a URL or a file instead.
 

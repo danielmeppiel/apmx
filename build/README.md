@@ -187,7 +187,7 @@ never execute. The original single-skill gates remain separate.
 
 Completed single-skill package cases must now deliver the standard evidence
 package and print its paths. The mixed-ASF fixture deliberately retains
-overlapping direct/transitive local references: pinned APM 0.30.0 exports
+overlapping direct/transitive local references: pinned APM 0.33.0 exports
 duplicate component identities for them. That case requires explicit
 evidence-delivery refusal (command exit 23), no published package, and an
 unchanged canonical COMPLETE outcome (exit 0). It still checks every original

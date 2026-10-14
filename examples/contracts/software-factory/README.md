@@ -161,7 +161,7 @@ after supplying its required upstream documents in the consumer.
 
 The local package and its source checkout must remain available throughout
 these development runs. This is not a published source release or an archive
-demonstration. The pinned APM 0.30.0 archive formats omit or reject these
+demonstration. The pinned APM 0.33.0 archive formats omit or reject these
 independent contract/check resources; **archive acceptance remains blocked**.
 Do not wrap them in a dummy skill or copy archive members manually.
 

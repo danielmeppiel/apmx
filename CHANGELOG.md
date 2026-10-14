@@ -27,6 +27,13 @@
 
 ### Changed
 
+- Bundle official APM 0.33.0 (source commit `18c4c43`) instead of 0.30.0. APM
+  now verifies every immutable requirement (microsoft/apm#3061): a packaged
+  contract whose publisher ref is unavailable or incompatible with a consumer pin
+  fails preparation before any producer launches, rather than the consumer pin
+  silently winning. `apmx audit` keeps its workarounds for microsoft/apm#3194 and
+  microsoft/apm#3195, both still present in 0.33.0, and treats `manifest-missing`
+  as a no-policy check when deciding whether `--policy` was enforced.
 - Every COMPLETE run now delivers a receipt (`.apm/<runs|chains|controllers>/<id>/receipt/`,
   formerly `evidence/`), with or without APM dependencies. Without dependencies the
   CycloneDX 1.5 inventory explicitly lists zero components. REJECTED/HALTED runs get no receipt.

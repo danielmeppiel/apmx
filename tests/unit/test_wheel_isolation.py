@@ -72,8 +72,8 @@ from apmx.install.apm_backend import PIN_PATH, locate_backend
 from apmx.contracts.models import ContractError
 pin = json.loads(PIN_PATH.read_text())
 assert pin["schema"] == "apmx-apm-backend/1"
-assert pin["version"] == "0.30.0"
-assert pin["source_commit"] == "8c2e0d9c352e2ed0e8c56b40063a63e1dd4a1937"
+assert pin["version"] == "0.33.0"
+assert pin["source_commit"] == "18c4c43c924ceae890fe0f2038806690e5b2d6c8"
 os.environ.pop("APMX_APM_BACKEND", None)
 os.environ["PATH"] = str(Path.cwd())
 try:
