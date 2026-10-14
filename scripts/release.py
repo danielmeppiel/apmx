@@ -17,6 +17,7 @@ import sys
 import sysconfig
 import tarfile
 import tempfile
+import time
 import tomllib
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -149,6 +150,36 @@ def backend_provenance(backend: Path, pin: dict, target: str) -> dict:
     }
 
 
+RENAME_DELAYS = (0.25, 0.5, 1.0, 2.0, 4.0)
+
+
+def rename_with_retry(
+    source: Path,
+    destination: Path,
+    *,
+    windows: bool | None = None,
+    delays: tuple[float, ...] = RENAME_DELAYS,
+    sleep=time.sleep,
+) -> None:
+    """Rename a freshly extracted tree, retrying only Windows sharing violations.
+
+    On Windows an antivirus or indexer can briefly hold a handle on new files, so
+    renaming their directory fails with PermissionError (WinError 5 or 32).
+    Retry with backoff a bounded number of times, then re-raise the last
+    PermissionError unchanged. Nothing is retried elsewhere, or for other errors.
+    """
+    if windows is None:
+        windows = sys.platform == "win32"
+    for delay in (*delays, None) if windows else (None,):
+        try:
+            source.rename(destination)
+            return
+        except PermissionError:
+            if delay is None:
+                raise
+            sleep(delay)
+
+
 def provision_backend(target: str, destination: Path) -> dict:
     """Download verified official bytes, preserving the complete upstream onedir."""
     if destination.exists():
@@ -180,7 +211,7 @@ def provision_backend(target: str, destination: Path) -> dict:
         if native_target() == target:
             probe_backend(executable, pin, target)
         provenance = backend_provenance(extracted, pin, target)
-        extracted.rename(destination)
+        rename_with_retry(extracted, destination)
     return provenance
 
 
