@@ -82,6 +82,7 @@ def pull(tmp_path, plain_receipt, monkeypatch):
         repo = tmp_path / "repo"
         repo.mkdir()
         _git(repo, "init", "-q", "-b", "main")
+        _git(repo, "config", "core.autocrlf", "false")
         shutil.copytree(_attempt(plain_receipt) / "baseline", repo, dirs_exist_ok=True)
         if policy_base is not None:
             (repo / "apm-policy.yml").write_text(policy_base)
