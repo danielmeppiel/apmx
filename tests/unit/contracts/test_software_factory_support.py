@@ -145,6 +145,23 @@ def authored_patch(
     return raw
 
 
+def git_edit_section(root: Path, name: str, scratch: Path) -> bytes:
+    """Git-exported one-line edit of an existing file, preserving its line endings."""
+    working = scratch / f"software-factory-edit-{name.replace('/', '-')}"
+    target = working / name
+    target.parent.mkdir(parents=True)
+    raw = (root / name).read_bytes()
+    target.write_bytes(raw)
+    _git(working, "init", "--quiet")
+    _git(working, "add", "--", name)
+    end = raw.index(b"\n")
+    end -= raw[end - 1 : end] == b"\r"
+    target.write_bytes(raw[:end] + b" (edited)" + raw[end:])
+    section = _git(working, "diff", "--no-ext-diff", "--no-textconv", "--no-renames")
+    safe_rmtree(working, scratch)
+    return section
+
+
 def example_cases() -> tuple:
     return runpy.run_path(str(EXAMPLE / "checks/software_factory_cases.py"))["CASES"]
 

@@ -7,6 +7,9 @@ needs:
 produces:
   - documentation.diff
   - documentation.md
+budget:
+  max_attempts: 2
+  max_seconds: 300
 verify:
   documentation-format-links-examples: python3 -I -B checks/documentation.py changes.diff documentation.diff
   documented-checkout: python3 -I -B checks/documented_checkout.py changes.diff documentation.diff
@@ -25,6 +28,10 @@ only docs/checkout.md and to write documentation.md. Keep the Delivery policy,
 Examples and Input errors sections useful to a reader. Document the inclusive
 threshold, cents, totals and type/error behavior. Populate the declared example
 table from the canonical cases, with valid local links and H2 anchors.
+Link only to files delivered in the combined candidate: src/, tests/ and
+docs/checkout.md. Do not link to checks/, request.md, specification.md,
+implementation.md or other factory and stage files; they are not delivered with
+the project. Name the canonical cases in prose instead of linking them.
 
 Write documentation.md with the required JSON metadata and nonempty Changes,
 Validation and Limitations sections. Explain the actual page edits, what the

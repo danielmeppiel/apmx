@@ -16,6 +16,7 @@ from test_software_factory_support import (
     authored_patch,
     documentation_text,
     factory,
+    git_edit_section,
     invoke,
     outputs,
     seed,
@@ -168,6 +169,7 @@ def test_documentation_patch_is_checked_with_unchanged_code(documents: Path, che
         "malformed-link",
         "space-link",
         "escape-link",
+        "check-resource-link",
     ],
 )
 def test_documentation_content_failures_reject_the_delivery(
@@ -190,6 +192,8 @@ def test_documentation_content_failures_reject_the_delivery(
         text += "\n[Missing page][missing]\n\n[missing]: missing.md\n"
     elif fault == "malformed-link":
         text += "\n[Broken](missing.md\n"
+    elif fault == "check-resource-link":
+        text += "\n[Canonical cases](../checks/software_factory_cases.py)\n"
     elif fault == "space-link":
         text += "\n[Broken](missing file.md)\n"
     else:
@@ -204,6 +208,26 @@ def test_documentation_cannot_edit_the_accepted_application(documents: Path) -> 
     patch.write_bytes(patch.read_bytes().replace(b"docs/checkout.md", b"src/checkout.py"))
     code, report = invoke(documents, "documentation.py", "changes.diff", patch.name)
     assert code == 2 and report["status"] == "error", report
+    assert report["detail"] == "Documentation changed the accepted application candidate."
+
+
+@pytest.mark.parametrize(
+    "checker", ["documentation.py", pytest.param("documented_checkout.py", marks=BDD)]
+)
+def test_documentation_patch_outside_its_profile_is_a_reconstructable_rejection(
+    documents: Path, tmp_path: Path, checker: str
+) -> None:
+    from apmx.contracts import check_subjects
+
+    (documents / "README.md").write_bytes(b"# Checkout project\n\nA small example.\n")
+    patch = documents / "documentation.diff"
+    patch.write_bytes(patch.read_bytes() + git_edit_section(documents, "README.md", tmp_path))
+    code, report = invoke(documents, checker, "changes.diff", patch.name)
+    assert code == 1 and report["status"] == "failed", report
+    assert "it also changes README.md" in report["detail"], report
+    subject = report["subject"]
+    assert {"README.md", "docs/checkout.md"} <= set(subject["candidate_files"])
+    check_subjects.materialize_candidate(subject, documents, tmp_path / "reconstructed")
 
 
 @pytest.mark.parametrize(

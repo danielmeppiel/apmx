@@ -28,6 +28,21 @@ class Invalid(Exception):
     """Missing, unsupported or incomplete check input or execution."""
 
 
+class OutOfScope(Exception):
+    """A well-formed patch whose file set differs from the check profile: a rejection.
+
+    ``subject`` names the candidate actually reconstructed from that patch, so a
+    receipt can bind the rejected attempt to real bytes.
+    """
+
+    def __init__(
+        self, message: str, paths: tuple[str, ...], subject: dict[str, Any] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.paths = paths
+        self.subject = subject
+
+
 def read_file(root: Path, name: str, limit: int = MAX_FILE) -> bytes:
     """Read a bounded regular file without following symlink components."""
     path = Path(name)
@@ -101,29 +116,41 @@ def patch_paths(
     changed_files: tuple[str, ...] = CHANGED_FILES,
     added_files: tuple[str, ...] = ("tests/test_free_shipping.py",),
 ) -> tuple[str, ...]:
-    """Accept exactly the regular-file edits named by a trusted check profile."""
+    """Accept exactly the regular-file edits named by a trusted check profile.
+
+    Malformed, unsafe or duplicate patch content is invalid input (exit 2). A
+    well-formed patch that edits a different file set is an assessed rejection
+    (exit 1), so an authored repair budget can retry it.
+    """
     try:
         text = raw.decode("ascii")
     except UnicodeError as exc:
         raise Invalid("This example expects an ASCII text patch.") from exc
     sections = re.split(r"(?m)^diff --git ", text)
-    if sections[0] or len(sections) != len(changed_files) + 1:
-        raise Invalid("Patch must change exactly the files required by this check profile.")
-    paths = []
+    if sections[0] or len(sections) == 1:
+        raise Invalid("Expected a Git patch with at least one file section.")
+    paths: list[str] = []
     for section in sections[1:]:
-        lines = section.splitlines()
+        lines = section.splitlines() or [""]
         header = re.fullmatch(r"a/([a-zA-Z0-9_./-]+) b/\1", lines[0])
-        if not header or header[1] not in changed_files or header[1] in paths:
-            raise Invalid("Patch contains an unsafe, duplicate or protected path.")
+        if (
+            not header
+            or header[1] in paths
+            or any(part in ("", ".", "..") for part in header[1].split("/"))
+        ):
+            raise Invalid("Patch contains an unsafe or duplicate path.")
         name = header[1]
         paths.append(name)
-        addition = name in added_files
+        position = 1
+        if name in changed_files:
+            addition = name in added_files
+            if addition and lines[position : position + 1] != ["new file mode 100644"]:
+                raise Invalid("The generated regression test must be a new regular file.")
+        else:
+            addition = lines[position : position + 1] == ["new file mode 100644"]
         before = "--- /dev/null" if addition else f"--- a/{name}"
         after = f"+++ b/{name}"
-        position = 1
         if addition:
-            if lines[position] != "new file mode 100644":
-                raise Invalid("The generated regression test must be a new regular file.")
             position += 1
         if re.fullmatch(r"index [0-9a-f]+\.\.[0-9a-f]+(?: 100644)?", lines[position]):
             position += 1
@@ -151,6 +178,22 @@ def patch_paths(
                 position += 1
                 if position < len(lines) and lines[position] == r"\ No newline at end of file":
                     position += 1
+    unexpected = [name for name in paths if name not in changed_files]
+    missing = [name for name in changed_files if name not in paths]
+    if unexpected or missing:
+        reasons = []
+        if unexpected:
+            reasons.append("it also changes " + ", ".join(unexpected))
+        if missing:
+            reasons.append("it does not change " + ", ".join(missing))
+        raise OutOfScope(
+            "Patch is outside this check profile: "
+            + "; ".join(reasons)
+            + ". Change exactly "
+            + ", ".join(changed_files)
+            + ".",
+            tuple(paths),
+        )
     return tuple(paths)
 
 
@@ -186,31 +229,55 @@ def apply_patch(candidate: Path, raw: bytes, area: Path, name: str) -> None:
             raise Invalid("Patch does not apply cleanly to the supplied baseline.")
 
 
-def materialize(root: Path, patch: str, area: Path) -> tuple[Path, dict[str, Any]]:
-    """Apply these exact patch bytes to matching supplied baseline files."""
-    raw = read_file(root, patch)
-    patch_paths(raw)
-    base = inventory(root, BASE_FILES)
-    checks = check_inventory(root)
-    candidate = area / "candidate"
-    candidate.mkdir()
-    for name in BASE_FILES:
-        path = candidate / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(read_file(root, name))
-    apply_patch(candidate, raw, area, "captured.diff")
-    names = tuple(sorted(set(BASE_FILES) | set(CHANGED_FILES)))
-    actual = {
+def _scope(raw: bytes, **profile: tuple[str, ...]) -> OutOfScope | None:
+    try:
+        patch_paths(raw, **profile)
+    except OutOfScope as exc:
+        return exc
+    return None
+
+
+def _touched_existing(root: Path, scope: OutOfScope, known: set[str]) -> tuple[str, ...]:
+    """Out-of-profile files the patch edits in place; they join the reported baseline."""
+    return tuple(name for name in scope.paths if name not in known and (root / Path(name)).exists())
+
+
+def _tree_names(candidate: Path) -> set[str]:
+    return {
         path.relative_to(candidate).as_posix()
         for path in candidate.rglob("*")
         if not path.is_dir() or path.is_symlink()
     }
-    if actual != set(names):
-        raise Invalid("Patch changed files outside the candidate application.")
-    files = inventory(candidate, names)
+
+
+def _write_base(root: Path, candidate: Path, names: tuple[str, ...]) -> None:
     for name in names:
-        read_file(candidate, name).decode("ascii")
-    return candidate, {
+        path = candidate / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(read_file(root, name))
+
+
+def materialize(root: Path, patch: str, area: Path) -> tuple[Path, dict[str, Any]]:
+    """Apply these exact patch bytes to matching supplied baseline files."""
+    raw = read_file(root, patch)
+    scope = _scope(raw)
+    base_names = BASE_FILES
+    if scope is not None:
+        base_names = (*BASE_FILES, *_touched_existing(root, scope, set(BASE_FILES)))
+    base = inventory(root, base_names)
+    checks = check_inventory(root)
+    candidate = area / "candidate"
+    candidate.mkdir()
+    _write_base(root, candidate, base_names)
+    apply_patch(candidate, raw, area, "captured.diff")
+    if scope is None:
+        names = tuple(sorted(set(BASE_FILES) | set(CHANGED_FILES)))
+        if _tree_names(candidate) != set(names):
+            raise Invalid("Patch changed files outside the candidate application.")
+    else:
+        names = tuple(sorted(_tree_names(candidate)))
+    files = inventory(candidate, names)
+    subject = {
         "base": tree_hash(base),
         "patch": digest(raw),
         "candidate": tree_hash(files),
@@ -218,6 +285,11 @@ def materialize(root: Path, patch: str, area: Path) -> tuple[Path, dict[str, Any
         "base_files": base,
         "candidate_files": files,
     }
+    if scope is not None:
+        raise OutOfScope(str(scope), scope.paths, subject)
+    for name in names:
+        read_file(candidate, name).decode("ascii")
+    return candidate, subject
 
 
 def materialize_documented(
@@ -226,25 +298,27 @@ def materialize_documented(
     """Compose docs after code, retaining the accepted code-only tree identity."""
     candidate, subject = materialize(root, patch, area)
     raw = read_file(root, documentation_patch)
-    patch_paths(raw, changed_files=DOCUMENTATION_FILES, added_files=())
-    base = {**subject["base_files"], **inventory(root, DOCUMENTATION_FILES)}
-    for name in DOCUMENTATION_FILES:
-        path = candidate / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(read_file(root, name))
+    scope = _scope(raw, changed_files=DOCUMENTATION_FILES, added_files=())
+    accepted = set(subject["candidate_files"])
+    doc_names = DOCUMENTATION_FILES
+    if scope is not None:
+        if accepted & set(scope.paths):
+            # The accepted code candidate is a fixed input of this stage, not a scope choice.
+            raise Invalid("Documentation changed the accepted application candidate.")
+        doc_names = _touched_existing(root, scope, accepted)
+    base = {**subject["base_files"], **inventory(root, doc_names)}
+    _write_base(root, candidate, doc_names)
     apply_patch(candidate, raw, area, "captured-documentation.diff")
     if inventory(candidate, tuple(subject["candidate_files"])) != subject["candidate_files"]:
         raise Invalid("Documentation changed the accepted application candidate.")
-    names = (*subject["candidate_files"], *DOCUMENTATION_FILES)
-    actual = {
-        path.relative_to(candidate).as_posix()
-        for path in candidate.rglob("*")
-        if not path.is_dir() or path.is_symlink()
-    }
-    if actual != set(names):
-        raise Invalid("Documentation changed files outside the combined candidate.")
+    if scope is None:
+        names = (*subject["candidate_files"], *DOCUMENTATION_FILES)
+        if _tree_names(candidate) != set(names):
+            raise Invalid("Documentation changed files outside the combined candidate.")
+    else:
+        names = tuple(sorted(_tree_names(candidate)))
     files = inventory(candidate, names)
-    return candidate, {
+    combined = {
         **subject,
         "base": tree_hash(base),
         "code_candidate": subject["candidate"],
@@ -253,6 +327,9 @@ def materialize_documented(
         "base_files": base,
         "candidate_files": files,
     }
+    if scope is not None:
+        raise OutOfScope(str(scope), scope.paths, combined)
+    return candidate, combined
 
 
 def run_driver(
@@ -351,6 +428,11 @@ def execute(
         if tree_hash(check_inventory(root)) != subject["checks"]:
             raise Invalid("Supplied check resources changed while checks were running.")
         evidence["status"] = "passed" if code == 0 else "failed"
+    except OutOfScope as exc:
+        code = 1
+        evidence["status"] = "failed"
+        evidence["subject"] = exc.subject
+        evidence["detail"] = str(exc).encode("ascii", "backslashreplace").decode("ascii")[:600]
     except (
         Invalid,
         OSError,

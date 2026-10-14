@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,7 @@ from test_software_factory_support import (
     GENERATED_TESTS,
     authored_patch,
     factory,
+    git_edit_section,
     invoke,
     outputs,
     seed,
@@ -127,7 +129,7 @@ def test_supplied_acceptance_rejects_baseline_and_off_by_one_even_with_vacuous_g
 
 @pytest.mark.parametrize("checker", ["regression.py", pytest.param("acceptance.py", marks=BDD)])
 @pytest.mark.parametrize(
-    "fault", ("missing-patch", "invalid-patch", "wrong-base", "protected", "mode")
+    "fault", ("missing-patch", "invalid-patch", "wrong-base", "unsafe", "duplicate", "mode")
 )
 def test_invalid_patch_subject_is_operational_not_passing(
     candidate: Path, checker: str, fault: str
@@ -139,8 +141,13 @@ def test_invalid_patch_subject_is_operational_not_passing(
         patch.write_bytes(b"not a patch\n")
     elif fault == "wrong-base":
         (candidate / "src/pricing.py").write_bytes(b"wrong baseline\n")
-    elif fault == "protected":
-        patch.write_bytes(patch.read_bytes().replace(b"src/pricing.py", b"checks/steps.py"))
+    elif fault == "unsafe":
+        patch.write_bytes(patch.read_bytes().replace(b"src/pricing.py", b"src/../steps.py"))
+    elif fault == "duplicate":
+        raw = patch.read_bytes()
+        first = raw.index(b"diff --git ")
+        second = raw.index(b"diff --git ", first + 1)
+        patch.write_bytes(raw + raw[first:second])
     else:
         patch.write_bytes(
             patch.read_bytes().replace(b"new file mode 100644", b"new file mode 100755")
@@ -148,6 +155,81 @@ def test_invalid_patch_subject_is_operational_not_passing(
     code, report = invoke(candidate, checker, "changes.diff")
     assert code == 2 and report["status"] == "error", report
     assert not list(candidate.glob(".software-factory-check-*"))
+
+
+def _reconstructs(root: Path, subject: dict, tmp_path: Path) -> None:
+    """The receipt exporter can rebuild exactly the candidate the checker rejected."""
+    from apmx.contracts import check_subjects
+
+    target = tmp_path / "reconstructed"
+    check_subjects.materialize_candidate(subject, root, target)
+    assert set(subject["candidate_files"]) == {
+        path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_file()
+    }
+
+
+@pytest.mark.parametrize("checker", ["regression.py", pytest.param("acceptance.py", marks=BDD)])
+@pytest.mark.parametrize("fault", ("extra-file", "check-resource", "missing-file"))
+def test_well_formed_patch_outside_the_profile_is_an_assessed_rejection(
+    candidate: Path, tmp_path: Path, checker: str, fault: str
+) -> None:
+    """A producer editing the wrong files is rejected (exit 1), so repair can retry it."""
+    patch = candidate / "changes.diff"
+    raw = patch.read_bytes()
+    if fault == "extra-file":
+        patch.write_bytes(raw + git_edit_section(candidate, "docs/checkout.md", tmp_path))
+        expected = "it also changes docs/checkout.md"
+    elif fault == "check-resource":
+        patch.write_bytes(raw + git_edit_section(candidate, "checks/acceptance.py", tmp_path))
+        expected = "it also changes checks/acceptance.py"
+    else:
+        start = raw.index(b"diff --git a/src/checkout.py")
+        end = raw.index(b"diff --git ", start + 1)
+        patch.write_bytes(raw[:start] + raw[end:])
+        expected = "it does not change src/checkout.py"
+    code, report = invoke(candidate, checker, "changes.diff")
+    assert code == 1 and report["status"] == "failed", report
+    assert expected in report["detail"] and "Change exactly" in report["detail"], report
+    assert report["observed"] == []
+    subject = report["subject"]
+    assert subject["patch"] == hashlib.sha256(patch.read_bytes()).hexdigest()
+    if fault != "missing-file":
+        assert expected.removeprefix("it also changes ") in subject["candidate_files"]
+    _reconstructs(candidate, subject, tmp_path)
+    assert not list(candidate.glob(".software-factory-check-*"))
+
+
+@pytest.mark.windows_compat
+def test_out_of_profile_edit_of_a_crlf_file_is_still_a_reconstructable_rejection(
+    candidate: Path, tmp_path: Path
+) -> None:
+    """Windows checkouts can supply CRLF project files; scope rejection must not depend on it."""
+    page = candidate / "docs/checkout.md"
+    page.write_bytes(page.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    patch = candidate / "changes.diff"
+    patch.write_bytes(
+        patch.read_bytes() + git_edit_section(candidate, "docs/checkout.md", tmp_path)
+    )
+    code, report = invoke(candidate, "regression.py", "changes.diff")
+    assert code == 1 and "it also changes docs/checkout.md" in report["detail"], report
+    _reconstructs(candidate, report["subject"], tmp_path)
+
+
+@pytest.mark.parametrize("fault", ("malformed", "does-not-apply"))
+def test_out_of_profile_sections_that_are_not_valid_patches_stay_operational(
+    candidate: Path, tmp_path: Path, fault: str
+) -> None:
+    """Scope is judged only for well-formed patches that apply to the baseline."""
+    patch = candidate / "changes.diff"
+    extra = git_edit_section(candidate, "docs/checkout.md", tmp_path)
+    if fault == "malformed":
+        extra = re.sub(rb"(?m)^(@@ -1,\d+ \+1,)(\d+)", rb"\g<1>9\2", extra, count=1)
+        assert extra.count(b"+1,9") == 1
+    else:
+        extra = extra.replace(b"docs/checkout.md", b"docs/missing.md")
+    patch.write_bytes(patch.read_bytes() + extra)
+    code, report = invoke(candidate, "regression.py", "changes.diff")
+    assert code == 2 and report["status"] == "error", report
 
 
 @pytest.mark.parametrize(

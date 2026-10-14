@@ -11,7 +11,14 @@ import pytest
 from click.testing import CliRunner
 from test_chain import caller, producer
 from test_chain_sources import private_preparation
-from test_software_factory_support import EXAMPLE, PROJECT, invoke, outputs, seed
+from test_software_factory_support import (
+    EXAMPLE,
+    PROJECT,
+    git_edit_section,
+    invoke,
+    outputs,
+    seed,
+)
 
 from apmx.cli import main
 from apmx.contracts import resolution, workspace
@@ -89,6 +96,54 @@ def prepare_example(root: Path, renamed: bool = False) -> dict[str, tuple[str, .
     return deliveries
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("behave") is None,
+    reason="Optional example integration: install apmx[factory] (Behave==1.3.3).",
+)
+def test_out_of_scope_build_attempt_is_repaired_and_the_receipt_audits(
+    caller: Path, monkeypatch: pytest.MonkeyPatch, private_preparation: None
+) -> None:
+    """Real-model shape: build also edits docs/checkout.md, is rejected, then repaired.
+
+    The rejected attempt's check reports must still bind a reconstructable
+    candidate, or receipt export fails (exit 23) after a COMPLETE run.
+    """
+    prepare_example(caller)
+    install(caller, limits=ContractLimits())
+    expected = outputs(caller.parent)
+    scope_creep = expected["changes.diff"] + git_edit_section(
+        caller, "docs/checkout.md", caller.parent
+    )
+    builds = []
+
+    def produce(plan, *_):
+        files = plan.contract.outputs
+        produced = dict(expected)
+        if "changes.diff" in files:
+            builds.append(plan)
+            if len(builds) == 1:
+                produced["changes.diff"] = scope_creep
+        writes = "\n".join(f"Path({name!r}).write_bytes({produced[name]!r})" for name in files)
+        return "from pathlib import Path\n" + writes
+
+    producer(monkeypatch, body=produce)
+    monkeypatch.chdir(caller.parent)
+    result = CliRunner().invoke(
+        main,
+        [str(caller), "--on", "copilot", "--allow-host-access", "--allow-unproven-inputs"],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(builds) == 2
+    assert "attempt 1/3" in result.output and "attempt 2/3" in result.output
+    (receipt,) = caller.glob(".apm/chains/*/receipt")
+    audit = CliRunner().invoke(main, ["audit", str(receipt), "--offline", "--format", "json"])
+    assert audit.exit_code == 0, audit.output
+    report = json.loads(audit.output)
+    assert report["result"] == "valid"
+    assert report["facts"]["rejectedAttempts"] == 1
+    assert report["facts"]["checksPassed"] == report["facts"]["checks"] == 9
+
+
 def test_factory_check_names_describe_the_proven_outcomes() -> None:
     actual = {
         name: tuple(load_frontmatter_document(EXAMPLE / "contracts" / name).metadata["verify"])
@@ -98,12 +153,23 @@ def test_factory_check_names_describe_the_proven_outcomes() -> None:
     assert sum(map(len, actual.values())) == 9
 
 
-def test_only_build_declares_a_shared_repair_budget() -> None:
+BUDGETS = {
+    "build.contract.md": {"max_attempts": 3, "max_seconds": 600},
+    "documentation.contract.md": {"max_attempts": 2, "max_seconds": 300},
+}
+
+
+def test_build_and_documentation_declare_shared_repair_budgets() -> None:
     for name in DELIVERIES:
         document = load_frontmatter_document(EXAMPLE / "contracts" / name)
-        assert document.metadata.get("budget") == (
-            {"max_attempts": 3, "max_seconds": 600} if name == "build.contract.md" else None
-        )
+        assert document.metadata.get("budget") == BUDGETS.get(name)
+
+
+def test_documentation_links_stay_inside_the_delivered_candidate() -> None:
+    body = load_frontmatter_document(EXAMPLE / "contracts/documentation.contract.md").body
+    text = " ".join(body.split())
+    assert "Link only to files delivered in the combined candidate" in text
+    assert "Do not link to checks/" in text
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
@@ -246,9 +312,13 @@ def test_factory_native_preview_and_five_real_leaf_handoffs(
     assert [tuple(item["checks"]) for item in data["graph"]["order"]] == list(CHECKS.values())
     for node, declared_outputs in zip(data["nodes"], DELIVERIES.values(), strict=True):
         reference = node["result"].get("controller")
-        if "changes.diff" in declared_outputs:
+        budget = next(
+            (value for key, value in BUDGETS.items() if DELIVERIES[key] == declared_outputs),
+            None,
+        )
+        if budget is not None:
             controller = json.loads(Path(reference["path"]).read_bytes())
-            assert controller["budget"] == {"max_attempts": 3, "max_seconds": 600}
+            assert controller["budget"] == budget
             assert len(controller["attempts"]) == 1
             assert controller["selected_run_id"] == node["result"]["run_id"]
         else:
