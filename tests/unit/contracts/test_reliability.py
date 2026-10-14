@@ -1,14 +1,18 @@
 """Real local processes and independent exact-byte assessment workspaces."""
 
+import errno
 import hashlib
 import json
 import os
 import signal
 import stat
+import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -297,6 +301,178 @@ def test_truly_lingering_child_still_halts_within_cleanup_window(tmp_path: Path)
     assert "SIGTERM" in observation.signals
     assert time.monotonic() - started < 2
     assert records.reduce_outcome(None, (), observation.stop_reason) == Outcome.HALTED
+
+
+def test_group_signal_permission_error_defers_to_observed_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # macOS reports EPERM while a group's members are exiting or orphaned zombies.
+    real_killpg = os.killpg
+
+    def killpg(pgid: int, selected: int) -> None:
+        real_killpg(pgid, selected)
+        if selected:
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(process.os, "killpg", killpg)
+    observation = process.supervise_process(
+        ProcessRequest(
+            (
+                sys.executable,
+                "-c",
+                "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('ready',flush=True); time.sleep(30)",
+            ),
+            tmp_path,
+            0.2,
+        ),
+        on_bytes=lambda *args: None,
+        limits=ContractLimits(cleanup_seconds=0.4),
+    )
+    assert observation.stop_reason == "timeout"
+    assert observation.signals == ("SIGTERM", "SIGKILL")
+    assert observation.returncode == -signal.SIGKILL
+    assert observation.cleanup_confirmed
+
+
+_SLEEPER = "import time; print('ready',flush=True); time.sleep(30)"
+
+
+@pytest.fixture
+def default_sigint() -> Iterator[None]:
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def _assert_cancelled_and_reaped(observation: ProcessObservation) -> None:
+    assert observation.cleanup_confirmed is True
+    assert observation.returncode == -signal.SIGTERM
+    assert observation.stop_reason == "cancelled"
+    assert observation.signals == ("SIGTERM",)
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+def test_ctrl_c_inside_popen_poll_lock_still_confirms_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, default_sigint: None
+) -> None:
+    """Regression: a real SIGINT just after poll() takes its waitpid lock."""
+    armed: list[bool] = []
+    fired: list[bool] = []
+    children: list[subprocess.Popen[bytes]] = []
+
+    class InterruptingLock:
+        def __init__(self, lock: Any) -> None:
+            self._lock = lock
+
+        def acquire(self, *args: Any, **kwargs: Any) -> bool:
+            acquired = self._lock.acquire(*args, **kwargs)
+            if acquired and armed and not fired:
+                fired.append(True)
+                # Delivered and handled before poll() reaches its try/finally.
+                signal.raise_signal(signal.SIGINT)
+            return acquired
+
+        def release(self) -> None:
+            self._lock.release()
+
+        def locked(self) -> bool:
+            return self._lock.locked()
+
+        def __enter__(self) -> bool:
+            return self.acquire()
+
+        def __exit__(self, *exc: object) -> None:
+            self.release()
+
+    class InterruptingPopen(subprocess.Popen):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._waitpid_lock = InterruptingLock(self._waitpid_lock)
+            children.append(self)
+
+    def on_bytes(stream: str, data: bytes) -> None:
+        if b"ready" in data:
+            armed.append(True)
+
+    monkeypatch.setattr(process.subprocess, "Popen", InterruptingPopen)
+    observation = process.supervise_process(
+        ProcessRequest((sys.executable, "-c", _SLEEPER), tmp_path, 10),
+        on_bytes=on_bytes,
+        limits=ContractLimits(cleanup_seconds=2),
+    )
+    assert fired, "the SIGINT was never injected"
+    _assert_cancelled_and_reaped(observation)
+    assert not children[0]._waitpid_lock.locked()
+
+
+def _supervise_with_sigint_at(
+    tmp_path: Path, target: tuple[str, int] | None
+) -> tuple[list[tuple[str, int]], tuple[str, int] | None, ProcessObservation]:
+    """Deliver one real SIGINT when ``target`` next executes after the child is ready."""
+    poll_code = {subprocess.Popen.poll.__code__, subprocess.Popen._internal_poll.__code__}
+    seen: list[tuple[str, int]] = []
+    state: dict[str, Any] = {"armed": False, "fired": None}
+
+    def local(frame: Any, event: str, arg: object) -> Any:
+        if event == "line" and state["armed"] and state["fired"] is None:
+            where = (frame.f_code.co_filename, frame.f_lineno)
+            seen.append(where)
+            # The fallback keeps every run bounded if the target is not reached.
+            if where == target or len(seen) >= 400:
+                state["fired"] = where
+                signal.raise_signal(signal.SIGINT)
+        return local
+
+    def tracer(frame: Any, event: str, arg: object) -> Any:
+        code = frame.f_code
+        return local if code.co_filename == process.__file__ or code in poll_code else None
+
+    def on_bytes(stream: str, data: bytes) -> None:
+        state["armed"] = state["armed"] or b"ready" in data
+
+    previous = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        observation = process.supervise_process(
+            ProcessRequest((sys.executable, "-c", _SLEEPER), tmp_path, 20),
+            on_bytes=on_bytes,
+            limits=ContractLimits(cleanup_seconds=2),
+        )
+    finally:
+        sys.settrace(previous)
+    return seen, state["fired"], observation
+
+
+def test_ctrl_c_at_every_supervision_line_is_cooperative(
+    tmp_path: Path, default_sigint: None
+) -> None:
+    """A real SIGINT at each executed loop/poll line, including the loop back-edge."""
+    seen, _, observation = _supervise_with_sigint_at(tmp_path, None)
+    _assert_cancelled_and_reaped(observation)
+    targets = list(dict.fromkeys(seen))
+    assert any(path == subprocess.__file__ for path, _ in targets)
+    for target in targets:
+        _, fired, observation = _supervise_with_sigint_at(tmp_path, target)
+        assert fired == target
+        _assert_cancelled_and_reaped(observation)
+
+
+def test_ctrl_c_before_supervision_still_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, default_sigint: None
+) -> None:
+    def spawn_failure(*args: Any, **kwargs: Any) -> None:
+        signal.raise_signal(signal.SIGINT)
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(process.subprocess, "Popen", spawn_failure)
+    with pytest.raises(KeyboardInterrupt):
+        process.supervise_process(
+            ProcessRequest((sys.executable, "-c", "pass"), tmp_path, 10),
+            on_bytes=lambda *args: None,
+        )
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
 
 
 def test_callback_failure_still_reaps_the_child(tmp_path: Path) -> None:
