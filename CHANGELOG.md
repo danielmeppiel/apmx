@@ -50,6 +50,16 @@
   color terminals update the running attempt in place; redirected, CI and
   `NO_COLOR` output stay append-only. Capture details, phases, narration, tool
   calls, check commands and checker output remain available with `--verbose`.
+- Default output stays readable with real harnesses. A rejected check's
+  excerpt condenses a JSON report line to its reason (or failed row IDs), cuts
+  other lines at 200 characters and points to `--verbose` and `transcript.log`.
+  Harness stderr lines longer than 200 characters are cut with
+  `... (full line: --verbose)`. Routine native-debug-mirror notices appear only
+  with `--verbose`; native log changes or read failures are shown once per run.
+  Every full line stays in the retained transcript.
+- The observed execution model reads `not reported by OpenCode` (or Copilot)
+  instead of `unknown` when the harness stream has no model field. Model names
+  in native debug logs are never promoted to evidence.
 - `--plan` and the interactive consent preview show one compact work list
   (`[i/N] name   needs -> produces`, checks, attempt budget, `*` for inputs from
   an earlier contract) ending in "Nothing ran" and the run command. The
@@ -70,6 +80,12 @@
   producer record; and macOS EPERM for exiting or zombie group members no
   longer aborts supervision. Cleanup is still confirmed only once the group is
   gone.
+- The five-stage software-factory example can repair real-model mistakes.
+  Documentation has its own budget (2 attempts, 300 seconds) and may link only
+  delivered files. A well-formed patch that touches files outside its check
+  profile is now a retryable rejection (exit 1) instead of invalid input
+  (exit 2); malformed or unsafe patches still stop the stage. Rejected attempts
+  report the candidate they assessed, so their receipts export and audit.
 - Native CI binds to the selected build interpreter and its frozen acceptance
   exercises automatic receipt delivery and explicit ambiguous-inventory refusal.
 

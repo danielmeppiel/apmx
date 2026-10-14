@@ -321,7 +321,7 @@ permission. Existing single-contract consent behavior is unchanged.
 
 The local exception never changes a leaf outcome or certifies native isolation.
 Current v0.5.0 source and downloads separate COMPLETE/0 execution from unproven
-native assurance; historical v0.3.2 and the source pin keep their UNPROVEN/21
+native assurance; historical v0.3.2 and the `be9c5be` source pin keep their UNPROVEN/21
 outcomes. See [record-version migration](results.md). Every required check must
 pass on the retained subject; missing output, undecided checks, rejection,
 changed bytes and failed cleanup still block dependent execution.

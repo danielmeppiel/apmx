@@ -93,7 +93,7 @@ The checker validates the JSON format and confirms there is one entry for
 each source ID. It does not establish that every summary is factually correct.
 Read the summaries and cautions yourself.
 
-**Historical v0.3.2 downloads and the source pin still exit 21 even with passing
+**Historical v0.3.2 downloads and the earlier `be9c5be` source pin still exit 21 even with passing
 checks.** Current v0.5.0 source and downloads exit 0 only after complete
 evidence finalization. Neither result means sandboxing. Missing output or
 incomplete checks still produce nonzero results. Read the check results and versioned record.

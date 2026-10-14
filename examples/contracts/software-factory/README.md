@@ -52,6 +52,9 @@ copilot --version
 ```
 
 Both APMX and Python must come from the source checkout's `.venv/bin/`.
+With a [native installation](../../../docs/install.md#example-tools-for-a-native-installation),
+APMX comes from `$APMX_NATIVE_ROOT` and Python from the checks-only environment
+instead; use `"$APMX_NATIVE_ROOT/libexec/apm/apm"` for the APM install step below.
 Behave must report `1.3.3`. The commands below demonstrate Copilot, which must be installed
 and authenticated through its own CLI; a version response does not establish
 login. Stop on any missing tool.
@@ -567,7 +570,7 @@ rejects both even when generated tests make no useful assertion.
 
 The observed run above supplements the deterministic suite; neither is
 production certification or permission to merge/deploy. Historical v0.3.2
-binaries, the pinned source and historical observation remain **UNPROVEN / 21**.
+binaries, the earlier `be9c5be` source pin and historical observation remain **UNPROVEN / 21**.
 The v0.4.2 four-stage example returns **COMPLETE / 0** only after all four
 contracts, six checks and five artifacts have complete validated, finalized
 evidence. This v0.5.0 example requires five stages, nine checks and seven
