@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- `apmx audit` needs no flags. Locally it audits the newest COMPLETE run under
+  `./.apm/`; in a GitHub pull request it audits the receipt the PR adds and
+  binds the PR's change (merge-base..head) to it: every changed file must be a
+  receipt output (or an unchanged recorded input) with the same SHA-256 at
+  head. `RECEIPT_DIR`, `--outputs`, `--policy` and `--offline` are overrides;
+  `--format sarif` emits SARIF 2.1.0.
+- `apmx audit` reads the same `apm-policy.yml` as `apm audit`, found the same
+  way (repository file, read from the PR base in a PR, then the org policy,
+  following `extends`). apmx owns one top-level section, `factories`
+  (`allow`, `require_signed`, `signers`, `revoked`, `enforcement`), merged
+  tighten-only across `extends`. It adds a factory allowlist, a Revocation row
+  for capability content (`purl` + `bodySha256`) and an unsigned-receipt rule.
+  These are gate rules (exit 1) unless `factories.enforcement: warn`; APM's
+  top-level `enforcement: warn` does not soften them. No policy is reported as
+  `[i] Policy  none found`; a policy that cannot be loaded is INCOMPLETE
+  (exit 2). APM's own keys stay APM's, enforced in the Ingredients row.
+
 ## 0.5.0 - 2026-10-14
 
 ### Added

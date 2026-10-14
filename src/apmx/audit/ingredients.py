@@ -194,16 +194,15 @@ def _components(raw: bytes) -> list[str]:
     )
 
 
-def resolve_policy(policy: str | None, cwd: Path) -> str | None:
-    """Local policy files are resolved before APM runs in the temporary project."""
-    if policy is None:
-        return None
-    candidate = Path(policy).expanduser()
-    if not candidate.is_absolute():
-        candidate = cwd / candidate
-    if candidate.is_file():
-        return str(candidate.resolve())
-    return policy
+def _adopt_origin(stage: Path, origin: str) -> None:
+    """Give the temporary project the auditor's origin so APM resolves ``org`` the same way."""
+    import subprocess
+
+    for argv in (["git", "init", "--quiet"], ["git", "remote", "add", "origin", origin]):
+        try:
+            subprocess.run(argv, cwd=stage, capture_output=True, check=False, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return
 
 
 def audit_ingredients(
@@ -212,6 +211,7 @@ def audit_ingredients(
     policy: str | None,
     offline: bool,
     limits: ContractLimits | None = None,
+    origin: str | None = None,
 ) -> Ingredients:
     """Delegate dependency trust to the bundled pinned APM; never pass silently."""
     from apmx.contracts.evidence import lock_dependencies
@@ -270,6 +270,8 @@ def audit_ingredients(
             stage = Path(temporary).resolve()
             (stage / "apm.yml").write_bytes(manifest)
             (stage / lock_name).write_bytes(lock_raw)
+            if policy is not None and origin is not None:
+                _adopt_origin(stage, origin)
             apm_backend._check_backend_version(executable, stage, env, limits)
             finished, code, capture = _run(
                 [
