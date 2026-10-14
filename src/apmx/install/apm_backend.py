@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import sys
+import time
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -24,6 +25,69 @@ from apmx.utils.path_security import has_symlink_component
 from apmx.utils.yaml_io import dump_yaml, load_yaml_str
 
 PIN_PATH = Path(__file__).resolve().parents[1] / "apm-backend.json"
+PIN_READ_DELAYS = (0.25, 0.5, 1.0, 2.0, 4.0)
+# ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+_SHARING_VIOLATIONS = frozenset({5, 32, 33})
+
+
+def _transient(exc: OSError) -> bool:
+    return isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in _SHARING_VIOLATIONS
+
+
+def read_pin(
+    path: Path | None = None,
+    *,
+    windows: bool | None = None,
+    delays: tuple[float, ...] = PIN_READ_DELAYS,
+    sleep=time.sleep,
+) -> bytes:
+    """Read the bundled APM pin, retrying only Windows sharing violations.
+
+    An antivirus or indexer can briefly lock the file on Windows. Retry with
+    bounded backoff, then re-raise the last error unchanged. A missing file or
+    any other error is raised at once. Malformed content is the caller's to
+    reject; it is never retried.
+    """
+    path = PIN_PATH if path is None else path
+    windows = sys.platform == "win32" if windows is None else windows
+    for delay in (*delays, None) if windows else (None,):
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            if delay is None or not _transient(exc):
+                raise
+            sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def _load_pin() -> tuple[bytes, dict]:
+    """The pin's bytes and document; missing, unreadable or malformed halts at once."""
+    try:
+        raw = read_pin()
+    except FileNotFoundError as exc:
+        raise ContractError(
+            "The bundled APM pin apm-backend.json is missing. Reinstall apmx.",
+            code="apm_backend_identity",
+        ) from exc
+    except OSError as exc:
+        raise ContractError(
+            "The bundled APM pin apm-backend.json could not be read "
+            f"({exc.strerror or type(exc).__name__}). Retry; if this persists, reinstall apmx.",
+            code="apm_backend_identity",
+        ) from exc
+    try:
+        pin = json.loads(raw)
+    except ValueError as exc:
+        raise ContractError(
+            "The bundled APM pin apm-backend.json is malformed. Reinstall apmx.",
+            code="apm_backend_identity",
+        ) from exc
+    if not isinstance(pin, dict):
+        raise ContractError(
+            "The bundled APM pin apm-backend.json is malformed. Reinstall apmx.",
+            code="apm_backend_identity",
+        )
+    return raw, pin
 
 
 def locate_backend() -> Path:
@@ -55,9 +119,8 @@ def locate_backend() -> Path:
 
 
 def backend_identity(executable: Path) -> dict[str, str]:
+    raw, pin = _load_pin()
     try:
-        raw = PIN_PATH.read_bytes()
-        pin = json.loads(raw)
         if (
             pin["schema"] != "apmx-apm-backend/1"
             or pin["repository"] != "microsoft/apm"
@@ -93,8 +156,8 @@ def expected_version_output(target: str | None = None) -> str:
             "amd64": "x86_64",
         }.get(machine)
         target = f"{system}-{architecture}"
+    _, pin = _load_pin()
     try:
-        pin = json.loads(PIN_PATH.read_bytes())
         output = pin["assets"][target]["version_output"]
         consistent = f"Agent Package Manager (APM) CLI version {pin['version']}"
         if target != "windows-x86_64":
@@ -102,7 +165,7 @@ def expected_version_output(target: str | None = None) -> str:
         if output != consistent:
             raise ValueError("Platform version output disagrees with backend identity.")
         return output
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (ValueError, KeyError, TypeError) as exc:
         raise ContractError(
             "The native platform has no pinned APM version identity.",
             code="apm_backend_identity",

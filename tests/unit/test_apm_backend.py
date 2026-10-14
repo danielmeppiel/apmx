@@ -10,6 +10,7 @@ import pytest
 
 from apmx.contracts.events import ApmInstallEvent, ApmOutputEvent
 from apmx.contracts.models import ContractError
+from apmx.install import apm_backend
 
 
 def test_source_backend_requires_absolute_explicit_path(tmp_path, monkeypatch):
@@ -616,3 +617,85 @@ def test_version_output_cannot_disagree_with_record_identity(tmp_path, monkeypat
     monkeypatch.setattr(apm_backend, "PIN_PATH", path)
     with pytest.raises(ContractError, match="no pinned"):
         apm_backend.expected_version_output("windows-x86_64")
+
+
+def _locked_pin(failures: int, error: OSError):
+    """A pin read that fails `failures` times (an AV/indexer lock), then reads the real pin."""
+    from pathlib import Path
+
+    calls = []
+    real = Path.read_bytes
+
+    def read_bytes(path):
+        calls.append(path)
+        if path == apm_backend.PIN_PATH and len(calls) <= failures:
+            raise error
+        return real(path)
+
+    return calls, read_bytes
+
+
+def test_transient_windows_pin_lock_is_retried_then_read(monkeypatch) -> None:
+    from pathlib import Path
+
+    calls, read_bytes = _locked_pin(2, PermissionError(13, "Permission denied"))
+    slept = []
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    assert json.loads(apm_backend.read_pin(windows=True, sleep=slept.append))["schema"]
+    assert len(calls) == 3 and slept == list(apm_backend.PIN_READ_DELAYS[:2])
+    sharing = OSError(22, "The process cannot access the file")
+    sharing.winerror = 32
+    calls, read_bytes = _locked_pin(1, sharing)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    assert apm_backend.read_pin(windows=True, sleep=slept.append).startswith(b"{")
+
+
+def test_exhausted_pin_retries_halt_with_the_original_error(monkeypatch) -> None:
+    from pathlib import Path
+
+    calls, read_bytes = _locked_pin(100, PermissionError(13, "Permission denied"))
+    slept = []
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    with pytest.raises(PermissionError) as raised:
+        apm_backend.read_pin(windows=True, sleep=slept.append)
+    assert raised.value.errno == 13
+    assert len(calls) == len(apm_backend.PIN_READ_DELAYS) + 1
+    assert slept == list(apm_backend.PIN_READ_DELAYS)
+    monkeypatch.setattr(apm_backend, "read_pin", lambda: (_ for _ in ()).throw(raised.value))
+    with pytest.raises(ContractError, match="could not be read .*Retry; if this persists"):
+        apm_backend.expected_version_output("windows-x86_64")
+
+
+def test_pin_locks_are_not_retried_off_windows(monkeypatch) -> None:
+    from pathlib import Path
+
+    calls, read_bytes = _locked_pin(1, PermissionError(13, "Permission denied"))
+    slept = []
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    with pytest.raises(PermissionError):
+        apm_backend.read_pin(windows=False, sleep=slept.append)
+    assert (len(calls), slept) == (1, [])
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [(None, "is missing"), (b"{not json", "is malformed"), (b"[]", "is malformed")],
+)
+def test_missing_or_malformed_pin_halts_at_once_without_retry(
+    tmp_path, monkeypatch, content, message
+) -> None:
+    pin = tmp_path / "apm-backend.json"
+    if content is not None:
+        pin.write_bytes(content)
+    monkeypatch.setattr(apm_backend, "PIN_PATH", pin)
+    monkeypatch.setattr(apm_backend.sys, "platform", "win32")
+    slept = []
+    monkeypatch.setattr(apm_backend.time, "sleep", slept.append)
+    for call in (
+        lambda: apm_backend.expected_version_output("windows-x86_64"),
+        lambda: apm_backend.backend_identity(tmp_path / "apm.exe"),
+    ):
+        with pytest.raises(ContractError, match=message) as raised:
+            call()
+        assert raised.value.code == "apm_backend_identity"
+    assert slept == []
