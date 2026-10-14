@@ -1,4 +1,4 @@
-"""`apmx audit` policy: discovered like `apm audit`, read through an isolated adapter.
+"""`apmx audit` policy: the same apm-policy.yml, with one apmx-owned `factories` section.
 
 Every default and fail-closed case is exercised with an injected APM status
 and policy reader, so no test launches APM or touches the network.
@@ -26,7 +26,7 @@ def _git(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-class Reader(policies.ExtensionReader):
+class Reader(policies.PolicyReader):
     """APM status and policy bytes from dictionaries; records every call."""
 
     def __init__(self, reports: dict, files: dict | None = None) -> None:
@@ -44,52 +44,58 @@ class Reader(policies.ExtensionReader):
         return Path(ref).read_text()
 
 
-def _found(source: str, enforcement: str = "block") -> dict:
-    return {"outcome": "found", "source": source, "enforcement": enforcement}
+def _found(source: str, outcome: str = "found") -> dict:
+    return {"outcome": outcome, "source": source, "enforcement": "warn"}
 
 
 # ------------------------------------------------------------------ parsing
 
+PURL = "pkg:github/acme/style@" + "c" * 40
 
-def test_extension_keys_reads_only_apmx_sections() -> None:
-    keys = policies.extension_keys(
+
+def test_only_the_factories_section_is_read() -> None:
+    keys = policies.document_keys(
         f"""
 name: org
-enforcement: block
+enforcement: warn
 extends: org
 dependencies:
   deny: [acme/compromised-skill]
-mcp:
-  deny: [ignored]
 security:
   integrity:
-    require_hashes: true
     deny_hashes: ["sha256:{DIGEST}"]
 factories:
+  enforcement: warn
   allow: ["acme/checkout-factory@sha256:{DIGEST}", "sha256:{OTHER}", "acme/*"]
   require_signed: true
   signers:
     - workflow: {WORKFLOW}@refs/tags/v1
     - workflow: {WORKFLOW}
+  revoked:
+    - purl: {PURL}
+      bodySha256: {DIGEST}
 """,
         "p",
     )
     assert keys == {
-        "enforcement": "block",
+        "top_enforcement": "warn",
         "extends": "org",
-        "deny_dependencies": ("acme/compromised-skill",),
-        "deny_hashes": (DIGEST,),
+        "present": True,
+        "enforcement": "warn",
         "allow": (("acme/checkout-factory", DIGEST), (None, OTHER)),
         "unpinned": ("acme/*",),
         "require_signed": True,
         "signers": (policies.Signer(WORKFLOW, "refs/tags/v1"), policies.Signer(WORKFLOW)),
+        "revoked": (policies.Revoked(PURL, DIGEST),),
     }
 
 
-def test_null_means_no_opinion_and_empty_means_nothing_allowed() -> None:
-    assert policies.extension_keys("factories:\n  allow: null\n  signers: null\n", "p") == {}
-    keys = policies.extension_keys("factories:\n  allow: []\n  signers: []\n", "p")
-    assert keys == {"allow": (), "unpinned": (), "signers": ()}
+def test_null_means_no_opinion_and_empty_means_none() -> None:
+    keys = policies.document_keys("factories:\n  allow: null\n  signers: null\n", "p")
+    assert keys == {"present": True}
+    keys = policies.document_keys("factories:\n  allow: []\n  signers: []\n", "p")
+    assert keys == {"present": True, "allow": (), "unpinned": (), "signers": ()}
+    assert policies.document_keys("name: apm-only\n", "p") == {}
 
 
 @pytest.mark.parametrize(
@@ -99,42 +105,60 @@ def test_null_means_no_opinion_and_empty_means_nothing_allowed() -> None:
         "factories:\n  allow: ['acme/f@sha256:short']\n",
         f"factories:\n  allow: ['sha256:{DIGEST[:-1]}']\n",
         "factories:\n  require_signed: 'yes'\n",
+        "factories:\n  enforcement: off\n",
         "factories:\n  signers: [{workflow: run.yml}]\n",
         f"factories:\n  signers: [{{workflow: {WORKFLOW}, repo: acme/app}}]\n",
-        "security:\n  integrity:\n    deny_hashes: [deadbeef]\n",
-        "enforcement: strict\n",
+        f"factories:\n  revoked: [{{purl: {PURL}}}]\n",
+        f"factories:\n  revoked: [{{purl: style, bodySha256: {DIGEST}}}]\n",
+        f"factories:\n  revoked: [{{purl: {PURL}, bodySha256: '{DIGEST}\\n'}}]\n",
+        "factories: [allow]\n",
         "- not a mapping\n",
         "name: [\n",
     ],
 )
-def test_ambiguous_policy_is_unloadable_never_narrowed(text: str) -> None:
+def test_ambiguous_factories_rules_are_unloadable_never_narrowed(text: str) -> None:
     with pytest.raises(policies.PolicyError):
-        policies.extension_keys(text, "p")
+        policies.document_keys(text, "p")
 
 
 def test_merge_is_tighten_only_and_order_independent() -> None:
     parent = {
+        "present": True,
+        "enforcement": "warn",
         "allow": ((None, DIGEST), (None, OTHER)),
         "signers": (policies.Signer(WORKFLOW),),
-        "deny_hashes": (DIGEST,),
-        "enforcement": "warn",
+        "revoked": (policies.Revoked(PURL, DIGEST),),
     }
     child = {
+        "present": True,
         "allow": (("acme/f", DIGEST),),
         "require_signed": True,
-        "deny_hashes": (OTHER,),
-        "deny_dependencies": ("acme/x",),
-        "enforcement": "block",
+        "revoked": (policies.Revoked(PURL, OTHER),),
     }
     for order in ([parent, child], [child, parent]):
-        merged = policies.merge(order, source="s", enforcement=None)
+        merged = policies.merge(order, source="s")
         assert merged.allow == (("acme/f", DIGEST),)
         assert merged.signers == (policies.Signer(WORKFLOW),)
-        assert set(merged.deny_hashes) == {DIGEST, OTHER}
-        assert merged.deny_dependencies == ("acme/x",)
+        assert set(merged.revoked) == {
+            policies.Revoked(PURL, DIGEST),
+            policies.Revoked(PURL, OTHER),
+        }
         assert merged.require_signed and merged.enforcement == "block"
-    assert policies.merge([{}], source="s", enforcement=None).enforcement == "warn"
-    assert policies.merge([child], source="s", enforcement="off").enforcement == "off"
+    staged = policies.merge([parent, {"present": True, "enforcement": "warn"}], source="s")
+    assert staged.enforcement == "warn"
+    assert policies.merge([{}], source="s").enforcement == "block"
+
+
+def test_top_level_enforcement_warn_never_softens_factories_rules() -> None:
+    """APM's enforcement: warn is APM's switch; factories rules stay a gate (apm#3195 lesson)."""
+    assert policies.merge(
+        [{"top_enforcement": "warn", "present": True}], source="s"
+    ).enforcement == ("block")
+    assert policies.document_keys("enforcement: off\n", "p") == {"top_enforcement": "off"}
+    off = policies.merge([{"top_enforcement": "off", "present": True}], source="s")
+    assert off.enforcement == "off"
+    tighter = [{"top_enforcement": "off", "present": True}, {"top_enforcement": "block"}]
+    assert policies.merge(tighter, source="s").enforcement == "block"
 
 
 # ------------------------------------------------------------------ discovery
@@ -154,7 +178,7 @@ def test_repository_file_is_loaded_through_apm(tmp_path) -> None:
     reader = Reader({source: _found(f"file:{source}")})
     resolution = policies.resolve(tmp_path, reader=reader)
     assert resolution.status == "found" and resolution.applies
-    assert resolution.detail == "apm-policy.yml (repository)   enforcement block"
+    assert resolution.detail == "apm-policy.yml (repository)   factories enforcement block"
     assert resolution.policy.allow == ((None, DIGEST),)
     assert resolution.apm_source == source
     assert reader.calls[0] == ("status", source)
@@ -170,6 +194,7 @@ def test_apm_0_33_empty_outcome_still_carries_apmx_rules(tmp_path) -> None:
     )
     resolution = policies.resolve(tmp_path, reader=reader)
     assert resolution.status == "found" and resolution.policy.require_signed
+    assert resolution.apm_source is None  # no APM rules: `apm audit` runs with --no-policy
 
 
 @pytest.mark.parametrize("outcome", ["empty", "disabled"])
@@ -179,26 +204,6 @@ def test_empty_or_disabled_policy_is_none_found(tmp_path, outcome) -> None:
     reader = Reader({str(path.resolve()): {"outcome": outcome, "source": f"file:{path}"}})
     resolution = policies.resolve(tmp_path, reader=reader)
     assert (resolution.status, resolution.detail) == ("none", "none found")
-
-
-def test_apm_effective_policy_replaces_the_adapter(tmp_path) -> None:
-    """The seam: once APM returns effective_policy (microsoft/apm#3232), apmx reads no files."""
-    path = tmp_path / "apm-policy.yml"
-    path.write_text("factories:\n  require_sigend: true\n")  # the adapter would reject this
-    source = str(path.resolve())
-    effective = {
-        "enforcement": "block",
-        "factories": {"allow": [f"acme/f@sha256:{DIGEST}"], "require_signed": True},
-        "security": {"integrity": {"deny_hashes": [f"sha256:{OTHER}"]}},
-    }
-    reader = Reader({source: {**_found(f"file:{source}"), "effective_policy": effective}})
-    resolution = policies.resolve(tmp_path, reader=reader)
-    assert resolution.status == "found" and reader.calls == [("status", source)]
-    assert resolution.policy.allow == (("acme/f", DIGEST),) and resolution.policy.require_signed
-    assert resolution.policy.deny_hashes == (OTHER,)
-    assert resolution.facts["policy"]["via"] == "apm"
-    none = Reader({source: {**_found(f"file:{source}"), "effective_policy": None}})
-    assert policies.resolve(tmp_path, reader=none).status == "none"
 
 
 @pytest.mark.parametrize(
@@ -234,7 +239,7 @@ def test_missing_bundled_apm_is_unloadable_not_none(tmp_path) -> None:
     def broken(root, source):
         raise policies.PolicyError("bundled APM unavailable: missing")
 
-    resolution = policies.resolve(tmp_path, reader=policies.ExtensionReader(status=broken))
+    resolution = policies.resolve(tmp_path, reader=policies.PolicyReader(status=broken))
     assert resolution.status == "unloadable" and "bundled APM unavailable" in resolution.detail
 
 
@@ -250,14 +255,14 @@ def test_org_policy_is_discovered_from_the_remote(tmp_path) -> None:
     _git(tmp_path, "remote", "add", "origin", "https://github.com/acme/app.git")
     absent = Reader({None: {"outcome": "absent"}})
     resolution = policies.resolve(tmp_path, reader=absent)
-    assert resolution.status == "none" and "no org policy" in resolution.notes[0]
+    assert resolution.status == "none" and "APM reports absent" in resolution.notes[0]
     found = Reader(
-        {None: _found("org:acme/.github", "warn")},
+        {None: _found("org:acme/.github")},
         {"org:acme/.github": "factories:\n  require_signed: true\n"},
     )
     resolution = policies.resolve(tmp_path, reader=found)
     assert resolution.status == "found"
-    assert resolution.detail == "org:acme/.github (org)   enforcement warn"
+    assert resolution.detail == "org:acme/.github (org)   factories enforcement block"
     assert resolution.policy.require_signed and resolution.apm_source == "org"
     assert resolution.origin == "https://github.com/acme/app.git"
 
@@ -316,7 +321,7 @@ def test_offline_reads_a_local_file_without_apm_and_flags_unresolved_extends(tmp
     path.write_text("factories:\n  require_signed: true\n")
     reader = Reader({})
     resolution = policies.resolve(tmp_path, offline=True, reader=reader)
-    assert resolution.status == "found" and resolution.policy.enforcement == "warn"
+    assert resolution.status == "found" and resolution.policy.enforcement == "block"
     assert all(call[0] == "read" for call in reader.calls)
     path.write_text("extends: org\nenforcement: block\n")
     resolution = policies.resolve(tmp_path, offline=True, reader=reader)
@@ -339,70 +344,41 @@ def test_unsupported_remote_policy_hosts_fail_closed(tmp_path) -> None:
 
 
 def _policy(**kwargs) -> policies.FactoryPolicy:
-    return policies.FactoryPolicy(source="apm-policy.yml", **{"enforcement": "block", **kwargs})
+    return policies.FactoryPolicy(source="apm-policy.yml", present=True, **kwargs)
 
 
-def test_factory_allowlist_follows_enforcement() -> None:
+def test_factory_allowlist_is_a_gate_unless_staged() -> None:
     allowed = _policy(allow=(("acme/f", DIGEST),))
     verdict = policies.evaluate_factory(allowed, DIGEST, "base")
     assert verdict.status == "pass" and "on factories.allow (acme/f)" in verdict.detail
     assert policies.evaluate_factory(allowed, OTHER, "base").status == "fail"
-    warn = _policy(allow=(), enforcement="warn")
-    assert policies.evaluate_factory(warn, OTHER, "base").status == "warn"
+    staged = _policy(allow=(), enforcement="warn")
+    assert policies.evaluate_factory(staged, OTHER, "base").status == "warn"
+    assert policies.evaluate_factory(_policy(), OTHER, "base") == policies.Verdict("pass", "base")
     unpinned = policies.evaluate_factory(_policy(allow=(), unpinned=("acme/*",)), DIGEST, "base")
     assert unpinned.status == "fail" and "allow nothing yet" in unpinned.notes[1]
-    assert policies.evaluate_factory(_policy(), OTHER, "base").status == "pass"
 
 
-def test_revocation_matches_content_wherever_it_was_installed_from() -> None:
-    binding = {
-        "capability": "style",
-        "purl": "pkg:generic/style@x",
-        "bodySha256": DIGEST,
-        "packageHash": f"sha256:{OTHER}",
-        "resources": [],
-    }
-    revoked = _policy(deny_hashes=(DIGEST,))
-    verdict = policies.evaluate_revocation(revoked, [binding], [], {})
+def test_revocation_needs_both_purl_and_body_to_match() -> None:
+    binding = {"capability": "style", "purl": PURL, "bodySha256": DIGEST}
+    revoked = _policy(revoked=(policies.Revoked(PURL, DIGEST),))
+    verdict = policies.evaluate_revocation(revoked, [binding])
     assert verdict.status == "fail" and "capability style is revoked" in verdict.detail
-    package = _policy(deny_hashes=(OTHER,), enforcement="warn")
-    assert policies.evaluate_revocation(package, [binding], [], {}).status == "warn"
-    clean = policies.evaluate_revocation(_policy(deny_hashes=("c" * 64,)), [binding], [], {})
-    assert clean.status == "pass" and clean.detail.startswith("0 of 1")
-    # APM's apm audit --ci checks package hashes itself; apmx then checks bodies only.
-    apm_checked = policies.evaluate_revocation(
-        _policy(deny_hashes=(OTHER,)), [binding], [], {}, packages=False, names=False
-    )
-    assert apm_checked.status == "pass" and "capability bodies" in apm_checked.detail
-    body = policies.evaluate_revocation(revoked, [binding], [], {}, packages=False)
-    assert body.status == "fail"
-
-
-def test_revocation_applies_dependencies_deny_with_apm_globs() -> None:
-    dependency = {"repository": "github.com/acme/compromised-skill", "name": "compromised-skill"}
-    for pattern in ("acme/compromised-skill", "acme/*", "**/compromised-skill"):
-        verdict = policies.evaluate_revocation(
-            _policy(deny_dependencies=(pattern,)), [], [dependency], {}
+    assert f"bodySha256={DIGEST}" in verdict.notes[0]
+    staged = _policy(revoked=(policies.Revoked(PURL, DIGEST),), enforcement="warn")
+    assert policies.evaluate_revocation(staged, [binding]).status == "warn"
+    for other in (policies.Revoked(PURL, OTHER), policies.Revoked("pkg:github/x/y@1", DIGEST)):
+        clean = policies.evaluate_revocation(_policy(revoked=(other,)), [binding])
+        assert (
+            clean.status == "pass"
+            and clean.detail == "0 of 1 capability revoked (1 factories.revoked entry)"
         )
-        assert verdict.status == "fail" and pattern in verdict.detail
-    verdict = policies.evaluate_revocation(
-        _policy(deny_dependencies=("other/*",)), [], [dependency], {}
-    )
-    assert verdict.status == "pass"
-    enforced_by_apm = policies.evaluate_revocation(
-        _policy(deny_dependencies=("acme/*",)), [], [dependency], {}, names=False
-    )
-    assert enforced_by_apm.status == "pass"
-
-
-def test_revocation_checks_cyclonedx_component_hashes() -> None:
-    bom = {"components": [{"name": "c", "hashes": [{"alg": "SHA-256", "content": DIGEST}]}]}
-    verdict = policies.evaluate_revocation(_policy(deny_hashes=(DIGEST,)), [], [], bom)
-    assert verdict.status == "fail" and "component c" in verdict.detail
+    empty = policies.evaluate_revocation(_policy(), [])
+    assert empty.detail == "0 of 0 capabilities revoked; factories.revoked is empty"
 
 
 def test_unsigned_receipts_against_require_signed() -> None:
     assert policies.evaluate_unsigned(_policy()) is None
     assert policies.evaluate_unsigned(_policy(require_signed=True)).status == "fail"
-    warn = _policy(require_signed=True, enforcement="warn")
-    assert policies.evaluate_unsigned(warn).status == "warn"
+    staged = _policy(require_signed=True, enforcement="warn")
+    assert policies.evaluate_unsigned(staged).status == "warn"

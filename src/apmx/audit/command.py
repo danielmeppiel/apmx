@@ -115,10 +115,8 @@ def _policy_row(audit: Audit, resolution: policies.Resolution) -> None:
         audit.incomplete("Policy", detail, notes)
     elif resolution.status == "partial":
         audit.rows["Policy"] = Row("Policy", "warn", detail, notes)
-    elif resolution.status == "none":
+    elif resolution.status == "none" or not resolution.applies:
         audit.rows["Policy"] = Row("Policy", "info", detail, notes)
-    elif resolution.policy is not None and resolution.policy.enforcement == "off":
-        audit.rows["Policy"] = Row("Policy", "info", detail, [*notes, "rules are not applied"])
     else:
         audit.rows["Policy"] = Row("Policy", "pass", detail, notes)
     audit.facts.update(resolution.facts)
@@ -217,29 +215,18 @@ def run_audit(
             audit.fail("Ingredients", _ascii(result.detail), audit.rows["Ingredients"].notes)
         elif result.status == UNAVAILABLE:
             audit.incomplete("Ingredients", _ascii(result.detail), audit.rows["Ingredients"].notes)
-    apm_audit = audit.facts.get("apmAudit")
-    apm_checks = apm_audit.get("checkNames", []) if isinstance(apm_audit, dict) else []
-    apm_policy = isinstance(apm_audit, dict) and apm_audit.get("policy") != "none (--no-policy)"
     if not structural:
         audit.rows["Revocation"] = Row("Revocation", "skipped", "not evaluated (earlier failure)")
     elif rules is None:
         reason = {
             "unloadable": "not evaluated (policy could not be loaded)",
-            "found": "not evaluated (policy enforcement off)",
+            "found": "not evaluated (top-level enforcement: off)",
         }.get(resolution.status, "no policy: nothing revoked to check")
         audit.rows["Revocation"] = Row("Revocation", "info", reason)
+    elif not rules.present:
+        audit.rows["Revocation"] = Row("Revocation", "info", "policy has no factories section")
     else:
-        audit.verdict(
-            "Revocation",
-            policies.evaluate_revocation(
-                rules,
-                list(receipt.bindings),
-                list(receipt.definition.get("resolvedDependencies", [])),
-                receipt.bom,
-                packages="content-hash-denylist" not in apm_checks,
-                names=not apm_policy,
-            ),
-        )
+        audit.verdict("Revocation", policies.evaluate_revocation(rules, list(receipt.bindings)))
     unsigned = policies.evaluate_unsigned(rules) if rules is not None else None
     if unsigned is None:
         audit.rows["Identity"] = Row(
@@ -379,8 +366,8 @@ AUDIT_HELP = (
     "with the PR's change (merge-base..head) bound to its outputs. The policy is "
     "discovered like `apm audit`: --policy, else the repository's apm-policy.yml "
     "(the PR base copy in a PR), else the org policy from the git remote. Its "
-    "factories and security.integrity.deny_hashes sections add the Factory, "
-    "Revocation and Identity rules. No policy is reported, never assumed.\n\n"
+    "`factories` section (apmx's own) adds the Factory, Revocation and Identity "
+    "rules; APM's keys are enforced by APM. No policy is reported, never assumed.\n\n"
     "Ingredients are audited by the bundled pinned APM: the receipt's apm.yml and "
     "apm.lock.yaml are reinstalled with `apm install --frozen` in a temporary project "
     "and checked with `apm audit --ci`.\n\n"

@@ -166,7 +166,9 @@ def test_factory_allowlist_from_the_repository_policy(plain_receipt, tmp_path, m
     result = _audit()
     assert result.exit_code == 0, result.output
     rows = _rows(result.output)
-    assert rows["Policy"] == "[+] Policy        apm-policy.yml (repository)   enforcement block"
+    assert rows["Policy"] == (
+        "[+] Policy        apm-policy.yml (repository)   factories enforcement block"
+    )
     assert f"sha256:{digest[:12]}.. on factories.allow (acme/job)" in rows["Factory"]
     assert calls == [str((work / "apm-policy.yml").resolve())]
     (work / "apm-policy.yml").write_text(
@@ -179,25 +181,32 @@ def test_factory_allowlist_from_the_repository_policy(plain_receipt, tmp_path, m
     assert "not evaluated (receipt invalid" in _rows(result.output)["Ingredients"]
 
 
-def test_require_signed_rejects_unsigned_receipts(plain_receipt, tmp_path, monkeypatch) -> None:
+def test_require_signed_is_a_gate_that_top_level_warn_cannot_soften(
+    plain_receipt, tmp_path, monkeypatch
+) -> None:
     work = _local_policy(
-        tmp_path, monkeypatch, plain_receipt, "factories:\n  require_signed: true\n"
+        tmp_path,
+        monkeypatch,
+        plain_receipt,
+        "enforcement: warn\nfactories:\n  require_signed: true\n",
     )
-    _fake_apm(monkeypatch, enforcement="block")
+    _fake_apm(monkeypatch)
     result = _audit()
     assert result.exit_code == 1, result.output
     assert _rows(result.output)["Identity"].startswith("[x] Identity      unsigned, but")
-    _fake_apm(monkeypatch, enforcement="warn")
+    (work / "apm-policy.yml").write_text(
+        "factories:\n  enforcement: warn\n  require_signed: true\n"
+    )
     result = _audit()
     assert result.exit_code == 0, result.output
     assert _rows(result.output)["Identity"].startswith("[!] Identity      unsigned, but")
-    _fake_apm(monkeypatch, enforcement="off")
+    (work / "apm-policy.yml").write_text("enforcement: off\nfactories:\n  require_signed: true\n")
     result = _audit()
-    assert result.exit_code == 0 and "rules are not applied" in result.output
-    assert _rows(result.output)["Identity"] == (
-        "[!] Identity      unsigned: proves content binding, not who ran it"
-    )
-    del work
+    assert result.exit_code == 0, result.output
+    rows = _rows(result.output)
+    assert rows["Policy"] == "[i] Policy        apm-policy.yml (repository)   factories off"
+    assert "top-level enforcement: off disables factories rules" in result.output
+    assert rows["Identity"] == "[!] Identity      unsigned: proves content binding, not who ran it"
 
 
 def test_unloadable_policy_is_incomplete_never_a_pass(plain_receipt, tmp_path, monkeypatch) -> None:
@@ -220,9 +229,9 @@ def test_the_bundled_apm_resolves_the_policy_file(plain_receipt, tmp_path, monke
         tmp_path,
         monkeypatch,
         plain_receipt,
-        f"name: repo\nversion: '1.0'\nenforcement: block\n"
+        f"name: repo\nversion: '1.0'\n"
         f"factories:\n  allow: ['sha256:{digest}']\n"
-        f"security:\n  integrity:\n    deny_hashes: ['sha256:{'0' * 64}']\n",
+        f"  revoked: [{{purl: 'pkg:github/acme/x@1', bodySha256: '{'0' * 64}'}}]\n",
     )
     result = _audit()
     assert result.exit_code == 0, result.output
@@ -239,13 +248,16 @@ def test_revoked_capability_body_is_rejected_offline(deps_receipt, tmp_path) -> 
     (binding,) = json.loads((deps_receipt / "capability-bindings.json").read_bytes())
     policy = tmp_path / "revoked.yml"
     policy.write_text(
-        "enforcement: block\nsecurity:\n  integrity:\n"
-        f"    deny_hashes: ['sha256:{binding['bodySha256']}']\n"
+        "factories:\n  revoked:\n"
+        f"    - purl: '{binding['purl']}'\n      bodySha256: '{binding['bodySha256']}'\n"
     )
     result = _audit(deps_receipt, "--offline", "--policy", policy)
     assert result.exit_code == 1, result.output
     row = _rows(result.output)["Revocation"]
-    assert row.startswith(f"[x] Revocation    capability {binding['capability']} is revoked")
+    assert (
+        row
+        == f"[x] Revocation    capability {binding['capability']} is revoked (factories.revoked)"
+    )
     assert f"purl={binding['purl']}" in result.output
 
 

@@ -66,70 +66,83 @@ jobs:
       - run: apmx audit
 ```
 
-## Policy: one `apm-policy.yml`, discovered like `apm audit`
+## Policy: one `apm-policy.yml`, one apmx section
 
-apmx has no policy file of its own. APM owns governance, and `apmx audit`
-finds the policy the same way `apm audit` does:
+apmx has no policy file of its own. It reads the same `apm-policy.yml` that
+`apm audit` uses, found the same way:
 
 1. `--policy SOURCE`, if given: `org`, `owner/repo`, an `https://` URL or a file.
 2. `apm-policy.yml` at the repository's Git top level. In a pull request it is
    read from the **PR base commit**, so a PR cannot loosen its own gate. It may
    `extends: org` (or any APM policy source).
-3. The organization policy APM discovers from the `origin` remote
-   (`<org>/.github-private`, `.github`, `.apm`, `_apm`).
+3. The organization policy repository APM discovers from the `origin` remote
+   (`.github-private`, `.github`, `.apm`, `_apm`).
 
-The bundled pinned APM loads and resolves that policy (`apm policy status`)
-and enforces its dependency rules in the Ingredients row. Factory policy is
-a new set of sections in the same file:
+APM keeps owning its own keys: the Ingredients row runs `apm audit --ci
+--policy` with that same policy. apmx owns exactly one top-level section,
+`factories`, and reads it from the raw document itself. It reuses the bundled
+APM only to locate the policy and to learn whether APM can load it
+(`apm policy status --json`); it never reads or reinterprets APM's keys,
+apart from `extends` and a top-level `enforcement: off`.
 
 ```yaml
 # apm-policy.yml (repository or org)
-enforcement: block                       # APM's switch: block | warn (default) | off
+enforcement: block                       # APM's own switch for APM's rules
 dependencies:
-  deny: [acme/compromised-skill]         # existing APM rule, also checked against the receipt
-security:
-  integrity:
-    deny_hashes: ["sha256:dead..."]      # revoke content wherever it was installed from
-factories:
-  allow:                                 # approved factory definitions; null = no opinion, [] = none
+  deny: [acme/compromised-skill]         # APM's rule, enforced in the Ingredients row
+factories:                               # apmx's section
+  allow:                                 # approved definitions; null = no opinion, [] = none
     - "acme/checkout-factory@sha256:0311c27f3d7b..."
   require_signed: true                   # reject receipts that are not signed (see Identity)
   signers:                               # who may sign receipts; null = no opinion, [] = none
     - workflow: acme/factories/.github/workflows/run.yml   # optional @<ref>
+  revoked:                               # capability content revoked by incident response
+    - purl: "pkg:github/acme/style@3f2a..."
+      bodySha256: "dead..."
+  enforcement: block                     # block (default) or warn, for a staged rollout
 ```
 
-A `factories.allow` entry uses the `dependencies.allow` grammar with an
-optional definition pin: `<package pattern>[@sha256:<definition digest>]`.
-The digest is the receipt's `definition.json` SHA-256 (the Factory row and
-`facts.definitionSha256` show it) and is what apmx matches. Receipts do not
-record their factory's package identity yet, so a pinned entry's package is a
-label and an unpinned pattern such as `acme/*` allows nothing; the Factory
-row says so. Enforcement
-follows APM: `block` makes a violation `[x]` (exit 1), `warn` makes it `[!]`
-(still VALID), `off` reports the policy but applies no rules. With `extends`,
-rules merge tighten-only: deny lists are unioned, `require_signed` is true if
-any level sets it, and allow or signer lists keep only entries every level
-allows.
+APM 0.33.0 prints `Unknown top-level policy key: 'factories'`. That warning
+is expected and harmless. APM 0.33.0 also reports a policy whose only section
+is `factories` as `empty`; apmx still applies its rules and runs
+`apm audit` without a policy, because APM has none to enforce.
+
+- `allow`: entries use the `dependencies.allow` grammar with an optional
+  definition pin, `<package pattern>[@sha256:<definition digest>]`. The digest
+  is the receipt's `definition.json` SHA-256 (the Factory row and
+  `facts.definitionSha256` show it), and it is what apmx matches. Receipts do
+  not record their factory's package identity yet, so a pinned entry's
+  package is a label and an unpinned pattern such as `acme/*` allows nothing
+  for now; the Factory row says so.
+- `signers`: `owner/repo/.github/workflows/<file>.yml`, optionally pinned to
+  the signer's ref with `@<ref>` (for example `@refs/tags/v1`).
+- `revoked`: a capability is revoked only when both its `purl` and its
+  `bodySha256` match exactly. The same content stays revoked when it is
+  reinstalled from another path, and a `purl` alone never revokes.
+- **Enforcement:** `factories` rules are gate rules. A violated `allow`,
+  `require_signed` or `revoked` rule is `[x]` and exit 1. APM's top-level
+  `enforcement: warn` does **not** soften them; a policy that cannot be loaded
+  is never treated as a pass either (the
+  [microsoft/apm#3195](https://github.com/microsoft/apm/issues/3195) lesson).
+  `factories.enforcement: warn` makes violations `[!]` for a staged rollout.
+  Only a top-level `enforcement: off` disables them, and the Policy row says
+  `factories off`.
+- **`extends`:** apmx merges its own section across the chain, tighten-only and
+  in any order. `allow` and `signers` keep only the entries every level that
+  sets them allows, `require_signed` is true if any level sets it, `revoked`
+  is the union, and `factories.enforcement` is `warn` only if every level that
+  sets it says `warn`.
 
 | Situation | Result |
 | --- | --- |
-| No policy anywhere (APM outcome `absent`, `no_git_remote`, `empty` or `disabled`) | Structural audit only: `[i] Policy  none found`. Exit 0 if valid. |
-| Policy found | Policy, Factory, Revocation and Identity rules apply at its enforcement level. |
+| No policy anywhere (APM reports `absent`, `no_git_remote` or `disabled`, or an `empty` policy without `factories`) | Structural audit only: `[i] Policy  none found`. Exit 0 if valid. |
+| Policy found | Its `factories` rules apply; APM's rules apply in Ingredients. |
 | Policy found but unloadable (malformed, unreachable `extends`, an unknown `factories` key, a bad digest, or no bundled APM) | `INCOMPLETE`, exit 2. Never a pass. |
-| `require_signed` and an unsigned receipt, `enforcement: block` | Identity `[x]`, exit 1. |
+| `require_signed` and an unsigned receipt | Identity `[x]`, exit 1 (`[!]` with `factories.enforcement: warn`). |
 
-**Interim adapter.** The schema for these sections is defined upstream
-([microsoft/apm#3232](https://github.com/microsoft/apm/pull/3232)), where
-`apm policy status --json` returns the merged `effective_policy`. apmx uses
-that whenever the bundled APM provides it. The bundled APM 0.33.0 does not:
-it warns that `factories` is an unknown key, has no `effective_policy`, and
-reports a policy containing only these sections as `empty`. Until a bundled
-APM includes #3232, apmx reads only these keys (plus `dependencies.deny`,
-`enforcement` and `extends`) from the exact files APM resolved, through one
-isolated module (`src/apmx/audit/policy.py`), and merges `extends`
-tighten-only. Remote policies are read from `github.com` repositories and
-`https://` URLs. It never reads a second policy file. The swap is covered by a
-test, and the rows do not change.
+Remote policies and `extends` parents are read from `github.com` repositories
+(GitHub contents API with your `GITHUB_APM_PAT`, `GITHUB_TOKEN` or `GH_TOKEN`)
+and `https://` URLs. Any other host is unloadable (exit 2).
 
 ## Command
 
@@ -156,8 +169,8 @@ is still the run shorthand. To run a local directory named `audit`, write
 
 | Code | Meaning |
 | --- | --- |
-| 0 | VALID: every row passed. Warnings (`--offline`, `enforcement: warn`, an unsigned receipt without `require_signed`) still count as valid. |
-| 1 | INVALID: a structural row failed, outputs differ, the PR changes files the receipt does not bind, reinstalled ingredients differ, `apm audit --ci` failed, or a blocking policy rule (allowlist, revocation, `require_signed`) rejected the receipt. |
+| 0 | VALID: every row passed. Warnings (`--offline`, `factories.enforcement: warn`, an unsigned receipt without `require_signed`) still count as valid. |
+| 1 | INVALID: a structural row failed, outputs differ, the PR changes files the receipt does not bind, reinstalled ingredients differ, `apm audit --ci` failed, or a `factories` rule (allowlist, revocation, `require_signed`) rejected the receipt. |
 | 2 | Not a pass: usage error, missing or ambiguous receipt, a PR change that could not be read, a policy that could not be loaded, or ingredients that could not be audited (network or authentication). Rerun with access, or use `--offline` to skip the network explicitly. |
 
 The final line is `VALID`, `INVALID <first reason>` or `INCOMPLETE <reason>`.
@@ -172,15 +185,15 @@ never launched for a receipt that is already invalid.
 
 | Row | What it checks |
 | --- | --- |
-| Policy | Which policy applies, from where, and its enforcement; `none found` is reported, never assumed. |
+| Policy | Which policy applies, from where, and the `factories` enforcement; `none found` is reported, never assumed. |
 | Integrity | Every file matches `index.json` (SHA-256 and size). There are no unindexed files or symlinks, and every descriptor resolves inside the receipt. |
 | Standards | Every statement is an in-toto Statement v1, validated with the upstream in-toto protobuf bindings. Production predicates are SLSA Provenance v1 and check predicates are in-toto Test Result. `abom.cdx.json` is valid against the pinned CycloneDX 1.5 JSON Schema. |
 | Factory | The `definition.json` digest; producer statements agree with the definition (build type, builder, contract digest, checks, outputs, checker resources, capability bodies); capability bindings agree with the CycloneDX inventory. With `factories.allow`, the digest must be on the list. |
 | Checks | Every recorded check invocation has exactly one test-result statement with consistent configuration, subjects and reports. Every check of a completed attempt passed. |
 | Ingredients | Dependency trust, delegated to APM (see below). |
-| Revocation | No selected capability's body or resource hash (`purl` + `bodySha256`, recorded only in the receipt) is in `security.integrity.deny_hashes`. Package hashes and `dependencies.deny` (APM's `*` and `**` globs) are APM's checks inside Ingredients; apmx applies them here only when APM did not (`--offline`, or an APM without `deny_hashes`), so a finding is never reported twice. |
+| Revocation | No selected capability matches a `factories.revoked` entry (exact `purl` and `bodySha256`, which only the receipt records). Package-level rules such as `dependencies.deny` stay APM's, in the Ingredients row. |
 | Outputs | The aggregate and per-attempt production subjects bind exactly the delivered artifacts. In a PR, the change is bound; with `--outputs`, the delivered files are re-hashed. |
-| Identity | `[!] unsigned` today: receipts prove content binding, not who ran it. With `factories.require_signed`, an unsigned receipt is rejected at the policy's enforcement level. |
+| Identity | `[!] unsigned` today: receipts prove content binding, not who ran it. With `factories.require_signed`, an unsigned receipt is rejected. |
 
 The CycloneDX schemas (`bom-1.5`, `spdx`, `jsf-0.82`, pinned by SHA-256 at the
 upstream commit noted in `NOTICE`) ship inside apmx. Structural audit

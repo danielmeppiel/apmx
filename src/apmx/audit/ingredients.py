@@ -374,7 +374,6 @@ def audit_ingredients(
                 "passed": bool(passed) and code == 0,
                 "policy": policy or "none (--no-policy)",
                 "checks": len(checks),
-                "checkNames": sorted(names),
                 "failing": failing,
             }
             if code != 0 or not passed or failing:

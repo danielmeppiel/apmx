@@ -10,16 +10,16 @@
   receipt output (or an unchanged recorded input) with the same SHA-256 at
   head. `RECEIPT_DIR`, `--outputs`, `--policy` and `--offline` are overrides;
   `--format sarif` emits SARIF 2.1.0.
-- `apmx audit` discovers `apm-policy.yml` like `apm audit` (repository file,
-  read from the PR base in a PR, then the org policy) through the bundled APM.
-  New `factories` (`allow`, `require_signed`, `signers`) and
-  `security.integrity.deny_hashes` sections add a factory allowlist, a
-  Revocation row (also applying `dependencies.deny` to the receipt) and an
-  unsigned-receipt rule. No policy is reported as `[i] Policy  none found`; a
-  policy that cannot be loaded is INCOMPLETE (exit 2). apmx takes APM's
-  `effective_policy` (microsoft/apm#3232) when the bundled APM provides it;
-  APM 0.33.0 does not, so until then apmx reads only these keys from the
-  files APM resolved.
+- `apmx audit` reads the same `apm-policy.yml` as `apm audit`, found the same
+  way (repository file, read from the PR base in a PR, then the org policy,
+  following `extends`). apmx owns one top-level section, `factories`
+  (`allow`, `require_signed`, `signers`, `revoked`, `enforcement`), merged
+  tighten-only across `extends`. It adds a factory allowlist, a Revocation row
+  for capability content (`purl` + `bodySha256`) and an unsigned-receipt rule.
+  These are gate rules (exit 1) unless `factories.enforcement: warn`; APM's
+  top-level `enforcement: warn` does not soften them. No policy is reported as
+  `[i] Policy  none found`; a policy that cannot be loaded is INCOMPLETE
+  (exit 2). APM's own keys stay APM's, enforced in the Ingredients row.
 - `apmx audit <receipt-dir>` verifies a receipt row by row: integrity
   (SHA-256 index), standards (in-toto Statement v1, SLSA Provenance v1,
   CycloneDX 1.5), factory, checks, outputs (`--outputs` re-hashes delivered
