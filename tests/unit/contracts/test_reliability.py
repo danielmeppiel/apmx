@@ -644,3 +644,29 @@ def test_post_replace_directory_sync_failure_cannot_leave_verified_record(
     assert visible["phase"] == "finalization_failed"
     assert visible["result"]["outcome"]["name"] == "HALTED"
     assert visible["result"]["stop_reason"] == "finalization_failure"
+
+
+def test_local_git_never_starts_auto_maintenance_or_gc(tmp_path: Path) -> None:
+    """A captured .git is copied right after commit; background gc must not mutate it.
+
+    Repository config forces synchronous auto-gc at a one-object threshold, so a
+    commit would pack and prune loose objects if apmx did not disable it.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    process.local_git(root, "init", "--quiet")
+    with (root / ".git" / "config").open("a", encoding="ascii") as config:
+        config.write(
+            "[gc]\n\tauto = 1\n\tautoPackLimit = 1\n\tautoDetach = false\n"
+            "[maintenance]\n\tauto = true\n\tautoDetach = false\n"
+        )
+    for index in range(5):
+        (root / f"file{index}.txt").write_text(f"content {index}\n", encoding="ascii")
+        process.local_git(root, "add", "--all")
+        process.local_git(root, "commit", "--quiet", "-m", f"commit {index}")
+    assert process.local_git(root, "config", "--get", "maintenance.auto") == b"false\n"
+    assert process.local_git(root, "config", "--get", "gc.auto") == b"0\n"
+    objects = root / ".git" / "objects"
+    assert not list((objects / "pack").glob("*.pack"))
+    assert not (objects / "maintenance.lock").exists()
+    assert len([p for p in objects.iterdir() if len(p.name) == 2]) >= 5

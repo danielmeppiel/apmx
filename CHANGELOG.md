@@ -73,6 +73,11 @@
 
 ### Fixed
 
+- apmx's internal Git operations no longer start Git's automatic
+  maintenance or gc. A commit could launch a detached background job that
+  changed the captured `.git` (for example `objects/maintenance.lock`) while
+  apmx copied it, halting the run with exit 22; on large projects it could also
+  repack the baseline mid-copy and outlive the supervised process group.
 - Ctrl+C during a POSIX agent run is a cooperative stop request. An interrupt
   inside `Popen.poll()` no longer leaves apmx blind to the agent's exit and
   records `cleanup_confirmed: false` after the full cleanup window; an

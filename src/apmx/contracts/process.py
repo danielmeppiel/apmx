@@ -347,6 +347,13 @@ def local_git(
                 "core.autocrlf=false",
                 "-c",
                 "core.fsmonitor=false",
+                # Commits would otherwise start detached auto-maintenance/gc that
+                # mutates .git (e.g. objects/maintenance.lock) while it is copied,
+                # and that outlives this supervised process group.
+                "-c",
+                "maintenance.auto=false",
+                "-c",
+                "gc.auto=0",
                 "-c",
                 "user.name=APM captured baseline",
                 "-c",
