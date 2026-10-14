@@ -137,6 +137,13 @@ def test_no_attestation_is_unsigned_and_errors_are_unavailable(plain_receipt) ->
     assert no_repo.status == "unavailable" and "no repository" in no_repo.notes[0]
 
 
+def test_a_signer_repo_names_where_the_factory_ran(plain_receipt) -> None:
+    gh = Gh((0, _attestation(plain_receipt), b""))
+    result = _verify(plain_receipt, gh, (policy.Signer(WORKFLOW, None, "acme/factories"),))
+    assert result.status == "signed"
+    assert gh.calls[0][gh.calls[0].index("--repo") + 1] == "acme/factories"
+
+
 def test_each_signer_is_tried_until_one_verifies(plain_receipt) -> None:
     other = policy.Signer("acme/other/.github/workflows/x.yml")
     gh = Gh((1, b"", b"no attestations found"), (0, _attestation(plain_receipt), b""))

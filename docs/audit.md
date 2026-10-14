@@ -247,9 +247,11 @@ https://token.actions.githubusercontent.com --deny-self-hosted-runners`. It
 then re-checks the verified statement itself: the subject and predicate name
 this receipt's digest and definition, the certificate's signer is that
 workflow (at the entry's `@<ref>`, if pinned), and the runner was
-GitHub-hosted. Attestations are looked up in the repository being audited
-(`GITHUB_REPOSITORY`, or the `origin` remote), which is where a reusable
-`run.yml` called from that repository stores them. `gh` needs a token
+GitHub-hosted. Attestations are looked up in the signer's `repo`, the
+repository the factory ran in, which is where a reusable `run.yml` called from
+it stores them; `gh attestation verify --repo` also pins that source
+repository. Without `repo`, the repository being audited (`GITHUB_REPOSITORY`,
+or the `origin` remote) is used. `gh` needs a token
 (`GH_TOKEN: ${{ github.token }}` in Actions).
 
 | Attestation | Identity row | With `require_signed` |

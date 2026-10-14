@@ -124,7 +124,7 @@ def verify(
     unavailable: list[str] = []
     mismatches: list[str] = []
     for signer in signers:
-        repo = default_repository
+        repo = signer.repo or default_repository
         if repo is None:
             unavailable.append(f"{signer.workflow}: no repository to look up attestations in")
             continue
