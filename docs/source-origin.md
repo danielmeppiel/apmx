@@ -237,7 +237,7 @@ hashes still describe the actual installed tree.
 Selected skills enter `.agents/skills/<skill-name>/` in the actual
 producer workspace, with their original `SKILL.md` bytes and supporting files.
 Copilot discovers and loads them natively; their bodies are not embedded in the
-contract prompt. The development [OpenCode profile](opencode.md) supplies that
+contract prompt. The [OpenCode profile](opencode.md) supplies that
 same captured tree through native `skills.paths`, permitting only selected
 skill names. Instruction-type imports remain passive context beneath
 `_apmx_context/import-N/`. The destination/name authority is
@@ -320,8 +320,8 @@ Host-access-only keeps the strict handoff policy; it does not grant an additiona
 permission. Existing single-contract consent behavior is unchanged.
 
 The local exception never changes a leaf outcome or certifies native isolation.
-Current v0.4.2 source and downloads separate COMPLETE/0 execution from unproven
-native assurance; historical v0.3.2 and the source pin keep their UNPROVEN/21
+Current v0.5.0 source and downloads separate COMPLETE/0 execution from unproven
+native assurance; historical v0.3.2 and the `be9c5be` source pin keep their UNPROVEN/21
 outcomes. See [record-version migration](results.md). Every required check must
 pass on the retained subject; missing output, undecided checks, rejection,
 changed bytes and failed cleanup still block dependent execution.
@@ -382,7 +382,7 @@ and resource discovery compatibility.
 Runs deliberately remain under the **caller's** `.apm/runs/<fresh-run-id>/`.
 This is local evidence compatibility, distinct from APM's normal user configuration.
 Historical single-file results retain `apm-contract-run/0.1`; historical
-multiple-artifact results retain `apm-contract-run/0.2`. Current v0.4.2 source
+multiple-artifact results retain `apm-contract-run/0.2`. Current v0.5.0 source
 and downloads use leaf schema `apm-contract-run/0.3` for both and factory schema
 `apmx-contract-chain/0.2`, with separate execution and assurance fields.
 An `artifact.files` inventory and aggregate digest describe a multi-file delivery.

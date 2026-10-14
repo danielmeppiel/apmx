@@ -67,7 +67,7 @@ apmx handoff.contract.md --on copilot --allow-host-access
 This preserves your configured Copilot model and may incur usage charges.
 Use `--model MODEL` only if you want to select a model explicitly.
 
-With current v0.4.2 source and downloads, the important result lines from a
+With current v0.5.0 source and downloads, the important result lines from a
 completed run look like this. Output is abbreviated and `<run-id>` is a
 placeholder:
 
@@ -93,8 +93,8 @@ The checker validates the JSON format and confirms there is one entry for
 each source ID. It does not establish that every summary is factually correct.
 Read the summaries and cautions yourself.
 
-**Historical v0.3.2 downloads and the source pin still exit 21 even with passing
-checks.** Current v0.4.2 source and downloads exit 0 only after complete
+**Historical v0.3.2 downloads and the earlier `be9c5be` source pin still exit 21 even with passing
+checks.** Current v0.5.0 source and downloads exit 0 only after complete
 evidence finalization. Neither result means sandboxing. Missing output or
 incomplete checks still produce nonzero results. Read the check results and versioned record.
 See [result meanings](../README.md#read-outcomes-literally) for other outcomes.

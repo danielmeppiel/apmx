@@ -17,12 +17,13 @@ For a presentation with short commands and repeatable resets, use the
 consumers, uses a native APMX bundle and preserves earlier runs when resetting.
 The source-development setup below remains available.
 
-This is the **development five-stage example**. It requires the corresponding
-APMX source checkout with implicit project capture, backend provisioning and
-the `factory` extra. Existing v0.4.2 downloads and historical recordings below
-contain the older four-stage example, not this implementation.
-Use the [source environment instructions](../../../docs/install.md#run-the-current-source-checkout)
-with this development checkout selected; do not replace it with an older
+This is the **five-stage example** released with v0.5.0. It requires APMX
+v0.5.0 or later with implicit project capture: a native v0.5.0 bundle through
+the demo kit, or the corresponding source checkout with backend provisioning
+and the `factory` extra. Existing v0.4.2 downloads and historical recordings
+below contain the older four-stage example, not this implementation.
+For the source route, use the [source environment instructions](../../../docs/install.md#run-the-current-source-checkout)
+with this checkout selected; do not replace it with an older
 pinned checkout. The native harness and checker tools are separate prerequisites.
 
 This directory is the unpublished `checkout-factory` **0.1.0-dev** APM source
@@ -50,7 +51,10 @@ git --version
 copilot --version
 ```
 
-Both APMX and Python must come from the development checkout's `.venv/bin/`.
+Both APMX and Python must come from the source checkout's `.venv/bin/`.
+With a [native installation](../../../docs/install.md#example-tools-for-a-native-installation),
+APMX comes from `$APMX_NATIVE_ROOT` and Python from the checks-only environment
+instead; use `"$APMX_NATIVE_ROOT/libexec/apm/apm"` for the APM install step below.
 Behave must report `1.3.3`. The commands below demonstrate Copilot, which must be installed
 and authenticated through its own CLI; a version response does not establish
 login. Stop on any missing tool.
@@ -88,7 +92,7 @@ APMX invocation. Never set it globally to bypass check execution.
 ### Windows
 
 Complete the [Windows source environment setup](../../../docs/install.md#windows-source-installation)
-for this development checkout.
+for this source checkout.
 In that same PowerShell session, make a new caller and adjust only the disposable
 contract copies to use `python` from the selected checker environment
 (`.venv\Scripts` for this source installation).
@@ -566,10 +570,10 @@ rejects both even when generated tests make no useful assertion.
 
 The observed run above supplements the deterministic suite; neither is
 production certification or permission to merge/deploy. Historical v0.3.2
-binaries, the pinned source and historical observation remain **UNPROVEN / 21**.
-The released v0.4.2 example returns **COMPLETE / 0** only after all four
+binaries, the earlier `be9c5be` source pin and historical observation remain **UNPROVEN / 21**.
+The v0.4.2 four-stage example returns **COMPLETE / 0** only after all four
 contracts, six checks and five artifacts have complete validated, finalized
-evidence. This development example requires five stages, nine checks and seven
+evidence. This v0.5.0 example requires five stages, nine checks and seven
 artifacts instead. Neither result establishes authenticated provenance or
 enterprise governed execution.
 Exit `21` still means noncomplete work or refused admission; inspect the
