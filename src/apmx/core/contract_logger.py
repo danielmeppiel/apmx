@@ -1957,7 +1957,7 @@ class ContractLogger:
 
     @staticmethod
     def _harness_label(name: str) -> str:
-        return {"copilot": "Copilot", "opencode": "OpenCode"}.get(name, name)
+        return {"copilot": "Copilot", "opencode": "OpenCode", "replay": "Replay"}.get(name, name)
 
     @staticmethod
     def _attempts_text(budget: RepairBudget | None) -> str:

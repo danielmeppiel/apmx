@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import stat
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -394,7 +395,8 @@ def plan_contract(
         )
     if model is not None and (not isinstance(model, str) or not model.strip() or "\0" in model):
         raise ContractError("Model must be a nonempty native model identifier.")
-    binary = find_runtime_binary(descriptor.binary)
+    # The replay producer (`apmx check`) is apmx itself, never a binary found on PATH.
+    binary = sys.executable if harness == "replay" else find_runtime_binary(descriptor.binary)
     if binary is None:
         raise ContractError(
             "The selected native runtime executable is missing.", code="runtime_missing"

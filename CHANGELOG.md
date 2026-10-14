@@ -4,6 +4,13 @@
 
 ### Added
 
+- `apmx check PRODUCER_RECEIPT [FACTORY]` re-checks a producer's outputs where
+  no agent ran: only the output bytes are replayed (harness `replay`), the
+  factory's own checks rerun, and a new receipt of record is written; a
+  different factory definition withdraws it. `check` is now a reserved word.
+- `.github/workflows/run.yml` runs a factory in CI as three jobs: produce
+  (agent, read-only), check (`apmx check`, no agent) and attest (OIDC, no
+  candidate code). A self-test drives it end to end with the hermetic actor.
 - `apmx audit` verifies signed receipts. With `factories.signers`, the Identity
   row finds the receipt's GitHub artifact attestation by its `index.json`
   digest and verifies it with `gh attestation verify` against those workflows,

@@ -1,0 +1,257 @@
+name: apmx run
+
+# Run a factory in CI and sign its receipt, with the agent kept away from the
+# checks of record and from the signing identity:
+#
+#   produce  the agent runs (`apmx FACTORY`). No id-token, read-only token.
+#            Its own checks are only a fast fail; its receipt is untrusted.
+#   check    a fresh runner, no agent: `apmx check` replays only the output
+#            bytes into this commit's factory, reruns its checks and writes the
+#            receipt of record (harness "replay").
+#   attest   id-token + attestations: write, no caller checkout, no candidate
+#            code: `apmx audit --offline`, then a GitHub artifact attestation
+#            over the receipt's index.json.
+#
+# Caller:
+#   jobs:
+#     factory:
+#       uses: danielmeppiel/apmx/.github/workflows/run.yml@<sha>
+#       with: { factory: path/to/factory }
+#       permissions: { contents: read, id-token: write, attestations: write }
+#       secrets: { agent-token: ${{ secrets.COPILOT_TOKEN }} }
+
+on:
+  workflow_call:
+    inputs:
+      factory:
+        description: Factory directory in the caller's repository.
+        type: string
+        default: "."
+      harness:
+        description: Agent CLI (copilot or opencode); it must be installable on ubuntu-24.04.
+        type: string
+        default: copilot
+      model:
+        description: Model passed to the agent CLI; empty for its default.
+        type: string
+        default: ""
+      apmx-version:
+        description: apmx release to install, or "source" to build apmx-ref (apmx's own CI).
+        type: string
+        default: "0.5.0"
+      apmx-ref:
+        description: Ref of danielmeppiel/apmx providing the setup and attest actions.
+        type: string
+        default: main
+      attest:
+        description: Sign the receipt of record. Needs id-token and attestations write.
+        type: boolean
+        default: true
+      hermetic-actor:
+        description: apmx CI only. Replace the agent CLI with the hermetic protocol fixture.
+        type: boolean
+        default: false
+    secrets:
+      agent-token:
+        description: Token for the agent CLI (COPILOT_GITHUB_TOKEN). Seen only by the produce job.
+        required: false
+    outputs:
+      definition-sha256:
+        description: Factory definition digest of the receipt of record.
+        value: ${{ jobs.check.outputs.definition }}
+      receipt-sha256:
+        description: SHA-256 of the signed receipt index.json.
+        value: ${{ jobs.attest.outputs.receipt }}
+      attestation-url:
+        description: URL of the receipt attestation.
+        value: ${{ jobs.attest.outputs.url }}
+
+permissions: {}
+
+jobs:
+  produce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: caller
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: danielmeppiel/apmx
+          ref: ${{ inputs.apmx-ref }}
+          path: apmx
+          persist-credentials: false
+      - if: inputs.apmx-version != 'source'
+        uses: ./apmx/.github/actions/setup
+        with:
+          version: ${{ inputs.apmx-version }}
+      - if: inputs.apmx-version == 'source'
+        uses: ./apmx/.github/actions/setup-from-source
+        with:
+          path: apmx
+      - name: Hermetic agent (no model calls)
+        if: inputs.hermetic-actor
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent"
+          printf '#!/bin/sh\nexec python3 "%s" "$@"\n' \
+            "$GITHUB_WORKSPACE/apmx/scripts/fixtures/copilot_actor.py" > "$RUNNER_TEMP/agent/copilot"
+          chmod +x "$RUNNER_TEMP/agent/copilot"
+          echo "$RUNNER_TEMP/agent" >> "$GITHUB_PATH"
+          {
+            echo "APMX_ACTOR_LOG=$RUNNER_TEMP/actor.jsonl"
+            echo "APMX_ACTOR_MODE=pass"
+          } >> "$GITHUB_ENV"
+      - name: Install the Copilot CLI
+        if: ${{ !inputs.hermetic-actor && inputs.harness == 'copilot' }}
+        run: npm install --global --no-fund --no-audit @github/copilot
+      - name: Run the factory (agent; untrusted outputs)
+        working-directory: caller
+        env:
+          FACTORY: ${{ inputs.factory }}
+          HARNESS: ${{ inputs.harness }}
+          MODEL: ${{ inputs.model }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.agent-token }}
+        run: |
+          args=("$FACTORY" --on "$HARNESS" --allow-host-access --allow-unproven-inputs)
+          if [[ -n "$MODEL" ]]; then args+=(--model "$MODEL"); fi
+          apmx "${args[@]}"
+      - name: Collect the producer receipt
+        env:
+          FACTORY: caller/${{ inputs.factory }}
+        run: |
+          python3 - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          found = sorted(Path(os.environ["FACTORY"], ".apm").glob("*/*/receipt/index.json"),
+                         key=lambda p: p.parent.parent.name)
+          if not found:
+              raise SystemExit("The factory run delivered no receipt")
+          shutil.copytree(found[-1].parent, Path(os.environ["RUNNER_TEMP"]) / "producer-receipt")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apmx-producer-receipt
+          path: ${{ runner.temp }}/producer-receipt
+          if-no-files-found: error
+          retention-days: 7
+
+  check:
+    needs: produce
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      definition: ${{ steps.record.outputs.definition }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: caller
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: danielmeppiel/apmx
+          ref: ${{ inputs.apmx-ref }}
+          path: apmx
+          persist-credentials: false
+      - if: inputs.apmx-version != 'source'
+        uses: ./apmx/.github/actions/setup
+        with:
+          version: ${{ inputs.apmx-version }}
+      - if: inputs.apmx-version == 'source'
+        uses: ./apmx/.github/actions/setup-from-source
+        with:
+          path: apmx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apmx-producer-receipt
+          path: ${{ runner.temp }}/producer-receipt
+      - name: Re-check the outputs here (no agent) and write the receipt of record
+        run: apmx check "$RUNNER_TEMP/producer-receipt" "caller/$FACTORY"
+        env:
+          FACTORY: ${{ inputs.factory }}
+      - id: record
+        name: Package the receipt of record and a delivery overlay
+        env:
+          FACTORY: ${{ inputs.factory }}
+        run: |
+          python3 - <<'PY'
+          import json, os, shutil
+          from pathlib import Path, PurePosixPath
+          factory = Path("caller", os.environ["FACTORY"])
+          temp = Path(os.environ["RUNNER_TEMP"])
+          (index,) = [p for p in factory.glob(".apm/*/*/receipt/index.json")]
+          receipt = index.parent
+          shutil.copytree(receipt, temp / "receipt")
+          data = json.loads(index.read_bytes())
+          root = temp / "delivery" / PurePosixPath(os.environ["FACTORY"])
+          shutil.copytree(receipt, root / receipt.relative_to(factory))
+          for attempt in data["attempts"]:
+              if attempt["selected"]:
+                  prefix = f"attempts/{attempt['runId']}/artifacts/"
+                  for name in data["files"]:
+                      if name.startswith(prefix):
+                          target = root / name[len(prefix):]
+                          target.parent.mkdir(parents=True, exist_ok=True)
+                          shutil.copyfile(receipt / name, target)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"definition={data['definition']['digest']['sha256']}\n")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apmx-receipt
+          path: ${{ runner.temp }}/receipt
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apmx-delivery
+          path: ${{ runner.temp }}/delivery
+          include-hidden-files: true
+          if-no-files-found: error
+
+  attest:
+    needs: check
+    if: inputs.attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      receipt: ${{ steps.attest.outputs.receipt-sha256 }}
+      url: ${{ steps.attest.outputs.attestation-url }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: danielmeppiel/apmx
+          ref: ${{ inputs.apmx-ref }}
+          path: apmx
+          persist-credentials: false
+      - if: inputs.apmx-version != 'source'
+        uses: ./apmx/.github/actions/setup
+        with:
+          version: ${{ inputs.apmx-version }}
+      - if: inputs.apmx-version == 'source'
+        uses: ./apmx/.github/actions/setup-from-source
+        with:
+          path: apmx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apmx-receipt
+          path: ${{ runner.temp }}/receipt
+      - id: attest
+        uses: ./apmx/.github/actions/attest
+        with:
+          receipt: ${{ runner.temp }}/receipt
+          checks: separate-job
