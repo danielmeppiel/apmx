@@ -178,7 +178,7 @@ def test_package_apm_preparation_is_visible_and_retained(caller, tmp_path, produ
     assert "APM (untrusted) > [*] Installed 2 APM dependencies" in transcript
     for output in (result.output, transcript):
         phases = [
-            "Installing packages with APM 0.30.0",
+            "Installing packages with APM 0.33.0",
             "Packages ready.",
             "Imported style",
             "Running Copilot" if verbose or output is transcript else "attempt 1/1",
@@ -240,7 +240,7 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
             *(["--verbose"] if verbose else []),
         ],
     )
-    # APM 0.30.0 inventories this direct+transitive local skill twice with one bom-ref.
+    # APM (0.30.0-0.33.0) inventories this direct+transitive local skill twice with one bom-ref.
     assert result.exit_code == (23 if packaged else Outcome.COMPLETE), result.output
     if packaged:
         assert "duplicate component identities" in result.output
@@ -262,9 +262,9 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
     transcript = next((caller / ".apm/runs").glob("*/transcript.log")).read_text()
     for output in (result.output, transcript):
         started = (
-            "Installing packages with APM 0.30.0"
+            "Installing packages with APM 0.33.0"
             if packaged
-            else "Installing project imports with APM 0.30.0"
+            else "Installing project imports with APM 0.33.0"
         )
         completed = "Packages ready." if packaged else "Project imports ready."
         assert output.count(started) == output.count(completed) == 1

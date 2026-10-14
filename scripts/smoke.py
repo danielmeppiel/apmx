@@ -538,7 +538,7 @@ def prepare_consumer_lock(
     manifest.write_text(
         text.replace(
             "    - path: ./skills/release-style\n",
-            f"    - git: {url}\n      ref: publisher-version-does-not-exist\n",
+            f"    - git: {url}\n      ref: {revision}\n",
         ),
         encoding="utf-8",
     )

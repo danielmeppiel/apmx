@@ -505,7 +505,7 @@ single-contract runner, not this factory.
 The historical hold concerns redistributed native bundles, not the APMX source license.
 The source's Apache-2.0 terms and retained upstream MIT notices are unchanged.
 Source installation still provisions the complete, checksum-verified
-**official APM 0.30.0** backend from its upstream release; that acquisition is
+**official APM 0.33.0** backend from its upstream release; that acquisition is
 separate from the withheld APMX archives.
 
 ## Migrating from v0.2.0 to v0.3.0

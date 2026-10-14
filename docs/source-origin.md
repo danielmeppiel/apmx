@@ -38,8 +38,8 @@ APMX is an independent project, not an official Microsoft or GitHub release.
 ## Deliberate standalone seams
 
 The `apm experimental enable contracts` prerequisite is removed. Starting with
-0.2.0, release archives bundle the official APM 0.30.0 native distribution,
-source commit `8c2e0d9c352e2ed0e8c56b40063a63e1dd4a1937`, beneath
+0.2.0, release archives bundle the pinned official APM native distribution
+(currently 0.33.0, source commit `18c4c43c924ceae890fe0f2038806690e5b2d6c8`) beneath
 `libexec/apm/` with its own intact `_internal`. The outer executable never looks
 for APM on PATH. No separate APM installation or experimental activation is
 required. Manifests and public lock inventory retain their APM formats.
@@ -70,8 +70,10 @@ disabling hooks, filesystem monitors, and signing.
 When adding a not-yet-declared contract, its declaration is appended to that
 owned consumer manifest before full native resolution. Existing pins are retained
 and compared after installation; the publisher's graph is never first resolved
-as an independent consumer. This also lets APM choose a locked consumer version
-when the publisher's requested version is unavailable.
+as an independent consumer. APM verifies every immutable requirement in the
+graph ([microsoft/apm#3061](https://github.com/microsoft/apm/pull/3061)), so a
+publisher ref that is unavailable or incompatible with a consumer pin fails
+preparation before any producer launches; the consumer's files are unchanged.
 There is no copied credential policy, HOME rewriting, profile copying, installer
 access from the producer, or automatic model retry.
 
@@ -87,7 +89,7 @@ Dependency preparation has its own durable, apmx-owned APM lifecycle messages,
 separate from `Preparing files for Copilot` and `Running Copilot`. For example:
 
 ```text
-  [>] Installing packages with APM 0.30.0
+  [>] Installing packages with APM 0.33.0
   Temporary workspace; your project files are unchanged.
   APM > [>] Resolving ./skills/handoff-style...
   [+] Packages ready.
@@ -217,11 +219,11 @@ subdirectory. Checks are captured at `checks/` in private workspaces, never
 copied into or taken from an overlapping consumer resource directory.
 
 These development source routes do not establish archive distribution.
-The pinned APM 0.30.0 backend does not preserve the approved independent
+The pinned APM 0.33.0 backend does not preserve the approved independent
 contract/check trees through its archive routes. Source support must not be
 advertised as a released, archive-installable factory.
 
-APM 0.30 adds cache-pin metadata after recording remote package hashes. For
+APM (0.30 through the pinned 0.33.0) adds cache-pin metadata after recording remote package hashes. For
 overlapping virtual packages, a child's `.apm-pin` can consequently change its
 parent's installed tree. Verification first requires the ordinary canonical
 package hash. Only on a mismatch may it omit exact, schema-and-commit-validated

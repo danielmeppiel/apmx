@@ -30,6 +30,13 @@ class PromotionTests(unittest.TestCase):
         self.assertNotIn("Passing native checks yield UNPROVEN (21)", notes)
         self.assertNotIn("records retain `apm-contract-run/0.1`", notes)
 
+    def test_notes_name_the_bundled_apm_pin(self):
+        root = Path(__file__).resolve().parents[2]
+        pin = json.loads((root / "src/apmx/apm-backend.json").read_text(encoding="utf-8"))
+        self.assertEqual(promotion.APM_BACKEND_VERSION, pin["version"])
+        notes = promotion.release_notes("0.4.2", "a" * 40)
+        self.assertIn(f"pinned official APM {pin['version']} backend", notes)
+
     def test_v042_notes_preserve_failed_v041_candidate_truth(self):
         notes = promotion.release_notes("0.4.2", "a" * 40)
         self.assertIn("No GitHub release or native assets were published for v0.4.1", notes)
@@ -70,7 +77,7 @@ class PromotionTests(unittest.TestCase):
             "v0.3.0 and v0.3.1 tags and archive evidence remain unchanged",
             "not repacked or relabeled earlier artifacts",
             "UNPROVEN (21)",
-            "APM 0.30.0",
+            f"APM {promotion.APM_BACKEND_VERSION}",
         ):
             with self.subTest(text=text):
                 self.assertIn(text, notes)
@@ -87,7 +94,7 @@ class PromotionTests(unittest.TestCase):
             "source tag and CI evidence remain unchanged",
             "not relabeled v0.3.0 artifacts",
             "UNPROVEN (21)",
-            "APM 0.30.0",
+            f"APM {promotion.APM_BACKEND_VERSION}",
         ):
             with self.subTest(text=text):
                 self.assertIn(text, notes)
@@ -110,7 +117,7 @@ class PromotionTests(unittest.TestCase):
             "--allow-host-access --allow-unproven-inputs",
             "UNPROVEN (21)",
             "NOT live inference",
-            "APM 0.30.0",
+            f"APM {promotion.APM_BACKEND_VERSION}",
             "not publisher authentication",
             "No trusted publisher signature or Apple notarization",
         ):

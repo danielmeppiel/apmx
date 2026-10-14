@@ -30,11 +30,12 @@ from . import verifier
 
 PASS, WARN, FAIL, UNAVAILABLE = "pass", "warn", "fail", "unavailable"
 _LOCK_NAMES = ("apm.lock.yaml", "apm.lock")
-# `apm audit --ci` checks that run without any policy (APM 0.30.0). Any other check
+# `apm audit --ci` checks that run without any policy (APM 0.30.0-0.33.0). Any other check
 # name proves that a policy was actually loaded and enforced.
 _BASELINE_CHECKS = frozenset(
     {
         "lockfile-exists",
+        "manifest-missing",
         "ref-consistency",
         "deployment-ledger-owners",
         "deployed-files-present",
@@ -149,9 +150,40 @@ def _hashes(lock_raw: bytes) -> dict[str, tuple]:
             entry.get("resolved_commit"),
             entry.get("content_hash"),
             entry.get("resolved_hash"),
-            tuple(sorted((entry.get("deployed_file_hashes") or {}).items())),
         )
     return result
+
+
+def _deployed(lock_raw: bytes) -> tuple[dict[str, frozenset], dict[str, str]]:
+    """Deployed file hashes by path, with an owning dependency for diagnostics.
+
+    APM 0.33.0 may attribute a skill shared by a package and its transitive local
+    dependency to a different owner on frozen replay; the deployed bytes, not the
+    ledger owner, are the content identity.
+    """
+    data = load_yaml_str(lock_raw.decode("utf-8")) or {}
+    hashes: dict[str, set] = {}
+    owners: dict[str, str] = {}
+    for entry in data.get("dependencies") or []:
+        key = str(entry.get("local_path") or entry.get("repo_url") or entry.get("name"))
+        for path, digest in (entry.get("deployed_file_hashes") or {}).items():
+            hashes.setdefault(str(path), set()).add(digest)
+            owners.setdefault(str(path), key)
+    return {path: frozenset(values) for path, values in hashes.items()}, owners
+
+
+def _drifted(recorded: bytes, reinstalled: bytes) -> list[str]:
+    """Dependencies whose recorded identity or deployed bytes changed on frozen replay."""
+    before, after = _hashes(recorded), _hashes(reinstalled)
+    changed = {key for key in before if after.get(key) != before[key]}
+    files_before, owners = _deployed(recorded)
+    files_after, owners_after = _deployed(reinstalled)
+    changed.update(
+        owners.get(path) or owners_after[path]
+        for path in files_before.keys() | files_after.keys()
+        if files_before.get(path) != files_after.get(path)
+    )
+    return sorted(changed)
 
 
 def _components(raw: bytes) -> list[str]:
@@ -271,8 +303,7 @@ def audit_ingredients(
                     facts={**facts, "apmInstall": "failed"},
                 )
             reinstalled = (stage / lock_name).read_bytes()
-            before, after = _hashes(lock_raw), _hashes(reinstalled)
-            drifted = sorted(key for key in before if after.get(key) != before[key])
+            drifted = _drifted(lock_raw, reinstalled)
             (stage / lock_name).write_bytes(lock_raw)
             if drifted:
                 name = Path(drifted[0]).name or drifted[0]

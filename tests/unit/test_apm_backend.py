@@ -146,7 +146,7 @@ def test_real_backend_installs_transitive_context_without_source_writes(tmp_path
     assert any("[>] Resolving " in line for line in output)
     assert any("Phase:" in line for line in output)
     assert all("\x1b" not in line for line in output)
-    assert identity["version"] == "0.30.0"
+    assert identity["version"] == "0.33.0"
     assert source_hash(source, limits) == before
     assert (stage / "apm.lock.yaml").is_file()
     skills = list((stage / "apm_modules").rglob("SKILL.md"))
@@ -548,9 +548,9 @@ def test_post_probe_failure_never_emits_install_completion(tmp_path, monkeypatch
 def test_version_output_is_exact_platform_pin(target):
     from apmx.install.apm_backend import expected_version_output
 
-    expected = "Agent Package Manager (APM) CLI version 0.30.0"
+    expected = "Agent Package Manager (APM) CLI version 0.33.0"
     if target != "windows-x86_64":
-        expected += " (8c2e0d9)"
+        expected += " (18c4c43)"
     assert expected_version_output(target) == expected
 
 

@@ -51,14 +51,14 @@ def test_native_package_import_record_and_retained_bytes(fixture):
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
     ) as source:
         plan = plan_contract(Path(_contract(package)), caller, harness="copilot", source=source)
-        assert plan.apm_backend["version"] == "0.30.0"
+        assert plan.apm_backend["version"] == "0.33.0"
         assert len(plan.imported_skills) == 1
         assert plan.imported_skills[0].version == "0.1.0"
         store = AttemptStore.create(plan)
         record = json.loads(store.record_path.read_text())
         assert record["imports"][0]["version"] == "0.1.0"
         lock = Path(record["source"]["retained"]["apm.lock.yaml"])
-        assert b"apm_version: 0.30.0" in lock.read_bytes()
+        assert b"apm_version: 0.33.0" in lock.read_bytes()
         assert hashlib.sha256(lock.read_bytes()).hexdigest() == record["lock_sha256"]
         assert "depth: 2" in lock.read_text()
     assert source_hash(package, LIMITS) == before
@@ -328,7 +328,7 @@ def test_declared_relative_contract_source_has_one_native_identity(fixture):
     assert all((caller / name).read_bytes() == data for name, data in before.items())
 
 
-def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, monkeypatch):
+def test_unavailable_publisher_ref_fails_closed_under_consumer_pins(fixture, tmp_path, monkeypatch):
     caller, package = fixture
     repo = tmp_path / "native-git-context"
     shutil.copytree(package / "skills/handoff-style", repo)
@@ -401,11 +401,28 @@ def test_consumer_pins_precede_unavailable_publisher_graph(fixture, tmp_path, mo
         for name in ("apm.yml", "apm.lock.yaml"):
             shutil.copy2(generation_root / name, caller / name)
         shutil.copytree(generation_root / "apm_modules", caller / "apm_modules")
+    before = {name: (caller / name).read_bytes() for name in ("apm.yml", "apm.lock.yaml")}
+    # Official APM verifies every immutable requirement (microsoft/apm#3061): an
+    # unavailable publisher ref fails closed instead of losing to the consumer pin.
     (package / "apm.yml").write_text(
         "name: packaged-handoff\nversion: 0.1.0\ndependencies:\n  apm:\n"
         f"    - git: {url}\n      ref: publisher-version-does-not-exist\n"
     )
-    before = {name: (caller / name).read_bytes() for name in ("apm.yml", "apm.lock.yaml")}
+    source_before = source_hash(package, LIMITS)
+    with (
+        pytest.raises(ContractError) as rejected,
+        prepare_contract_source(
+            str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
+        ),
+    ):
+        pass
+    assert rejected.value.code == "apm_install_failed"
+    assert source_hash(package, LIMITS) == source_before
+    assert all((caller / name).read_bytes() == data for name, data in before.items())
+    (package / "apm.yml").write_text(
+        "name: packaged-handoff\nversion: 0.1.0\ndependencies:\n  apm:\n"
+        f"    - git: {url}\n      ref: {revision}\n"
+    )
     source_before = source_hash(package, LIMITS)
     with prepare_contract_source(
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
@@ -457,7 +474,7 @@ def test_native_source_bootstrap_accepts_null_consumer_dependencies(fixture, mon
         str(package), _contract(package), caller_root=caller, planning=False, limits=LIMITS
     ) as source:
         assert source.root.is_dir()
-        assert source.apm_backend["version"] == "0.30.0"
+        assert source.apm_backend["version"] == "0.33.0"
         assert source.imports_root == stages[0]
         assert (source.imports_root / "apm.lock.yaml").is_file()
     assert manifest.read_bytes() == before

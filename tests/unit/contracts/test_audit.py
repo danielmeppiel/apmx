@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -176,6 +177,86 @@ def test_policy_that_is_not_enforced_is_unavailable(deps_receipt) -> None:
     result = _audit(deps_receipt, "--policy", "org")
     assert result.exit_code == 2, result.output
     assert "policy org was not enforced" in result.output
+
+
+@needs_backend
+def test_no_policy_audit_reports_only_baseline_checks(deps_receipt, tmp_path) -> None:
+    """A new no-policy check name would otherwise be mistaken for an enforced policy."""
+    from apmx.audit.ingredients import _BASELINE_CHECKS
+
+    (source,) = list(deps_receipt.glob("attempts/*/source"))
+    manifest = source / "imports-apm.yml"
+    manifest = manifest if manifest.is_file() else source / "apm.yml"
+    executable = str(apm_backend.locate_backend())
+    env = {**apm_backend.backend_child_env(dict(os.environ)), "NO_COLOR": "1"}
+
+    def checks(stage: Path) -> set[str]:
+        audited = subprocess.run(
+            [executable, "audit", "--ci", "--no-fail-fast", "-f", "json", "--no-policy"],
+            cwd=stage,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert audited.returncode in (0, 1), audited.stderr
+        return {item["name"] for item in json.loads(audited.stdout)["checks"]}
+
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    shutil.copyfile(manifest, installed / "apm.yml")
+    shutil.copyfile(source / "apm.lock.yaml", installed / "apm.lock.yaml")
+    subprocess.run(
+        [
+            executable,
+            "install",
+            "--frozen",
+            "--root",
+            str(installed),
+            "--only",
+            "apm",
+            "--target",
+            "agent-skills",
+            "--no-trust-bin",
+            "--no-policy",
+        ],
+        cwd=installed,
+        env=env,
+        capture_output=True,
+        timeout=120,
+        check=True,
+    )
+    orphaned = tmp_path / "orphaned"
+    orphaned.mkdir()
+    shutil.copyfile(source / "apm.lock.yaml", orphaned / "apm.lock.yaml")
+    reported = checks(installed) | checks(orphaned)
+    assert "manifest-missing" in reported
+    assert reported <= _BASELINE_CHECKS
+
+
+def _lock(owner: str, digest: str = "a" * 64) -> bytes:
+    files = (
+        "  deployed_files:\n  - .agents/skills/style/SKILL.md\n"
+        f"  deployed_file_hashes:\n    .agents/skills/style/SKILL.md: sha256:{digest}\n"
+    )
+    return (
+        "lockfile_version: '1'\ndependencies:\n"
+        f"- repo_url: _local/package\n  local_path: /src/package\n"
+        f"{files if owner == 'package' else ''}"
+        "- repo_url: _local/style\n  local_path: ./skills/style\n  depth: 2\n"
+        f"{files if owner == 'style' else ''}"
+    ).encode()
+
+
+def test_frozen_replay_may_reassign_a_shared_skill_owner() -> None:
+    from apmx.audit.ingredients import _drifted
+
+    # APM 0.33.0 attributes a package-bundled transitive skill to either entry.
+    assert _drifted(_lock("package"), _lock("style")) == []
+    assert _drifted(_lock("package"), _lock("style", "b" * 64)) == ["/src/package"]
+    assert _drifted(_lock("style"), _lock("package", "b" * 64)) == ["./skills/style"]
+    assert _drifted(_lock("package"), _lock("none")) == ["/src/package"]
 
 
 def test_policy_and_offline_are_exclusive(plain_receipt) -> None:

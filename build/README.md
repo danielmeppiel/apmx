@@ -187,7 +187,7 @@ never execute. The original single-skill gates remain separate.
 
 Completed single-skill package cases must now deliver the standard evidence
 package and print its paths. The mixed-ASF fixture deliberately retains
-overlapping direct/transitive local references: pinned APM 0.30.0 exports
+overlapping direct/transitive local references: pinned APM 0.33.0 exports
 duplicate component identities for them. That case requires explicit
 evidence-delivery refusal (command exit 23), no published package, and an
 unchanged canonical COMPLETE outcome (exit 0). It still checks every original
@@ -211,8 +211,10 @@ That same tenth case also generates a real consumer lock with native APM against
 a genuine Git repository tagged `v9` with package version `9.0.0`. A hermetic SSH
 transport serves actual Git objects; it does not replace APM, its resolver,
 checkout, or lock writer. The packaged contract names the same Git dependency
-with a deliberately nonexistent publisher ref. The run must still use the
-consumer's exact commit, version, and context bytes, retain its original lock
+by the consumer's exact commit SHA, an equivalent spelling of `v9`; APM rejects
+an unavailable or incompatible publisher ref
+([microsoft/apm#3061](https://github.com/microsoft/apm/pull/3061)). The run must
+still use the consumer's exact commit, version, and context bytes, retain its original lock
 byte-for-byte, preserve that entry in the effective native lock, and leave both
 caller and package snapshots unchanged. This is package identity precedence,
 not a same-basename local-directory approximation.

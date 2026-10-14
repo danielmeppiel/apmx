@@ -51,7 +51,7 @@ failures, not a silent downgrade. The command exits **23** while its canonical
 execution record remains COMPLETE. Other execution exits are unchanged;
 `--plan` never exports. See [execution outcomes](results.md).
 
-One observed APM 0.30.0 limitation is overlapping direct and transitive local
+One observed APM limitation (0.30.0 through the pinned 0.33.0) is overlapping direct and transitive local
 references: the official export can contain duplicate components with the same
 `bom-ref`. CycloneDX rejects the duplicate inventory. APMX reports delivery
 failure rather than deduplicating the official bytes or relabeling execution.

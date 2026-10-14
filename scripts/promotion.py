@@ -34,6 +34,8 @@ PUBLIC_WORKFLOW = ".github/workflows/native-notice-release.yml"
 VERIFICATION_ARTIFACT = "verified-native-draft"
 VERIFICATION_FILE = "verified-draft.json"
 VERIFICATION_SCHEMA = "apmx-verified-native-draft/1"
+# Release jobs sparse-check out scripts/ only; tests bind this to src/apmx/apm-backend.json.
+APM_BACKEND_VERSION = "0.33.0"
 
 
 def gh_json(*args: str):
@@ -208,7 +210,7 @@ def release_notes(version: str, commit: str) -> str:
         f"{execution_notes}\n\n"
         "## Installation and assurance limits\n\n"
         "Five native onedir archives include the runtime, LICENSE, NOTICE, release metadata, "
-        "and the pinned official APM 0.30.0 backend with its complete runtime under libexec/apm. "
+        f"and the pinned official APM {APM_BACKEND_VERSION} backend with its complete runtime under libexec/apm. "
         "Extract the complete archive; do not move the executable out of its runtime directory.\n\n"
         "Git, Copilot CLI, and contract-declared checker tools are external prerequisites. "
         "The CI actor is an explicitly hermetic Copilot JSONL protocol fixture, NOT live inference. "
