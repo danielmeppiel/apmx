@@ -89,28 +89,32 @@ After [installation](docs/install.md) and
 [example setup](examples/contracts/software-factory/README.md#set-up), preview
 with `--plan`, then run it. A run prints one block per contract and ends with
 what was delivered and how to verify it (abridged; timings and the remaining
-stages omitted):
+stages omitted). The build lines illustrate a repair, which appears only when a
+check rejects an attempt:
 
 ```text
 $ apmx ./feature-factory
-Factory  feature-factory   5 contracts   copilot
+Factory  feature-factory   5 contracts   copilot / default model
 
 [1/5] planning   needs request.md -> produces plan.md
       attempt 1/1  checks: [+] plan-sections
       [+] plan.md -> handed to specification
 ...
-[3/5] build      needs ... -> produces changes.diff, implementation.md
-      attempt 1/3  checks: [x] checkout-regression  [+] shipping-examples ...
-      attempt 2/3  checks: [+] shipping-examples  [+] checkout-regression  [+] implementation-report-format
-      [+] changes.diff, implementation.md -> handed to documentation
+[3/5] build      needs request.md, specification.md -> produces changes.diff, implementation.md   budget 3 attempts
+      attempt 1/3  checks: [+] shipping-examples [x] checkout-regression [+] implementation-report-format
+      attempt 2/3  checks: [+] shipping-examples [+] checkout-regression [+] implementation-report-format
+      [+] changes.diff, implementation.md -> handed to review, documentation
 ...
 [+] COMPLETE   5/5 contracts   9/9 checks
 
 Outputs   feature-factory/.apm/chains/<id>/artifacts/
+          plan.md  specification.md  changes.diff  implementation.md  documentation.diff  documentation.md  review.md
 Receipt   feature-factory/.apm/chains/<id>/receipt/
           provenance  in-toto + SLSA v1
           checks      in-toto test-result (9)
-          inventory   CycloneDX 1.5
+          inventory   CycloneDX 1.5 (<n> components)
+          unsigned: binds content, not identity; review before sharing
+
 Next      apmx audit feature-factory/.apm/chains/<id>/receipt
 ```
 
@@ -151,12 +155,16 @@ the factory:
 
 ```text
 $ apmx audit feature-factory/.apm/chains/<id>/receipt --outputs ./delivered
-[+] Integrity     all files match index.json (SHA-256)
+Receipt   feature-factory/.apm/chains/<id>/receipt   5 contracts   unsigned
+
+[+] Integrity     all <n> files match index.json (SHA-256)
 [+] Standards     in-toto Statement v1, SLSA Provenance v1, CycloneDX 1.5: schema-valid
 [+] Factory       definition sha256:...  5 contracts, 9 checks
 [+] Checks        9/9 passed (in-toto test-result)
 [+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
-[+] Outputs       files bound and re-hashed
+                  installed bytes match CycloneDX inventory and recorded hashes
+[+] Outputs       7/7 delivered files match receipt subjects (re-hashed)
+                  7 files bound: changes.diff documentation.diff documentation.md ...
 [!] Identity      unsigned: proves content binding, not who ran it
 
 [+] VALID   (content-bound; not authenticated)
