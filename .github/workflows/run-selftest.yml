@@ -1,0 +1,102 @@
+name: run.yml self-test
+
+# Drives .github/workflows/run.yml end to end on apmx's own CI with the
+# hermetic protocol actor (scripts/fixtures/copilot_actor.py): no model calls.
+# On pushes and same-repository pull requests the attest job signs the
+# receipt with this repository's OIDC identity, and the verify job checks
+# that signature with `apmx audit` against a policy that requires it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  factory:
+    uses: ./.github/workflows/run.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      factory: tests/fixtures/run-workflow-factory
+      apmx-version: source
+      apmx-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      hermetic-actor: true
+      attest: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+  verify:
+    needs: factory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      FACTORY: tests/fixtures/run-workflow-factory
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: apmx
+          persist-credentials: false
+      - uses: ./apmx/.github/actions/setup-from-source
+        with:
+          path: apmx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apmx-delivery
+          path: delivery
+      - name: The receipt of record is VALID and binds the delivered outputs
+        run: |
+          receipt=$(ls -d delivery/"$FACTORY"/.apm/*/*/receipt)
+          echo "RECEIPT=$PWD/$receipt" >> "$GITHUB_ENV"
+          env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH \
+            apmx audit "$receipt" --offline --outputs "delivery/$FACTORY" --format json > audit.json
+          python3 - <<'PY'
+          import json
+          report = json.load(open("audit.json"))
+          rows = {row["name"]: row for row in report["rows"]}
+          assert report["result"] == "valid", report
+          assert rows["Outputs"]["detail"].startswith("1/1 delivered files match"), rows["Outputs"]
+          print("[+] receipt of record VALID; outputs re-hashed")
+          PY
+          grep -h '"harness"' delivery/"$FACTORY"/.apm/*/*/receipt/attempts/*/execution.json \
+            | grep -q '"replay"'
+      - name: Signed by this repository's run.yml (live GitHub artifact attestation)
+        if: needs.factory.outputs.receipt-sha256 != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFINITION: ${{ needs.factory.outputs.definition-sha256 }}
+        run: |
+          mkdir consumer && cd consumer
+          cat > apm-policy.yml <<EOF
+          factories:
+            allow: ["sha256:$DEFINITION"]
+            require_signed: true
+            signers:
+              - workflow: ${GITHUB_REPOSITORY}/.github/workflows/run.yml
+          EOF
+          env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH apmx audit "$RECEIPT" | tee audit.txt
+          grep -q "^\[+\] Identity      signed by ${GITHUB_REPOSITORY}/.github/workflows/run.yml@" audit.txt
+          grep -q "^\[+\] VALID   (authenticated: " audit.txt
+      - name: Unsigned or unknown signers are rejected
+        if: needs.factory.outputs.receipt-sha256 != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir other && cd other
+          printf 'factories:\n  require_signed: true\n  signers:\n    - workflow: %s\n' \
+            "${GITHUB_REPOSITORY}/.github/workflows/not-the-signer.yml" > apm-policy.yml
+          set +e
+          env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH apmx audit "$RECEIPT" > audit.txt
+          code=$?
+          set -e
+          cat audit.txt
+          test "$code" = 1
+          grep -q "^\[x\] Identity      unsigned: no attestation from factories.signers" audit.txt

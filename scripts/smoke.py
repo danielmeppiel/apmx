@@ -733,6 +733,36 @@ def require_receipt_audit(
     return {"result": report["result"], "rows": rows, "facts": report["facts"]}
 
 
+def require_receipt_check(
+    binary: Path, producer: Path, factory: Path, checkout: Path, cwd: Path, env: dict[str, str],
+) -> None:
+    """The frozen `apmx check` replays a producer's outputs in a fresh checkout and re-checks them."""
+    shutil.copytree(factory, checkout, ignore=shutil.ignore_patterns(".apm"))
+    log = Path(env["APMX_ACTOR_LOG"])
+    calls = log.read_text(encoding="utf-8") if log.exists() else ""
+    checked = run_binary(binary, ["check", str(producer), str(checkout)], cwd, env)
+    require(
+        checked.returncode == 0 and "[+] Checked here: receipt of record" in checked.stdout,
+        f"Frozen apmx check failed: {checked.stdout}\n{checked.stderr}",
+    )
+    require(
+        (log.read_text(encoding="utf-8") if log.exists() else "") == calls,
+        "apmx check launched the agent CLI",
+    )
+    receipts = [path.parent for path in (checkout / ".apm").glob("*/*/receipt/index.json")]
+    require(len(receipts) == 1, "apmx check must deliver exactly one receipt of record")
+    index = json.loads((receipts[0] / "index.json").read_bytes())
+    require(
+        index["definition"] == json.loads((producer / "index.json").read_bytes())["definition"],
+        "apmx check receipt names a different factory definition",
+    )
+    harnesses = {
+        json.loads(path.read_bytes())["harness"] for path in receipts[0].glob("attempts/*/execution.json")
+    }
+    require(harnesses == {"replay"}, f"apmx check must record the replay harness: {harnesses}")
+    require_receipt_audit(binary, receipts[0], cwd, env)
+
+
 def run_case(
     binary: Path, root: Path, actor: Path | None, selection: str, mode: str,
     *, fresh_home: bool = False, mixed_imports: bool = False,
@@ -1129,6 +1159,7 @@ def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
         "Dependency-free factory receipt must list zero CycloneDX components",
     )
     audit = require_receipt_audit(binary, receipt, caller, env, outputs=view)
+    require_receipt_check(binary, receipt, factory, root / "checkout", caller, env)
     tampered = root / "tampered-receipt"
     shutil.copytree(receipt, tampered)
     forged = next(tampered.glob("attempts/*/artifacts/final.json"))

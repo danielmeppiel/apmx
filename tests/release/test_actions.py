@@ -165,3 +165,49 @@ def test_actions_pin_third_party_steps_and_keep_privilege_out_of_setup() -> None
     assert "apmx audit --offline" in attest and "predicate.py" in attest
     setup = (ACTIONS / "setup/action.yml").read_text()
     assert "id-token" not in setup and "install.py" in setup
+
+
+def _workflow(name: str) -> dict:
+    return load_yaml_str((ROOT / ".github/workflows" / name).read_text())
+
+
+def test_run_workflow_keeps_the_agent_away_from_checks_and_signing() -> None:
+    run = _workflow("run.yml")
+    jobs = run["jobs"]
+    assert run["permissions"] == {}
+    assert jobs["produce"]["permissions"] == {"contents": "read"}
+    assert jobs["check"]["permissions"] == {"contents": "read"}
+    assert jobs["attest"]["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+        "attestations": "write",
+    }
+    assert jobs["check"]["needs"] == "produce" and jobs["attest"]["needs"] == "check"
+    text = (ROOT / ".github/workflows/run.yml").read_text()
+    # Only the produce job sees the agent token or runs the factory with an agent.
+    for name in ("check", "attest"):
+        job = str(jobs[name])
+        assert "agent-token" not in job and "copilot" not in job.lower()
+    assert text.count("secrets.agent-token") == 1
+    # The check job replays outputs; the attest job never checks out the caller's code.
+    assert "apmx check" in str(jobs["check"]["steps"])
+    for step in jobs["attest"]["steps"]:
+        if str(step.get("uses", "")).startswith("actions/checkout@"):
+            assert step["with"]["repository"] == "danielmeppiel/apmx"
+    assert any(
+        step.get("uses") == "./apmx/.github/actions/attest"
+        and step["with"]["checks"] == "separate-job"
+        for step in jobs["attest"]["steps"]
+    )
+
+
+def test_workflows_pin_every_third_party_action() -> None:
+    for path in [*(ROOT / ".github/workflows").glob("*.yml"), *ACTIONS.glob("*/action.yml")]:
+        document = load_yaml_str(path.read_text())
+        steps = [
+            step for job in (document.get("jobs") or {}).values() for step in job.get("steps", [])
+        ] + list((document.get("runs") or {}).get("steps", []))
+        for step in steps:
+            uses = step.get("uses")
+            if uses and not uses.startswith("./"):
+                assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", uses), (path.name, uses)

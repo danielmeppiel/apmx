@@ -268,6 +268,48 @@ workflow vouched for a structurally VALID receipt. It does not make the
 producing agent trustworthy; the producer workflow must keep the agent out of
 the signing job (see `run.yml`).
 
+## Receipts from CI: `run.yml` and `apmx check`
+
+An agent runs as the runner user, so in its own job it could rewrite check
+scripts or results, and it could use a job's OIDC token to sign anything. The
+reusable workflow [`.github/workflows/run.yml`](../.github/workflows/run.yml)
+keeps the agent away from both:
+
+| Job | Permissions | Runs |
+| --- | --- | --- |
+| produce | `contents: read` | `apmx FACTORY`: the agent. Its own checks are only a fast fail; its receipt is untrusted and is uploaded as data. |
+| check | `contents: read` | A fresh runner and the same commit, no agent: `apmx check PRODUCER_RECEIPT FACTORY`. |
+| attest | `id-token: write`, `attestations: write` | No checkout of the caller's code: `apmx audit --offline`, then the [attest action](#signed-receipts) with `checks: separate-job`. |
+
+```yaml
+jobs:
+  factory:
+    uses: danielmeppiel/apmx/.github/workflows/run.yml@<sha>
+    with:
+      factory: path/to/factory
+    permissions: { contents: read, id-token: write, attestations: write }
+    secrets:
+      agent-token: ${{ secrets.COPILOT_TOKEN }}   # seen only by the produce job
+```
+
+`apmx check PRODUCER_RECEIPT [FACTORY]` takes only the producer receipt's
+output bytes, matched to contracts by SHA-256, and ignores its checks,
+records and claims. It runs FACTORY (default: the current directory) from this
+checkout with a `replay` producer that writes those bytes instead of running an
+agent. The factory's own checks run on them, and a new receipt of record is
+written. That receipt records the harness as `replay`, never the producer's
+model. It must have the producer's factory definition digest; otherwise it is
+withdrawn and the command exits 1. A self-consistent forged producer receipt
+whose outputs fail the checks is REJECTED there. `check` is a reserved word,
+like `audit`.
+
+`run.yml` uploads `apmx-receipt` (the receipt of record) and `apmx-delivery`
+(the outputs at their paths plus the receipt under `FACTORY/.apm/`), ready to
+commit as a pull request that `apmx audit` accepts by proof. apmx's own CI
+runs it end to end with the hermetic protocol actor (no model calls) in
+`.github/workflows/run-selftest.yml`, signs with this repository's OIDC
+identity, and verifies that signature with `apmx audit`.
+
 ## Ingredients: APM owns dependency trust
 
 apmx does not reimplement dependency auditing. The receipt retains the run's

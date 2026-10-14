@@ -19,6 +19,7 @@ from apmx.models.dependency.reference import DependencyReference
 from apmx.version import get_version
 
 AUDIT = "audit"
+CHECK = "check"
 
 
 class NativeCommand(click.Command):
@@ -29,6 +30,14 @@ class NativeCommand(click.Command):
     """
 
     def main(self, args=None, prog_name=None, **kwargs):
+        if getattr(sys, "frozen", False) and os.environ.get("APMX_INTERNAL_REPLAY"):
+            from apmx.runtime.replay import main as replay
+
+            os.environ.pop("APMX_INTERNAL_REPLAY")
+            code = replay(list(sys.argv[1:] if args is None else args))
+            if kwargs.get("standalone_mode", True):
+                raise SystemExit(code)
+            return code
         if getattr(sys, "frozen", False) and os.environ.get("APMX_INTERNAL_ARTIFACT_SERVER"):
             from apmx.runtime.artifact_mcp import run_server
 
@@ -44,6 +53,14 @@ class NativeCommand(click.Command):
             configure_process_tls_trust()
             return audit_command.main(
                 arguments[1:], prog_name=f"{prog_name or 'apmx'} {AUDIT}", **kwargs
+            )
+        if arguments[:1] == [CHECK]:
+            from apmx.commands.check import check_command
+
+            configure_output_mode(detect_output_mode([]))
+            configure_process_tls_trust()
+            return check_command.main(
+                arguments[1:], prog_name=f"{prog_name or 'apmx'} {CHECK}", **kwargs
             )
         return super().main(arguments, prog_name, **kwargs)
 
@@ -82,10 +99,10 @@ def _select_entry(
             "No factory selected. Pass a local directory, .contract.md file, "
             "Git package reference, or --from PACKAGE_REF."
         )
-    if contract == AUDIT:
+    if contract in (AUDIT, CHECK):
         raise click.UsageError(
-            "'audit' is reserved: use 'apmx audit RECEIPT_DIR' to verify a receipt, "
-            "or ./audit to run a local directory named audit."
+            f"'{contract}' is reserved: use 'apmx {contract} --help', "
+            f"or ./{contract} to run a local directory named {contract}."
         )
     selected = Path(contract).expanduser().absolute()
     if selected.is_dir():
@@ -127,8 +144,10 @@ def _select_entry(
         "Use ./PATH to require a local directory; use --from to select a source package "
         "even when a local directory has the same name.\n\n"
         "Every COMPLETE run delivers a receipt. Verify the newest with 'apmx audit', "
-        "or one with 'apmx audit RECEIPT_DIR' (see 'apmx audit --help'). 'audit' is reserved: "
-        "run a directory named audit as ./audit."
+        "or one with 'apmx audit RECEIPT_DIR' (see 'apmx audit --help'). "
+        "'apmx check PRODUCER_RECEIPT' re-checks another run's outputs here (see "
+        "'apmx check --help'). 'audit' and 'check' are reserved: run a directory with "
+        "either name as ./audit or ./check."
     ),
 )
 @click.argument("contract", required=False, type=str, metavar="[FACTORY_OR_CONTRACT_OR_PACKAGE]")
