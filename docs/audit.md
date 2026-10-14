@@ -95,7 +95,8 @@ factories:                               # apmx's section
     - "acme/checkout-factory@sha256:0311c27f3d7b..."
   require_signed: true                   # reject receipts that are not signed (see Identity)
   signers:                               # who may sign receipts; null = no opinion, [] = none
-    - workflow: acme/factories/.github/workflows/run.yml   # optional @<ref>
+    - workflow: danielmeppiel/apmx/.github/workflows/run.yml   # optional @<ref>
+      repo: acme/factories                 # where the factory ran (default: this repository)
   revoked:                               # capability content revoked by incident response
     - purl: "pkg:github/acme/style@3f2a..."
       bodySha256: "dead..."
@@ -114,8 +115,10 @@ is `factories` as `empty`; apmx still applies its rules and runs
   not record their factory's package identity yet, so a pinned entry's
   package is a label and an unpinned pattern such as `acme/*` allows nothing
   for now; the Factory row says so.
-- `signers`: `owner/repo/.github/workflows/<file>.yml`, optionally pinned to
-  the signer's ref with `@<ref>` (for example `@refs/tags/v1`).
+- `signers`: `workflow: owner/repo/.github/workflows/<file>.yml`, optionally
+  pinned to the signer's ref with `@<ref>` (for example `@refs/tags/v1`), and
+  an optional `repo: owner/repo`: the repository the factory ran in, where its
+  attestations are stored. `repo` defaults to the repository being audited.
 - `revoked`: a capability is revoked only when both its `purl` and its
   `bodySha256` match exactly. The same content stays revoked when it is
   reinstalled from another path, and a `purl` alone never revokes.

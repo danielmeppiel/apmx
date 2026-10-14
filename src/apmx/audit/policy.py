@@ -60,10 +60,15 @@ class PolicyError(ValueError):
 
 @dataclass(frozen=True)
 class Signer:
-    """A workflow allowed to sign receipts, optionally pinned to a ref (``x.yml@refs/tags/v1``)."""
+    """A workflow allowed to sign receipts, optionally pinned to a ref (``x.yml@refs/tags/v1``).
+
+    ``repo`` is the repository the factory ran in, where its attestations are
+    stored; it defaults to the repository being audited.
+    """
 
     workflow: str
     ref: str | None = None
+    repo: str | None = None
 
 
 @dataclass(frozen=True)
@@ -197,14 +202,21 @@ def factories_section(value: object, label: str) -> dict:
         signers = []
         for index, item in enumerate(value["signers"]):
             where = f"{label}: factories.signers[{index}]"
-            if not isinstance(item, dict) or set(map(str, item)) != {"workflow"}:
-                raise PolicyError(f"{where} must be a mapping with only workflow")
+            if (
+                not isinstance(item, dict)
+                or "workflow" not in item
+                or set(map(str, item)) - {"workflow", "repo"}
+            ):
+                raise PolicyError(f"{where} must be a mapping of workflow and optional repo")
             match = _WORKFLOW.fullmatch(str(item["workflow"]))
             if not isinstance(item["workflow"], str) or match is None:
                 raise PolicyError(
                     f"{where}.workflow must be owner/repo/.github/workflows/<file>.yml[@<ref>]"
                 )
-            signers.append(Signer(match.group("workflow"), match.group("ref")))
+            repo = item.get("repo")
+            if repo is not None and (not isinstance(repo, str) or not _REPO.fullmatch(repo)):
+                raise PolicyError(f"{where}.repo must be owner/repo")
+            signers.append(Signer(match.group("workflow"), match.group("ref"), repo))
         result["signers"] = tuple(signers)
     if value.get("revoked") is not None:
         if not isinstance(value["revoked"], list):
@@ -271,7 +283,7 @@ def merge(documents: Iterable[dict], *, source: str) -> FactoryPolicy:
         require_signed=require_signed,
         signers=None
         if signers is None
-        else tuple(sorted(signers, key=lambda s: (s.workflow, s.ref or ""))),
+        else tuple(sorted(signers, key=lambda s: (s.workflow, s.ref or "", s.repo or ""))),
         revoked=tuple(revoked),
         present=present,
     )

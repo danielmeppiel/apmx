@@ -71,6 +71,7 @@ factories:
   signers:
     - workflow: {WORKFLOW}@refs/tags/v1
     - workflow: {WORKFLOW}
+      repo: acme/app
   revoked:
     - purl: {PURL}
       bodySha256: {DIGEST}
@@ -85,7 +86,10 @@ factories:
         "allow": (("acme/checkout-factory", DIGEST), (None, OTHER)),
         "unpinned": ("acme/*",),
         "require_signed": True,
-        "signers": (policies.Signer(WORKFLOW, "refs/tags/v1"), policies.Signer(WORKFLOW)),
+        "signers": (
+            policies.Signer(WORKFLOW, "refs/tags/v1"),
+            policies.Signer(WORKFLOW, None, "acme/app"),
+        ),
         "revoked": (policies.Revoked(PURL, DIGEST),),
     }
 
@@ -107,7 +111,9 @@ def test_null_means_no_opinion_and_empty_means_none() -> None:
         "factories:\n  require_signed: 'yes'\n",
         "factories:\n  enforcement: off\n",
         "factories:\n  signers: [{workflow: run.yml}]\n",
-        f"factories:\n  signers: [{{workflow: {WORKFLOW}, repo: acme/app}}]\n",
+        f"factories:\n  signers: [{{workflow: {WORKFLOW}, digest: abc}}]\n",
+        f"factories:\n  signers: [{{workflow: {WORKFLOW}, repo: not-a-repo}}]\n",
+        "factories:\n  signers: [{repo: acme/app}]\n",
         f"factories:\n  revoked: [{{purl: {PURL}}}]\n",
         f"factories:\n  revoked: [{{purl: style, bodySha256: {DIGEST}}}]\n",
         f"factories:\n  revoked: [{{purl: {PURL}, bodySha256: '{DIGEST}\\n'}}]\n",
