@@ -91,16 +91,20 @@ security:
   integrity:
     deny_hashes: ["sha256:dead..."]      # revoke content wherever it was installed from
 factories:
-  allow:                                 # approved factory definitions
+  allow:                                 # approved factory definitions; null = no opinion, [] = none
     - "acme/checkout-factory@sha256:0311c27f3d7b..."
   require_signed: true                   # reject receipts that are not signed (see Identity)
-  signers:                               # who may sign receipts
-    - workflow: acme/factories/.github/workflows/run.yml
+  signers:                               # who may sign receipts; null = no opinion, [] = none
+    - workflow: acme/factories/.github/workflows/run.yml   # optional @<ref>
 ```
 
-A `factories.allow` entry is `[<package>@]sha256:<definition digest>`. The
-digest is the receipt's `definition.json` SHA-256 (the Factory row and
-`facts.definitionSha256` show it); the package name is a label. Enforcement
+A `factories.allow` entry uses the `dependencies.allow` grammar with an
+optional definition pin: `<package pattern>[@sha256:<definition digest>]`.
+The digest is the receipt's `definition.json` SHA-256 (the Factory row and
+`facts.definitionSha256` show it) and is what apmx matches. Receipts do not
+record their factory's package identity yet, so a pinned entry's package is a
+label and an unpinned pattern such as `acme/*` allows nothing; the Factory
+row says so. Enforcement
 follows APM: `block` makes a violation `[x]` (exit 1), `warn` makes it `[!]`
 (still VALID), `off` reports the policy but applies no rules. With `extends`,
 rules merge tighten-only: deny lists are unioned, `require_signed` is true if
@@ -109,19 +113,23 @@ allows.
 
 | Situation | Result |
 | --- | --- |
-| No policy anywhere | Structural audit only: `[i] Policy  none found`. Exit 0 if valid. |
+| No policy anywhere (APM outcome `absent`, `no_git_remote`, `empty` or `disabled`) | Structural audit only: `[i] Policy  none found`. Exit 0 if valid. |
 | Policy found | Policy, Factory, Revocation and Identity rules apply at its enforcement level. |
 | Policy found but unloadable (malformed, unreachable `extends`, an unknown `factories` key, a bad digest, or no bundled APM) | `INCOMPLETE`, exit 2. Never a pass. |
 | `require_signed` and an unsigned receipt, `enforcement: block` | Identity `[x]`, exit 1. |
 
-**Interim adapter.** APM 0.33.0 does not yet define `factories` or
-`security.integrity.deny_hashes` and warns that they are unknown keys.
-Until a bundled APM resolves them, apmx reads only those keys (plus
-`dependencies.deny`, `enforcement` and `extends`) from the exact files APM
-resolved, through one isolated module (`src/apmx/audit/policy.py`). Remote
-policies are read from `github.com` repositories and `https://` URLs. It
-never reads a second policy file. When APM ships these sections, apmx will
-take APM's merged policy instead and the rows will not change.
+**Interim adapter.** The schema for these sections is defined upstream
+([microsoft/apm#3232](https://github.com/microsoft/apm/pull/3232)), where
+`apm policy status --json` returns the merged `effective_policy`. apmx uses
+that whenever the bundled APM provides it. The bundled APM 0.33.0 does not:
+it warns that `factories` is an unknown key, has no `effective_policy`, and
+reports a policy containing only these sections as `empty`. Until a bundled
+APM includes #3232, apmx reads only these keys (plus `dependencies.deny`,
+`enforcement` and `extends`) from the exact files APM resolved, through one
+isolated module (`src/apmx/audit/policy.py`), and merges `extends`
+tighten-only. Remote policies are read from `github.com` repositories and
+`https://` URLs. It never reads a second policy file. The swap is covered by a
+test, and the rows do not change.
 
 ## Command
 
@@ -170,7 +178,7 @@ never launched for a receipt that is already invalid.
 | Factory | The `definition.json` digest; producer statements agree with the definition (build type, builder, contract digest, checks, outputs, checker resources, capability bodies); capability bindings agree with the CycloneDX inventory. With `factories.allow`, the digest must be on the list. |
 | Checks | Every recorded check invocation has exactly one test-result statement with consistent configuration, subjects and reports. Every check of a completed attempt passed. |
 | Ingredients | Dependency trust, delegated to APM (see below). |
-| Revocation | No capability body, resource or package hash, dependency content hash or CycloneDX component hash is in `security.integrity.deny_hashes`, and no dependency matches `dependencies.deny` (APM's `*` and `**` globs). |
+| Revocation | No selected capability's body or resource hash (`purl` + `bodySha256`, recorded only in the receipt) is in `security.integrity.deny_hashes`. Package hashes and `dependencies.deny` (APM's `*` and `**` globs) are APM's checks inside Ingredients; apmx applies them here only when APM did not (`--offline`, or an APM without `deny_hashes`), so a finding is never reported twice. |
 | Outputs | The aggregate and per-attempt production subjects bind exactly the delivered artifacts. In a PR, the change is bound; with `--outputs`, the delivered files are re-hashed. |
 | Identity | `[!] unsigned` today: receipts prove content binding, not who ran it. With `factories.require_signed`, an unsigned receipt is rejected at the policy's enforcement level. |
 

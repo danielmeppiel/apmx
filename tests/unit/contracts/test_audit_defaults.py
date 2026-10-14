@@ -201,7 +201,7 @@ def test_require_signed_rejects_unsigned_receipts(plain_receipt, tmp_path, monke
 
 
 def test_unloadable_policy_is_incomplete_never_a_pass(plain_receipt, tmp_path, monkeypatch) -> None:
-    _local_policy(tmp_path, monkeypatch, plain_receipt, "factories:\n  allow: [acme/job]\n")
+    _local_policy(tmp_path, monkeypatch, plain_receipt, "factories:\n  require_sigend: true\n")
     _fake_apm(monkeypatch)
     result = _audit()
     assert result.exit_code == 2, result.output

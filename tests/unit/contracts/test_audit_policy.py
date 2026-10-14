@@ -66,11 +66,11 @@ security:
     require_hashes: true
     deny_hashes: ["sha256:{DIGEST}"]
 factories:
-  allow: ["acme/checkout-factory@sha256:{DIGEST}", "sha256:{OTHER}"]
+  allow: ["acme/checkout-factory@sha256:{DIGEST}", "sha256:{OTHER}", "acme/*"]
   require_signed: true
   signers:
+    - workflow: {WORKFLOW}@refs/tags/v1
     - workflow: {WORKFLOW}
-      repo: acme/app
 """,
         "p",
     )
@@ -80,20 +80,27 @@ factories:
         "deny_dependencies": ("acme/compromised-skill",),
         "deny_hashes": (DIGEST,),
         "allow": (("acme/checkout-factory", DIGEST), (None, OTHER)),
+        "unpinned": ("acme/*",),
         "require_signed": True,
-        "signers": (policies.Signer(WORKFLOW, "acme/app"),),
+        "signers": (policies.Signer(WORKFLOW, "refs/tags/v1"), policies.Signer(WORKFLOW)),
     }
+
+
+def test_null_means_no_opinion_and_empty_means_nothing_allowed() -> None:
+    assert policies.extension_keys("factories:\n  allow: null\n  signers: null\n", "p") == {}
+    keys = policies.extension_keys("factories:\n  allow: []\n  signers: []\n", "p")
+    assert keys == {"allow": (), "unpinned": (), "signers": ()}
 
 
 @pytest.mark.parametrize(
     "text",
     [
         "factories:\n  require_sigend: true\n",
-        "factories:\n  allow: [acme/factory]\n",
+        "factories:\n  allow: ['acme/f@sha256:short']\n",
         f"factories:\n  allow: ['sha256:{DIGEST[:-1]}']\n",
         "factories:\n  require_signed: 'yes'\n",
         "factories:\n  signers: [{workflow: run.yml}]\n",
-        f"factories:\n  signers: [{{workflow: {WORKFLOW}, ref: main}}]\n",
+        f"factories:\n  signers: [{{workflow: {WORKFLOW}, repo: acme/app}}]\n",
         "security:\n  integrity:\n    deny_hashes: [deadbeef]\n",
         "enforcement: strict\n",
         "- not a mapping\n",
@@ -151,6 +158,47 @@ def test_repository_file_is_loaded_through_apm(tmp_path) -> None:
     assert resolution.policy.allow == ((None, DIGEST),)
     assert resolution.apm_source == source
     assert reader.calls[0] == ("status", source)
+
+
+def test_apm_0_33_empty_outcome_still_carries_apmx_rules(tmp_path) -> None:
+    """APM 0.33.0 reports a factories-only policy as empty; that must not drop the rules."""
+    path = tmp_path / "apm-policy.yml"
+    path.write_text("factories:\n  require_signed: true\n")
+    source = str(path.resolve())
+    reader = Reader(
+        {source: {"outcome": "empty", "source": f"file:{source}", "enforcement": "warn"}}
+    )
+    resolution = policies.resolve(tmp_path, reader=reader)
+    assert resolution.status == "found" and resolution.policy.require_signed
+
+
+@pytest.mark.parametrize("outcome", ["empty", "disabled"])
+def test_empty_or_disabled_policy_is_none_found(tmp_path, outcome) -> None:
+    path = tmp_path / "apm-policy.yml"
+    path.write_text("name: empty\n")
+    reader = Reader({str(path.resolve()): {"outcome": outcome, "source": f"file:{path}"}})
+    resolution = policies.resolve(tmp_path, reader=reader)
+    assert (resolution.status, resolution.detail) == ("none", "none found")
+
+
+def test_apm_effective_policy_replaces_the_adapter(tmp_path) -> None:
+    """The seam: once APM returns effective_policy (microsoft/apm#3232), apmx reads no files."""
+    path = tmp_path / "apm-policy.yml"
+    path.write_text("factories:\n  require_sigend: true\n")  # the adapter would reject this
+    source = str(path.resolve())
+    effective = {
+        "enforcement": "block",
+        "factories": {"allow": [f"acme/f@sha256:{DIGEST}"], "require_signed": True},
+        "security": {"integrity": {"deny_hashes": [f"sha256:{OTHER}"]}},
+    }
+    reader = Reader({source: {**_found(f"file:{source}"), "effective_policy": effective}})
+    resolution = policies.resolve(tmp_path, reader=reader)
+    assert resolution.status == "found" and reader.calls == [("status", source)]
+    assert resolution.policy.allow == (("acme/f", DIGEST),) and resolution.policy.require_signed
+    assert resolution.policy.deny_hashes == (OTHER,)
+    assert resolution.facts["policy"]["via"] == "apm"
+    none = Reader({source: {**_found(f"file:{source}"), "effective_policy": None}})
+    assert policies.resolve(tmp_path, reader=none).status == "none"
 
 
 @pytest.mark.parametrize(
@@ -301,6 +349,8 @@ def test_factory_allowlist_follows_enforcement() -> None:
     assert policies.evaluate_factory(allowed, OTHER, "base").status == "fail"
     warn = _policy(allow=(), enforcement="warn")
     assert policies.evaluate_factory(warn, OTHER, "base").status == "warn"
+    unpinned = policies.evaluate_factory(_policy(allow=(), unpinned=("acme/*",)), DIGEST, "base")
+    assert unpinned.status == "fail" and "allow nothing yet" in unpinned.notes[1]
     assert policies.evaluate_factory(_policy(), OTHER, "base").status == "pass"
 
 
@@ -319,6 +369,13 @@ def test_revocation_matches_content_wherever_it_was_installed_from() -> None:
     assert policies.evaluate_revocation(package, [binding], [], {}).status == "warn"
     clean = policies.evaluate_revocation(_policy(deny_hashes=("c" * 64,)), [binding], [], {})
     assert clean.status == "pass" and clean.detail.startswith("0 of 1")
+    # APM's apm audit --ci checks package hashes itself; apmx then checks bodies only.
+    apm_checked = policies.evaluate_revocation(
+        _policy(deny_hashes=(OTHER,)), [binding], [], {}, packages=False, names=False
+    )
+    assert apm_checked.status == "pass" and "capability bodies" in apm_checked.detail
+    body = policies.evaluate_revocation(revoked, [binding], [], {}, packages=False)
+    assert body.status == "fail"
 
 
 def test_revocation_applies_dependencies_deny_with_apm_globs() -> None:
@@ -332,6 +389,10 @@ def test_revocation_applies_dependencies_deny_with_apm_globs() -> None:
         _policy(deny_dependencies=("other/*",)), [], [dependency], {}
     )
     assert verdict.status == "pass"
+    enforced_by_apm = policies.evaluate_revocation(
+        _policy(deny_dependencies=("acme/*",)), [], [dependency], {}, names=False
+    )
+    assert enforced_by_apm.status == "pass"
 
 
 def test_revocation_checks_cyclonedx_component_hashes() -> None:

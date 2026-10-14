@@ -16,8 +16,10 @@
   `security.integrity.deny_hashes` sections add a factory allowlist, a
   Revocation row (also applying `dependencies.deny` to the receipt) and an
   unsigned-receipt rule. No policy is reported as `[i] Policy  none found`; a
-  policy that cannot be loaded is INCOMPLETE (exit 2). Until APM ships these
-  sections, apmx reads only these keys from the files APM resolved.
+  policy that cannot be loaded is INCOMPLETE (exit 2). apmx takes APM's
+  `effective_policy` (microsoft/apm#3232) when the bundled APM provides it;
+  APM 0.33.0 does not, so until then apmx reads only these keys from the
+  files APM resolved.
 - `apmx audit <receipt-dir>` verifies a receipt row by row: integrity
   (SHA-256 index), standards (in-toto Statement v1, SLSA Provenance v1,
   CycloneDX 1.5), factory, checks, outputs (`--outputs` re-hashes delivered

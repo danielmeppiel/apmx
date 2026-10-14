@@ -39,15 +39,16 @@ from pathlib import Path
 POLICY_FILE = "apm-policy.yml"
 ENFORCEMENTS = ("off", "warn", "block")
 _DIGEST = re.compile(r"sha256:([0-9a-f]{64})")
-_ALLOW = re.compile(r"(?:(?P<name>[^@\s]+)@)?sha256:(?P<digest>[0-9a-f]{64})")
+_ALLOW = re.compile(r"(?:(?P<name>[^@\s]+)@)?sha256:(?P<digest>[0-9a-f]{64})|(?P<pattern>[^@\s]+)")
 _WORKFLOW = re.compile(
-    r"(?:[A-Za-z0-9.-]+/)?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml"
+    r"(?P<workflow>(?:[A-Za-z0-9.-]+/)?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.github/workflows/"
+    r"[A-Za-z0-9_.-]+\.ya?ml)(?:@(?P<ref>[^\s@]+))?"
 )
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _FACTORY_KEYS = {"allow", "require_signed", "signers"}
-_SIGNER_KEYS = {"workflow", "repo", "digest"}
-_LOADED = {"found", "empty"}
-_ABSENT = {"absent", "no_git_remote"}
+_SIGNER_KEYS = {"workflow"}
+_LOADED = {"found"}
+_ABSENT = {"absent", "no_git_remote", "empty", "disabled"}
 _RAW_BYTES = 1024 * 1024
 _MAX_CHAIN = 5
 
@@ -58,11 +59,10 @@ class PolicyError(ValueError):
 
 @dataclass(frozen=True)
 class Signer:
-    """A workflow allowed to sign receipts (``gh attestation verify --signer-workflow``)."""
+    """A workflow allowed to sign receipts, optionally pinned to a ref (``x.yml@refs/tags/v1``)."""
 
     workflow: str
-    repo: str | None = None
-    digest: str | None = None
+    ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,7 @@ class FactoryPolicy:
     source: str
     enforcement: str = "warn"
     allow: tuple[tuple[str | None, str], ...] | None = None
+    unpinned: tuple[str, ...] = ()
     require_signed: bool = False
     signers: tuple[Signer, ...] | None = None
     deny_hashes: tuple[str, ...] = ()
@@ -127,8 +128,11 @@ def extension_keys(text: str, label: str) -> dict:
         data = load_yaml_str(text)
     except Exception as exc:
         raise PolicyError(f"{label}: not valid YAML ({type(exc).__name__})") from exc
-    if data is None:
-        data = {}
+    return extension_mapping({} if data is None else data, label)
+
+
+def extension_mapping(data: object, label: str) -> dict:
+    """The same keys from an already-parsed policy (APM's ``effective_policy``)."""
     if not isinstance(data, dict):
         raise PolicyError(f"{label}: a policy must be a YAML mapping")
     result: dict[str, object] = {}
@@ -188,41 +192,39 @@ def _factories(value: object, label: str) -> dict:
             f"{label}: unknown key factories.{unknown[0]} (expected allow, require_signed, signers)"
         )
     result: dict[str, object] = {}
-    if "allow" in value:
-        entries = []
-        for item in _strings(value["allow"] or [], f"{label}: factories.allow"):
+    if value.get("allow") is not None:
+        entries, unpinned = [], []
+        for item in _strings(value["allow"], f"{label}: factories.allow"):
             match = _ALLOW.fullmatch(item)
-            if match is None:
+            if match is None or (match.group("pattern") and "sha256:" in item):
                 raise PolicyError(
                     f"{label}: factories.allow entry {item!r} must be "
-                    "[<package>@]sha256:<definition digest, 64 lowercase hex>"
+                    "<package pattern>[@sha256:<definition digest, 64 lowercase hex>]"
                 )
-            entries.append((match.group("name"), match.group("digest")))
+            if match.group("pattern"):
+                unpinned.append(match.group("pattern"))
+            else:
+                entries.append((match.group("name"), match.group("digest")))
         result["allow"] = tuple(entries)
+        result["unpinned"] = tuple(unpinned)
     if "require_signed" in value:
         if not isinstance(value["require_signed"], bool):
             raise PolicyError(f"{label}: factories.require_signed must be true or false")
         result["require_signed"] = value["require_signed"]
-    if "signers" in value:
+    if value.get("signers") is not None:
         signers = []
         if not isinstance(value["signers"], list):
             raise PolicyError(f"{label}: factories.signers must be a list")
         for index, item in enumerate(value["signers"]):
             where = f"{label}: factories.signers[{index}]"
-            if not isinstance(item, dict) or set(map(str, item)) - _SIGNER_KEYS:
-                raise PolicyError(f"{where} must be a mapping of workflow, repo, digest")
-            workflow, repo, digest = item.get("workflow"), item.get("repo"), item.get("digest")
-            if not isinstance(workflow, str) or not _WORKFLOW.fullmatch(workflow):
+            if not isinstance(item, dict) or set(map(str, item)) != _SIGNER_KEYS:
+                raise PolicyError(f"{where} must be a mapping with only workflow")
+            match = _WORKFLOW.fullmatch(str(item["workflow"]))
+            if not isinstance(item["workflow"], str) or match is None:
                 raise PolicyError(
-                    f"{where}.workflow must be owner/repo/.github/workflows/<file>.yml"
+                    f"{where}.workflow must be owner/repo/.github/workflows/<file>.yml[@<ref>]"
                 )
-            if repo is not None and (not isinstance(repo, str) or not _REPO.fullmatch(repo)):
-                raise PolicyError(f"{where}.repo must be owner/repo")
-            if digest is not None and (
-                not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{40,64}", digest)
-            ):
-                raise PolicyError(f"{where}.digest must be a commit SHA")
-            signers.append(Signer(workflow, repo, digest))
+            signers.append(Signer(match.group("workflow"), match.group("ref")))
         result["signers"] = tuple(signers)
     return result
 
@@ -235,6 +237,7 @@ def merge(documents: Iterable[dict], *, source: str, enforcement: str | None) ->
     every level allows.
     """
     allow: dict[str, str | None] | None = None
+    unpinned: list[str] = []
     signers: set[Signer] | None = None
     require_signed = False
     deny_hashes: list[str] = []
@@ -254,6 +257,7 @@ def merge(documents: Iterable[dict], *, source: str, enforcement: str | None) ->
                     if digest in allow
                 }
             )
+            unpinned += [p for p in document.get("unpinned", ()) if p not in unpinned]
         if "signers" in document:
             listed = set(document["signers"])
             signers = listed if signers is None else signers & listed
@@ -268,6 +272,7 @@ def merge(documents: Iterable[dict], *, source: str, enforcement: str | None) ->
         source=source,
         enforcement=enforcement,
         allow=None if allow is None else tuple((name, d) for d, name in sorted(allow.items())),
+        unpinned=tuple(unpinned),
         require_signed=require_signed,
         signers=None if signers is None else tuple(sorted(signers, key=lambda s: s.workflow)),
         deny_hashes=tuple(deny_hashes),
@@ -477,11 +482,17 @@ def _resolve(
     except PolicyError as exc:
         return _unloadable(label, exc)
     outcome = str(report.get("outcome"))
-    if outcome in _ABSENT and kind == "org":
+    # APM 0.33.0 calls a policy with only apmx's (to it unknown) sections "empty". Until
+    # APM returns effective_policy, the adapter decides; otherwise rules would be dropped.
+    interim_empty = outcome == "empty" and "effective_policy" not in report
+    if interim_empty:
+        outcome = "found"
+    if outcome in _ABSENT and (kind == "org" or outcome in ("empty", "disabled")):
+        where = "APM found no org policy" if kind == "org" else f"{label} is {outcome}"
         return Resolution(
             "none",
             "none found",
-            notes=[f"no {POLICY_FILE} in the repository; APM found no org policy"],
+            notes=[f"no {POLICY_FILE} rules apply: {where}"],
             facts={"policy": None},
         )
     if outcome not in _LOADED:
@@ -492,6 +503,9 @@ def _resolve(
     resolved = str(report.get("source") or source or "")
     if kind == "org":
         label = f"{_label(resolved, root)} (org)"
+    apm_source = source if kind == "file" else (source or "org")
+    if "effective_policy" in report:
+        return _effective(report, label, apm_source)
     documents: list[dict] = []
     chain: list[str] = []
     ref: str | None = source if kind == "file" else resolved or source
@@ -511,7 +525,13 @@ def _resolve(
     except (PolicyError, OSError, UnicodeDecodeError) as exc:
         return _unloadable(label, exc)
     policy = merge(documents, source=label, enforcement=report.get("enforcement"))
-    apm_source = source if kind == "file" else (source or "org")
+    if interim_empty and not policy.rules:
+        return Resolution(
+            "none",
+            "none found",
+            notes=[f"no {POLICY_FILE} rules apply: {label} is empty"],
+            facts={"policy": None},
+        )
     resolution = Resolution(
         "found",
         f"{label}   enforcement {policy.enforcement}",
@@ -528,6 +548,27 @@ def _resolve(
     if len(chain) > 1:
         resolution.notes.append("extends " + " <- ".join(_label(r, root) for r in chain))
     return resolution
+
+
+def _effective(report: dict, label: str, apm_source: str | None) -> Resolution:
+    """APM >= microsoft/apm#3232 returns the merged policy itself: no adapter I/O at all."""
+    effective = report["effective_policy"]
+    if effective is None:
+        return Resolution(
+            "none", "none found", notes=["APM resolved no effective policy"], facts={"policy": None}
+        )
+    try:
+        document = extension_mapping(effective, label)
+    except PolicyError as exc:
+        return _unloadable(label, exc)
+    policy = merge([document], source=label, enforcement=report.get("enforcement"))
+    return Resolution(
+        "found",
+        f"{label}   enforcement {policy.enforcement}",
+        policy=policy,
+        apm_source=apm_source,
+        facts={"policy": {"source": label, "enforcement": policy.enforcement, "via": "apm"}},
+    )
 
 
 def _unloadable(label: str, exc: Exception) -> Resolution:
@@ -564,10 +605,16 @@ def evaluate_factory(policy: FactoryPolicy, definition_sha256: str, base: str) -
         if digest == definition_sha256:
             label = f" ({name})" if name else ""
             return Verdict("pass", f"definition sha256:{digest[:12]}.. on factories.allow{label}")
+    notes = [f"policy: {policy.source}; {len(policy.allow)} pinned definition(s)"]
+    if policy.unpinned:
+        notes.append(
+            f"{len(policy.unpinned)} unpinned package pattern(s) allow nothing yet: receipts do "
+            "not record their factory package; pin <package>@sha256:<definition digest>"
+        )
     return _violation(
         policy,
         f"definition sha256:{definition_sha256[:12]}.. is not on factories.allow",
-        (f"policy: {policy.source}; {len(policy.allow)} approved definition(s)",),
+        tuple(notes),
     )
 
 
@@ -598,23 +645,34 @@ def _hashes(value: object) -> set[str]:
 
 
 def evaluate_revocation(
-    policy: FactoryPolicy, bindings: list[dict], dependencies: list[dict], bom: dict
+    policy: FactoryPolicy,
+    bindings: list[dict],
+    dependencies: list[dict],
+    bom: dict,
+    *,
+    packages: bool = True,
+    names: bool = True,
 ) -> Verdict:
-    """No capability or dependency may match ``deny_hashes`` or ``dependencies.deny``.
+    """No capability may match ``deny_hashes``; packages too when APM did not check them.
 
-    Hashes are compared exactly against capability bodies, resources and
-    package hashes, dependency content hashes and CycloneDX component hashes:
-    the same content is revoked wherever it was installed from.
+    Capability bodies and resources (``purl`` + ``bodySha256``) live only in the
+    receipt, so apmx always checks them. Package content hashes and
+    ``dependencies.deny`` are APM's own checks inside the Ingredients row; apmx
+    applies them here only when APM did not: ``packages`` for package hashes
+    (offline, or an APM that predates ``deny_hashes``) and ``names`` for
+    ``dependencies.deny`` (APM did not audit with this policy), so a finding is
+    never reported twice.
     """
     denied = set(policy.deny_hashes)
-    total = len(bindings) + len(dependencies)
     for binding in bindings:
         found = (
             _hashes(binding.get("bodySha256"))
-            | _hashes(binding.get("packageHash"))
-            | _hashes(binding.get("registryHash"))
             | {h for r in binding.get("resources") or [] for h in _hashes(r.get("sha256"))}
         ) & denied
+        if packages:
+            found |= (
+                _hashes(binding.get("packageHash")) | _hashes(binding.get("registryHash"))
+            ) & denied
         if found:
             return _violation(
                 policy,
@@ -623,23 +681,20 @@ def evaluate_revocation(
                 (f"purl={binding.get('purl')}  bodySha256={binding.get('bodySha256')}",),
             )
     for dependency in dependencies:
+        name = dependency.get("repository") or dependency.get("name")
         found = (
             _hashes(dependency.get("contentHash")) | _hashes(dependency.get("registryHash"))
         ) & denied
-        if found:
+        if packages and found:
             return _violation(
                 policy,
-                f"dependency {dependency.get('repository') or dependency.get('name')} is revoked "
+                f"dependency {name} is revoked "
                 f"(sha256:{min(found)[:12]}.. in security.integrity.deny_hashes)",
             )
-        for pattern in policy.deny_dependencies:
-            if any(_matches(name, pattern) for name in _identities(dependency)):
-                return _violation(
-                    policy,
-                    f"dependency {dependency.get('repository') or dependency.get('name')} "
-                    f"matches dependencies.deny {pattern}",
-                )
-    for component in bom.get("components") or []:
+        for pattern in policy.deny_dependencies if names else ():
+            if any(_matches(identity, pattern) for identity in _identities(dependency)):
+                return _violation(policy, f"dependency {name} matches dependencies.deny {pattern}")
+    for component in bom.get("components") or [] if packages else []:
         found = {
             h
             for item in component.get("hashes") or []
@@ -653,11 +708,15 @@ def evaluate_revocation(
                 f"(sha256:{min(found)[:12]}.. in security.integrity.deny_hashes)",
                 (f"purl={component.get('purl')}",),
             )
-    rules = len(policy.deny_hashes) + len(policy.deny_dependencies)
-    subject = f"0 of {total} capabilities and dependencies revoked"
+    scope = "capabilities and dependencies" if packages or names else "capability bodies"
+    total = len(bindings) + (len(dependencies) if packages or names else 0)
+    rules = len(policy.deny_hashes) + (len(policy.deny_dependencies) if names else 0)
+    subject = f"0 of {total} {scope} revoked"
     if not rules:
         return Verdict("pass", f"{subject}; policy denies no hashes or dependencies")
-    return Verdict("pass", f"{subject} ({rules} deny rule{'s' if rules != 1 else ''})")
+    detail = f"{subject} ({rules} deny rule{'s' if rules != 1 else ''})"
+    notes = () if packages and names else ("package rules: apm audit --ci (Ingredients row)",)
+    return Verdict("pass", detail, notes)
 
 
 def evaluate_unsigned(policy: FactoryPolicy) -> Verdict | None:

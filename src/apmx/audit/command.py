@@ -217,6 +217,9 @@ def run_audit(
             audit.fail("Ingredients", _ascii(result.detail), audit.rows["Ingredients"].notes)
         elif result.status == UNAVAILABLE:
             audit.incomplete("Ingredients", _ascii(result.detail), audit.rows["Ingredients"].notes)
+    apm_audit = audit.facts.get("apmAudit")
+    apm_checks = apm_audit.get("checkNames", []) if isinstance(apm_audit, dict) else []
+    apm_policy = isinstance(apm_audit, dict) and apm_audit.get("policy") != "none (--no-policy)"
     if not structural:
         audit.rows["Revocation"] = Row("Revocation", "skipped", "not evaluated (earlier failure)")
     elif rules is None:
@@ -233,6 +236,8 @@ def run_audit(
                 list(receipt.bindings),
                 list(receipt.definition.get("resolvedDependencies", [])),
                 receipt.bom,
+                packages="content-hash-denylist" not in apm_checks,
+                names=not apm_policy,
             ),
         )
     unsigned = policies.evaluate_unsigned(rules) if rules is not None else None
