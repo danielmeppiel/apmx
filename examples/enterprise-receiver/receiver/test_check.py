@@ -2,10 +2,10 @@
 
 These tests build small, throwaway git repositories on disk (mirroring the
 real ``examples/enterprise-receiver/...`` layout) and exercise the public
-policy functions directly, so each receiver control -- integrity, factory
+policy functions directly, so each receiver control -- apmx audit, factory
 allowlist, candidate binding, capability revocation, signer -- is proven to
 reject the negative case it claims to catch and accept the matching positive
-case. The real evidence fixtures are generated once via
+case. The real receipt fixtures are generated once via
 ``fixtures/make_fixture.py`` (the genuine apmx contract engine), not
 hand-authored, per the project's fixture-labeling requirement.
 """
@@ -127,7 +127,7 @@ def _init_repo(tmp_path: Path, *, approved_digests: list[str]) -> Path:
                     "assessedBy": "receiver-attest.yml",
                     "assessment": "accepted",
                 },
-                "requiredAssessedChecks": ["integrity", "factory", "capability-revocation"],
+                "requiredAssessedChecks": ["audit", "factory", "capability-revocation"],
                 "approvedSignerSourceDigests": [_APPROVED_SIGNER_DIGEST],
             }
         )
@@ -185,41 +185,31 @@ def _patch_candidate(repo: Path) -> str:
 
 
 @pytest.fixture(scope="module")
-def valid_evidence(tmp_path_factory) -> Path:
-    destination = tmp_path_factory.mktemp("evidence") / "package"
+def valid_receipt(tmp_path_factory) -> Path:
+    destination = tmp_path_factory.mktemp("receipt") / "package"
     make_fixture.make_fixture(destination, variant="approved")
     return destination
 
 
 @pytest.fixture(scope="module")
-def unapproved_evidence(tmp_path_factory) -> Path:
-    destination = tmp_path_factory.mktemp("evidence-unapproved") / "package"
+def unapproved_receipt(tmp_path_factory) -> Path:
+    destination = tmp_path_factory.mktemp("receipt-unapproved") / "package"
     make_fixture.make_fixture(destination, variant="rogue-factory")
     return destination
 
 
-@pytest.fixture()
-def schemas_dir() -> Path:
-    import os
-
-    probe = os.environ.get("APMX_EVIDENCE_SCHEMAS")
-    if probe:
-        return Path(probe)
-    pytest.skip("APMX_EVIDENCE_SCHEMAS not set; offline schema cache unavailable")
-
-
-def _evidence_digest(evidence_dir: Path) -> str:
-    index = json.loads((evidence_dir / "index.json").read_bytes())
+def _definition_digest(receipt_dir: Path) -> str:
+    index = json.loads((receipt_dir / "index.json").read_bytes())
     return index["definition"]["digest"]["sha256"]
 
 
-def test_positive_case_is_accepted(tmp_path, monkeypatch, valid_evidence, schemas_dir):
-    digest = _evidence_digest(valid_evidence)
+def test_positive_case_is_accepted(tmp_path, monkeypatch, valid_receipt):
+    digest = _definition_digest(valid_receipt)
     repo = _init_repo(tmp_path, approved_digests=[digest])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _patch_candidate(repo)
     case_dir = repo / "cases" / "positive"
-    _copy_tree(valid_evidence, case_dir / "evidence")
+    _copy_tree(valid_receipt, case_dir / "receipt")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "add case evidence")
     head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -235,22 +225,21 @@ def test_positive_case_is_accepted(tmp_path, monkeypatch, valid_evidence, schema
         case_dir_relative="cases/positive",
         base_sha=base_sha,
         head_sha=head_sha,
-        schemas_dir=schemas_dir,
         skip_signer=True,
     )
     assert result.definition_sha256 == digest
     assert "binding" in result.checks
 
 
-def test_tampered_patch_is_rejected(tmp_path, monkeypatch, valid_evidence, schemas_dir):
-    digest = _evidence_digest(valid_evidence)
+def test_tampered_patch_is_rejected(tmp_path, monkeypatch, valid_receipt):
+    digest = _definition_digest(valid_receipt)
     repo = _init_repo(tmp_path, approved_digests=[digest])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     (repo / _APP_RELATIVE).write_text(
         '"""Toy greeting."""\n\n\ndef greet(name: str) -> str:\n    return f"Yo, {name}!"\n'
     )
     case_dir = repo / "cases" / "tampered"
-    _copy_tree(valid_evidence, case_dir / "evidence")
+    _copy_tree(valid_receipt, case_dir / "receipt")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "tampered")
     head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -262,21 +251,18 @@ def test_tampered_patch_is_rejected(tmp_path, monkeypatch, valid_evidence, schem
             case_dir_relative="cases/tampered",
             base_sha=base_sha,
             head_sha=head_sha,
-            schemas_dir=schemas_dir,
             skip_signer=True,
         )
     assert excinfo.value.policy == "binding"
 
 
-def test_unapproved_factory_is_rejected(
-    tmp_path, monkeypatch, valid_evidence, unapproved_evidence, schemas_dir
-):
-    approved_digest = _evidence_digest(valid_evidence)
+def test_unapproved_factory_is_rejected(tmp_path, monkeypatch, valid_receipt, unapproved_receipt):
+    approved_digest = _definition_digest(valid_receipt)
     repo = _init_repo(tmp_path, approved_digests=[approved_digest])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _patch_candidate(repo)
     case_dir = repo / "cases" / "unapproved"
-    _copy_tree(unapproved_evidence, case_dir / "evidence")
+    _copy_tree(unapproved_receipt, case_dir / "receipt")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "add unapproved case evidence")
     head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -288,13 +274,12 @@ def test_unapproved_factory_is_rejected(
             case_dir_relative="cases/unapproved",
             base_sha=base_sha,
             head_sha=head_sha,
-            schemas_dir=schemas_dir,
             skip_signer=True,
         )
     assert excinfo.value.policy == "factory"
 
 
-def test_missing_evidence_is_rejected(tmp_path, monkeypatch, schemas_dir):
+def test_missing_receipt_is_rejected(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     head_sha = _patch_candidate(repo)
@@ -306,10 +291,56 @@ def test_missing_evidence_is_rejected(tmp_path, monkeypatch, schemas_dir):
             case_dir_relative="cases/missing",
             base_sha=base_sha,
             head_sha=head_sha,
-            schemas_dir=schemas_dir,
             skip_signer=True,
         )
-    assert excinfo.value.policy == "missing-evidence"
+    assert excinfo.value.policy == "missing-receipt"
+
+
+def _apmx_audit_json(receipt_dir: Path) -> dict:
+    """The real ``apmx audit --offline --format json`` CLI verdict for a receipt."""
+    from click.testing import CliRunner
+
+    from apmx.audit.command import audit_command
+
+    result = CliRunner().invoke(audit_command, [str(receipt_dir), "--offline", "--format", "json"])
+    return json.loads(result.output)
+
+
+def test_receiver_audit_agrees_with_apmx_audit_cli(valid_receipt):
+    """The receiver's structural verdict is ``apmx audit``'s, not a parallel one:
+    every structural row it records matches the CLI's row for the same receipt."""
+    audited = receiver_check.audit_receipt(valid_receipt)
+    report = _apmx_audit_json(valid_receipt)
+    assert report["schema"] == "apmx-audit/1"
+    assert report["result"] == "valid"
+    assert report["facts"]["definitionSha256"] == audited.definition_sha256
+    cli_rows = {row["name"]: row["detail"] for row in report["rows"]}
+    assert set(audited.rows) == {"Integrity", "Standards", "Factory", "Checks", "Outputs"}
+    for name, detail in audited.rows.items():
+        assert cli_rows[name] == detail
+
+
+def test_tampered_receipt_fails_the_audit_before_any_receiver_policy(
+    tmp_path, monkeypatch, valid_receipt
+):
+    """A receipt whose bytes no longer match its index is rejected by the
+    audit row that found it, exactly as ``apmx audit`` reports it, before
+    factory, binding or revocation policy is ever consulted."""
+    tampered = tmp_path / "tampered"
+    _copy_tree(valid_receipt, tampered)
+    (tampered / "summary.md").write_text("rewritten after export\n")
+    report = _apmx_audit_json(tampered)
+    assert report["result"] == "invalid"
+    failed = [row["name"] for row in report["rows"] if row["status"] == "fail"]
+    assert failed == ["Integrity"]
+
+    repo = _init_repo(tmp_path, approved_digests=[_definition_digest(valid_receipt)])
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
+    with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
+        receiver_check.assess_canonical(tampered, base_sha)
+    assert excinfo.value.policy == "audit"
+    assert "apmx audit Integrity row failed" in excinfo.value.detail
 
 
 def _fake_gh_run(returncode: int, stdout: bytes, stderr: bytes):
@@ -330,19 +361,17 @@ def _fake_gh_run(returncode: int, stdout: bytes, stderr: bytes):
 
 
 def _attestation_json(
-    evidence_dir: Path,
+    receipt_dir: Path,
     *,
     source_digest: str = _APPROVED_SIGNER_DIGEST,
     assessment: str = "accepted",
     subject_digest: str | None = None,
     definition_sha256: str | None = None,
-    assessed_checks: tuple[str, ...] = ("integrity", "factory", "capability-revocation"),
+    assessed_checks: tuple[str, ...] = ("audit", "factory", "capability-revocation"),
 ) -> bytes:
-    digest = (
-        subject_digest or hashlib.sha256((evidence_dir / "index.json").read_bytes()).hexdigest()
-    )
+    digest = subject_digest or hashlib.sha256((receipt_dir / "index.json").read_bytes()).hexdigest()
     if definition_sha256 is None:
-        definition_sha256 = _evidence_digest(evidence_dir)
+        definition_sha256 = _definition_digest(receipt_dir)
     return json.dumps(
         [
             {
@@ -364,11 +393,11 @@ def _attestation_json(
     ).encode()
 
 
-def _matching_attestation_json(evidence_dir: Path) -> bytes:
-    return _attestation_json(evidence_dir)
+def _matching_attestation_json(receipt_dir: Path) -> bytes:
+    return _attestation_json(receipt_dir)
 
 
-def test_signer_check_rejects_when_gh_fails(tmp_path, monkeypatch, valid_evidence):
+def test_signer_check_rejects_when_gh_fails(tmp_path, monkeypatch, valid_receipt):
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
@@ -378,52 +407,52 @@ def test_signer_check_rejects_when_gh_fails(tmp_path, monkeypatch, valid_evidenc
         _fake_gh_run(1, b"", b"no attestations found"),
     )
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+        receiver_check.check_signer(valid_receipt, base_sha, _definition_digest(valid_receipt))
     assert excinfo.value.policy == "signer"
 
 
-def test_signer_check_accepts_when_gh_succeeds(tmp_path, monkeypatch, valid_evidence):
+def test_signer_check_accepts_when_gh_succeeds(tmp_path, monkeypatch, valid_receipt):
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     monkeypatch.setattr(
         receiver_check.subprocess,
         "run",
-        _fake_gh_run(0, _matching_attestation_json(valid_evidence), b""),
+        _fake_gh_run(0, _matching_attestation_json(valid_receipt), b""),
     )
     # must not raise
-    receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+    receiver_check.check_signer(valid_receipt, base_sha, _definition_digest(valid_receipt))
 
 
-def test_signer_check_rejects_predicate_content_mismatch(tmp_path, monkeypatch, valid_evidence):
+def test_signer_check_rejects_predicate_content_mismatch(tmp_path, monkeypatch, valid_receipt):
     """A validly-signed attestation whose predicate does not actually claim
     acceptance must still be rejected -- a successful gh exit code alone is
     not sufficient (this is the exact "unsigned claims laundering" gap the
     trust-boundary review flagged)."""
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    mismatched = _attestation_json(valid_evidence, assessment="rejected")
+    mismatched = _attestation_json(valid_receipt, assessment="rejected")
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, mismatched, b""))
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+        receiver_check.check_signer(valid_receipt, base_sha, _definition_digest(valid_receipt))
     assert excinfo.value.policy == "signer"
 
 
-def test_signer_check_rejects_subject_digest_mismatch(tmp_path, monkeypatch, valid_evidence):
+def test_signer_check_rejects_subject_digest_mismatch(tmp_path, monkeypatch, valid_receipt):
     """A valid, correctly-worded predicate attached to the WRONG subject digest
-    (i.e. it attests to some other evidence package) must be rejected."""
+    (i.e. it attests to some other receipt) must be rejected."""
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    wrong_digest = _attestation_json(valid_evidence, subject_digest="0" * 64)
+    wrong_digest = _attestation_json(valid_receipt, subject_digest="0" * 64)
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, wrong_digest, b""))
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+        receiver_check.check_signer(valid_receipt, base_sha, _definition_digest(valid_receipt))
     assert excinfo.value.policy == "signer"
 
 
-def test_signer_check_rejects_unapproved_signer_revision(tmp_path, monkeypatch, valid_evidence):
+def test_signer_check_rejects_unapproved_signer_revision(tmp_path, monkeypatch, valid_receipt):
     """A validly-signed attestation from a real, legitimately-authenticated
     run of the signer workflow -- but at a commit/revision this receiver has
     not actually approved -- must still be rejected. This requires no live
@@ -434,15 +463,15 @@ def test_signer_check_rejects_unapproved_signer_revision(tmp_path, monkeypatch, 
     which all use the approved digest)."""
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    unapproved = _attestation_json(valid_evidence, source_digest=_UNAPPROVED_SIGNER_DIGEST)
+    unapproved = _attestation_json(valid_receipt, source_digest=_UNAPPROVED_SIGNER_DIGEST)
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, unapproved, b""))
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+        receiver_check.check_signer(valid_receipt, base_sha, _definition_digest(valid_receipt))
     assert excinfo.value.policy == "signer"
 
 
-def test_signer_check_rejects_empty_allowlist(tmp_path, monkeypatch, valid_evidence):
+def test_signer_check_rejects_empty_allowlist(tmp_path, monkeypatch, valid_receipt):
     """A signers.json with no approvedSignerSourceDigests must fail closed
     even when gh attestation verify would otherwise succeed -- this is the
     deliberate pre-bootstrap state."""
@@ -458,14 +487,14 @@ def test_signer_check_rejects_empty_allowlist(tmp_path, monkeypatch, valid_evide
     monkeypatch.setattr(
         receiver_check.subprocess,
         "run",
-        _fake_gh_run(0, _matching_attestation_json(valid_evidence), b""),
+        _fake_gh_run(0, _matching_attestation_json(valid_receipt), b""),
     )
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+        receiver_check.check_signer(valid_receipt, base_sha, _definition_digest(valid_receipt))
     assert excinfo.value.policy == "signer"
 
 
-def test_signer_check_rejects_definition_sha256_mismatch(tmp_path, monkeypatch, valid_evidence):
+def test_signer_check_rejects_definition_sha256_mismatch(tmp_path, monkeypatch, valid_receipt):
     """A validly-signed, correctly-worded, approved-revision attestation
     that nonetheless signs a DIFFERENT definitionSha256 than the one this
     receiver independently computed for this evidence must be rejected --
@@ -473,15 +502,15 @@ def test_signer_check_rejects_definition_sha256_mismatch(tmp_path, monkeypatch, 
     against unrelated evidence sharing the same generic predicate shape."""
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    wrong_definition = _attestation_json(valid_evidence, definition_sha256="f" * 64)
+    wrong_definition = _attestation_json(valid_receipt, definition_sha256="f" * 64)
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, wrong_definition, b""))
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+        receiver_check.check_signer(valid_receipt, base_sha, _definition_digest(valid_receipt))
     assert excinfo.value.policy == "signer"
 
 
-def test_signer_check_rejects_missing_assessed_checks(tmp_path, monkeypatch, valid_evidence):
+def test_signer_check_rejects_missing_assessed_checks(tmp_path, monkeypatch, valid_receipt):
     """A signature that never actually claims to have run a
     receiver-required assessed check (e.g. it omits "execution") must be
     rejected, even though every other field matches."""
@@ -490,7 +519,7 @@ def test_signer_check_rejects_missing_assessed_checks(tmp_path, monkeypatch, val
     policy_path = repo / _POLICY_RELATIVE / "signers.json"
     policy = json.loads(policy_path.read_text())
     policy["requiredAssessedChecks"] = [
-        "integrity",
+        "audit",
         "factory",
         "capability-revocation",
         "execution",
@@ -499,11 +528,11 @@ def test_signer_check_rejects_missing_assessed_checks(tmp_path, monkeypatch, val
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "require execution")
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    incomplete = _attestation_json(valid_evidence)  # omits "execution"
+    incomplete = _attestation_json(valid_receipt)  # omits "execution"
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     monkeypatch.setattr(receiver_check.subprocess, "run", _fake_gh_run(0, incomplete, b""))
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_signer(valid_evidence, base_sha, _evidence_digest(valid_evidence))
+        receiver_check.check_signer(valid_receipt, base_sha, _definition_digest(valid_receipt))
     assert excinfo.value.policy == "signer"
 
 
@@ -515,28 +544,20 @@ def test_capability_revocation_rejects_revoked_identity(tmp_path, monkeypatch):
     _git(repo, "commit", "-q", "-m", "revoke")
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
-    evidence_dir = tmp_path / "evidence"
-    evidence_dir.mkdir()
-    (evidence_dir / "capability-bindings.json").write_text(
-        json.dumps([{"capability": "danger-skill", "lockIdentity": "pkg@deadbeef"}])
-    )
+    bindings = [{"capability": "danger-skill", "lockIdentity": "pkg@deadbeef"}]
 
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_capability_revocation(evidence_dir, base_sha)
+        receiver_check.check_capability_revocation(bindings, base_sha)
     assert excinfo.value.policy == "capability-revoked"
 
 
 def test_capability_revocation_allows_unrevoked_identity(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    evidence_dir = tmp_path / "evidence"
-    evidence_dir.mkdir()
-    (evidence_dir / "capability-bindings.json").write_text(
-        json.dumps([{"capability": "safe-skill", "lockIdentity": "pkg@still-trusted"}])
-    )
+    bindings = [{"capability": "safe-skill", "lockIdentity": "pkg@still-trusted"}]
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    receiver_check.check_capability_revocation(evidence_dir, base_sha)  # must not raise
+    receiver_check.check_capability_revocation(bindings, base_sha)  # must not raise
 
 
 def _write_revocation_policy(
@@ -559,8 +580,13 @@ def _write_revocation_policy(
     return _git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
-def _real_binding(evidence_dir: Path) -> dict:
-    bindings = json.loads((evidence_dir / "capability-bindings.json").read_bytes())
+def _bindings(receipt_dir: Path) -> tuple[dict, ...]:
+    """Capability bindings as established by ``apmx audit``'s Factory row."""
+    return receiver_check.audit_receipt(receipt_dir).capability_bindings
+
+
+def _real_binding(receipt_dir: Path) -> dict:
+    bindings = _bindings(receipt_dir)
     assert bindings, "fixture produced an empty capability-bindings.json; GAP #6 regressed"
     binding = bindings[0]
     assert binding.get("purl") and binding.get("bodySha256"), (
@@ -570,63 +596,67 @@ def _real_binding(evidence_dir: Path) -> dict:
 
 
 def test_capability_revocation_accepts_real_binding_against_empty_policy(
-    tmp_path, monkeypatch, valid_evidence
+    tmp_path, monkeypatch, valid_receipt
 ):
     """The real, nonempty capability-bindings.json produced by the real
     make_fixture/apmx inventory pipeline is accepted when nothing is
     revoked -- the baseline accept case for the structured selector."""
-    _real_binding(valid_evidence)  # sanity: real nonempty binding exists
+    _real_binding(valid_receipt)  # sanity: real nonempty binding exists
     repo = _init_repo(tmp_path, approved_digests=[])
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    receiver_check.check_capability_revocation(valid_evidence, base_sha)  # must not raise
+    receiver_check.check_capability_revocation(_bindings(valid_receipt), base_sha)  # must not raise
 
 
 def test_capability_revocation_rejects_exact_purl_and_digest_pair(
-    tmp_path, monkeypatch, valid_evidence
+    tmp_path, monkeypatch, valid_receipt
 ):
     """Revoking the REAL (purl, bodySha256) pair observed in the real
     fixture's binding -- not a synthetic string -- genuinely rejects it."""
-    binding = _real_binding(valid_evidence)
+    binding = _real_binding(valid_receipt)
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     revoked_sha = _write_revocation_policy(repo, pairs=[(binding["purl"], binding["bodySha256"])])
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_capability_revocation(valid_evidence, revoked_sha)
+        receiver_check.check_capability_revocation(_bindings(valid_receipt), revoked_sha)
     assert excinfo.value.policy == "capability-revoked"
     assert binding["purl"] in excinfo.value.detail
     assert binding["bodySha256"] in excinfo.value.detail
 
 
 def test_capability_revocation_allows_changed_body_digest_same_package(
-    tmp_path, monkeypatch, valid_evidence
+    tmp_path, monkeypatch, valid_receipt
 ):
     """A revoked pair naming the SAME package purl but a DIFFERENT
     bodySha256 (e.g. a prior, since-edited revision of the skill) must not
     revoke the current, differently-hashed content -- selectors match
     exactly, not by package identity alone."""
-    binding = _real_binding(valid_evidence)
+    binding = _real_binding(valid_receipt)
     different_digest = "0" * 64
     assert different_digest != binding["bodySha256"]
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     revoked_sha = _write_revocation_policy(repo, pairs=[(binding["purl"], different_digest)])
-    receiver_check.check_capability_revocation(valid_evidence, revoked_sha)  # must not raise
+    receiver_check.check_capability_revocation(
+        _bindings(valid_receipt), revoked_sha
+    )  # must not raise
 
 
 def test_capability_revocation_allows_different_package_identity(
-    tmp_path, monkeypatch, valid_evidence
+    tmp_path, monkeypatch, valid_receipt
 ):
     """A revoked pair with the SAME bodySha256 but a DIFFERENT purl (e.g. a
     coincidentally identical byte sequence published under another
     package) must not revoke this package -- both fields are required."""
-    binding = _real_binding(valid_evidence)
+    binding = _real_binding(valid_receipt)
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     revoked_sha = _write_revocation_policy(
         repo, pairs=[("pkg:generic/unrelated-package", binding["bodySha256"])]
     )
-    receiver_check.check_capability_revocation(valid_evidence, revoked_sha)  # must not raise
+    receiver_check.check_capability_revocation(
+        _bindings(valid_receipt), revoked_sha
+    )  # must not raise
 
 
 def _write_raw_revocation_policy(repo: Path, *, capabilities: list) -> str:
@@ -642,24 +672,24 @@ def _write_raw_revocation_policy(repo: Path, *, capabilities: list) -> str:
 
 
 def test_capability_revocation_rejects_malformed_entry_missing_body_sha256(
-    tmp_path, monkeypatch, valid_evidence
+    tmp_path, monkeypatch, valid_receipt
 ):
     """A selector entry with a 'purl' but no 'bodySha256' at all must fail
     closed (reject the whole check), never be silently dropped from the
     active revocation set -- a typo'd/missing field in an intended deny
     rule must not turn into an accidental allow."""
-    binding = _real_binding(valid_evidence)
+    binding = _real_binding(valid_receipt)
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     bad_sha = _write_raw_revocation_policy(repo, capabilities=[{"purl": binding["purl"]}])
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+        receiver_check.check_capability_revocation(_bindings(valid_receipt), bad_sha)
     assert excinfo.value.policy == "capability-revoked"
     assert "bodySha256" in excinfo.value.detail
 
 
 def test_capability_revocation_rejects_malformed_entry_wrong_field_type(
-    tmp_path, monkeypatch, valid_evidence
+    tmp_path, monkeypatch, valid_receipt
 ):
     """A selector entry with a non-string purl (wrong type) must fail
     closed rather than being silently filtered out via truthiness."""
@@ -669,42 +699,42 @@ def test_capability_revocation_rejects_malformed_entry_wrong_field_type(
         repo, capabilities=[{"purl": 12345, "bodySha256": "a" * 64}]
     )
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+        receiver_check.check_capability_revocation(_bindings(valid_receipt), bad_sha)
     assert excinfo.value.policy == "capability-revoked"
     assert "purl" in excinfo.value.detail
 
 
 def test_capability_revocation_rejects_malformed_digest_format(
-    tmp_path, monkeypatch, valid_evidence
+    tmp_path, monkeypatch, valid_receipt
 ):
     """A 'bodySha256' that is not exactly 64 lowercase hex characters (e.g.
     a truncated/typo'd digest) must fail closed, not be silently dropped
     from the active revocation set."""
-    binding = _real_binding(valid_evidence)
+    binding = _real_binding(valid_receipt)
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     bad_sha = _write_raw_revocation_policy(
         repo, capabilities=[{"purl": binding["purl"], "bodySha256": "not-a-real-digest"}]
     )
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+        receiver_check.check_capability_revocation(_bindings(valid_receipt), bad_sha)
     assert excinfo.value.policy == "capability-revoked"
     assert "bodySha256" in excinfo.value.detail
 
 
-def test_capability_revocation_allows_empty_capabilities_list(
-    tmp_path, monkeypatch, valid_evidence
-):
+def test_capability_revocation_allows_empty_capabilities_list(tmp_path, monkeypatch, valid_receipt):
     """An absent/empty structured 'capabilities' list remains valid --
     legacy lockIdentity-only policies must keep working unchanged."""
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     revoked_sha = _write_revocation_policy(repo)  # lock_identities=(), pairs=()
-    receiver_check.check_capability_revocation(valid_evidence, revoked_sha)  # must not raise
+    receiver_check.check_capability_revocation(
+        _bindings(valid_receipt), revoked_sha
+    )  # must not raise
 
 
 def test_capability_revocation_rejects_digest_with_trailing_newline(
-    tmp_path, monkeypatch, valid_evidence
+    tmp_path, monkeypatch, valid_receipt
 ):
     """A 65-character 'bodySha256' consisting of 64 valid hex characters
     plus a trailing newline must be rejected, not accepted as if the
@@ -712,7 +742,7 @@ def test_capability_revocation_rejects_digest_with_trailing_newline(
     ``$``-anchored pattern wrongly accepts this because ``$`` matches
     just before a trailing newline, not only at the true end of string;
     ``fullmatch`` must be used to require exact-length consumption."""
-    _real_binding(valid_evidence)
+    _real_binding(valid_receipt)
     repo = _init_repo(tmp_path, approved_digests=[])
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     bad_sha = _write_raw_revocation_policy(
@@ -720,14 +750,14 @@ def test_capability_revocation_rejects_digest_with_trailing_newline(
         capabilities=[{"purl": "pkg:generic/demo", "bodySha256": "a" * 64 + "\n"}],
     )
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+        receiver_check.check_capability_revocation(_bindings(valid_receipt), bad_sha)
     assert excinfo.value.policy == "capability-revoked"
     assert "bodySha256" in excinfo.value.detail
 
 
 @pytest.mark.parametrize("malformed_capabilities", [{}, ""])
 def test_capability_revocation_rejects_non_list_capabilities_value(
-    tmp_path, monkeypatch, valid_evidence, malformed_capabilities
+    tmp_path, monkeypatch, valid_receipt, malformed_capabilities
 ):
     """The 'capabilities' policy field must itself be a JSON array. A dict
     or string value (e.g. '{}' or '""') must be rejected explicitly, not
@@ -737,7 +767,7 @@ def test_capability_revocation_rejects_non_list_capabilities_value(
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     bad_sha = _write_raw_revocation_policy(repo, capabilities=malformed_capabilities)
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_capability_revocation(valid_evidence, bad_sha)
+        receiver_check.check_capability_revocation(_bindings(valid_receipt), bad_sha)
     assert excinfo.value.policy == "capability-revoked"
     assert "capabilities" in excinfo.value.detail
 
@@ -780,11 +810,11 @@ def test_capability_revocation_matches_same_pair_despite_different_install_path(
         repo, pairs=[(first_binding["purl"], first_binding["bodySha256"])]
     )
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.check_capability_revocation(second, revoked_sha)
+        receiver_check.check_capability_revocation(_bindings(second), revoked_sha)
     assert excinfo.value.policy == "capability-revoked"
 
 
-def test_candidate_cannot_override_the_control_plane(tmp_path, monkeypatch, valid_evidence):
+def test_candidate_cannot_override_the_control_plane(tmp_path, monkeypatch, valid_receipt):
     """The PR head commits a tampered copy of the receiver's own approved-
     factories policy at the SAME repo path the real policy lives at. If
     check_factory_policy ever read from head_sha instead of base_sha, this
@@ -793,7 +823,7 @@ def test_candidate_cannot_override_the_control_plane(tmp_path, monkeypatch, vali
     of what the PR's own tree contains at that path."""
     repo = _init_repo(tmp_path, approved_digests=[])  # nothing approved on the base
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    digest = _evidence_digest(valid_evidence)
+    digest = _definition_digest(valid_receipt)
     (repo / _POLICY_RELATIVE / "approved-factories.json").write_text(
         json.dumps({"definitionSha256": [digest]})
     )
@@ -813,14 +843,14 @@ def test_candidate_cannot_override_the_control_plane(tmp_path, monkeypatch, vali
     ).get("definitionSha256", [])
 
 
-def test_materialized_case_evidence_rejects_symlinks(tmp_path, monkeypatch):
-    """A PR could add a symlink under its own evidence/ directory pointing
+def test_materialized_case_receipt_rejects_symlinks(tmp_path, monkeypatch):
+    """A PR could add a symlink under its own receipt/ directory pointing
     anywhere on the runner's filesystem; it must never be followed."""
     repo = _init_repo(tmp_path, approved_digests=[])
     case_dir = repo / "cases" / "symlink-attempt"
-    evidence_dir = case_dir / "evidence"
-    evidence_dir.mkdir(parents=True)
-    (evidence_dir / "escape").symlink_to("/etc/passwd")
+    receipt_dir = case_dir / "receipt"
+    receipt_dir.mkdir(parents=True)
+    (receipt_dir / "escape").symlink_to("/etc/passwd")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "symlink attempt")
     head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -828,48 +858,46 @@ def test_materialized_case_evidence_rejects_symlinks(tmp_path, monkeypatch):
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     with (
         pytest.raises(receiver_check.ReceiverFailure) as excinfo,
-        receiver_check.materialized_case_evidence(head_sha, "cases/symlink-attempt"),
+        receiver_check.materialized_case_receipt(head_sha, "cases/symlink-attempt"),
     ):
         pass
-    assert excinfo.value.policy == "missing-evidence"
+    assert excinfo.value.policy == "missing-receipt"
 
 
-def test_materialized_case_evidence_enforces_file_count_bound(tmp_path, monkeypatch):
+def test_materialized_case_receipt_enforces_file_count_bound(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path, approved_digests=[])
     case_dir = repo / "cases" / "too-many-files"
-    evidence_dir = case_dir / "evidence"
-    evidence_dir.mkdir(parents=True)
+    receipt_dir = case_dir / "receipt"
+    receipt_dir.mkdir(parents=True)
     for index in range(5):
-        (evidence_dir / f"file-{index}.txt").write_text("x")
+        (receipt_dir / f"file-{index}.txt").write_text("x")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "many files")
     head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    monkeypatch.setattr(receiver_check, "_MAX_EVIDENCE_FILES", 2)
+    monkeypatch.setattr(receiver_check, "_MAX_RECEIPT_FILES", 2)
     with (
         pytest.raises(receiver_check.ReceiverFailure) as excinfo,
-        receiver_check.materialized_case_evidence(head_sha, "cases/too-many-files"),
+        receiver_check.materialized_case_receipt(head_sha, "cases/too-many-files"),
     ):
         pass
-    assert excinfo.value.policy == "missing-evidence"
+    assert excinfo.value.policy == "missing-receipt"
 
 
-def test_assess_canonical_runs_factory_and_capability_checks(
-    tmp_path, monkeypatch, valid_evidence, schemas_dir
-):
+def test_assess_canonical_runs_factory_and_capability_checks(tmp_path, monkeypatch, valid_receipt):
     """The privileged pre-signing assessment (reused unmodified by
     receiver-attest.yml) must actually run factory-allowlist and
     capability-revocation policy, not just structural verification -- this
     is the fix for the predicate-claim-overreach blocker."""
-    digest = _evidence_digest(valid_evidence)
+    digest = _definition_digest(valid_receipt)
     repo = _init_repo(tmp_path, approved_digests=[])  # not approved
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
     monkeypatch.setattr(receiver_check, "run_execution_bundle", _fake_passing_execution_results)
 
     with pytest.raises(receiver_check.ReceiverFailure) as excinfo:
-        receiver_check.assess_canonical(valid_evidence, base_sha, schemas_dir)
+        receiver_check.assess_canonical(valid_receipt, base_sha)
     assert excinfo.value.policy == "factory"
 
     (repo / _POLICY_RELATIVE / "approved-factories.json").write_text(
@@ -879,8 +907,8 @@ def test_assess_canonical_runs_factory_and_capability_checks(
     _git(repo, "commit", "-q", "-m", "approve")
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
-    summary = receiver_check.assess_canonical(valid_evidence, base_sha, schemas_dir)
-    assert summary["definitionSha256"] == digest
+    audited = receiver_check.assess_canonical(valid_receipt, base_sha)
+    assert audited.definition_sha256 == digest
 
 
 def test_trusted_execution_image_requires_pinned_digest(tmp_path, monkeypatch):
@@ -1723,24 +1751,22 @@ def test_real_docker_execution_positive_and_tampering(tmp_path, monkeypatch):
     assert excinfo.value.policy == "execution"
 
 
-def test_materialized_case_evidence_rejects_oversized_blob_without_reading_it(
-    tmp_path, monkeypatch
-):
+def test_materialized_case_receipt_rejects_oversized_blob_without_reading_it(tmp_path, monkeypatch):
     """Byte-bounding must come from trusted git object METADATA, not from
     reading content and checking afterwards: this proves an oversized blob
     is rejected via ``_git_blob_sizes`` alone, with ``git show`` (the actual
     content read) never invoked for that blob."""
     repo = _init_repo(tmp_path, approved_digests=[])
     case_dir = repo / "cases" / "oversized"
-    evidence_dir = case_dir / "evidence"
-    evidence_dir.mkdir(parents=True)
-    (evidence_dir / "big.bin").write_bytes(b"x" * 4096)
+    receipt_dir = case_dir / "receipt"
+    receipt_dir.mkdir(parents=True)
+    (receipt_dir / "big.bin").write_bytes(b"x" * 4096)
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "oversized blob")
     head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
     monkeypatch.setattr(receiver_check, "_REPO_ROOT", repo)
-    monkeypatch.setattr(receiver_check, "_MAX_EVIDENCE_BLOB_BYTES", 1024)
+    monkeypatch.setattr(receiver_check, "_MAX_RECEIPT_BLOB_BYTES", 1024)
 
     real_run_git = receiver_check._run_git
 
@@ -1752,10 +1778,10 @@ def test_materialized_case_evidence_rejects_oversized_blob_without_reading_it(
     monkeypatch.setattr(receiver_check, "_run_git", spying_run_git)
     with (
         pytest.raises(receiver_check.ReceiverFailure) as excinfo,
-        receiver_check.materialized_case_evidence(head_sha, "cases/oversized"),
+        receiver_check.materialized_case_receipt(head_sha, "cases/oversized"),
     ):
         pass
-    assert excinfo.value.policy == "missing-evidence"
+    assert excinfo.value.policy == "missing-receipt"
 
 
 def _copy_tree(source: Path, destination: Path) -> None:

@@ -1,10 +1,12 @@
-"""Generate the enterprise-receiver positive FIXTURE Evidence Package.
+"""Generate the enterprise-receiver positive FIXTURE receipt.
 
 This is a FIXTURE generator, not a live demonstration transcript. It drives the
-*real* apmx contract engine and the *real* Evidence Package export
-(``apmx.contracts.evidence.export_package``) end to end, over a deliberately
-tiny public application, so the resulting package is a genuine, reproducible
-product of APMX's own code paths rather than a hand-authored JSON sample.
+*real* apmx contract engine and the *real* receipt delivery
+(``apmx.contracts.evidence.export_completed``, the same call ``apmx`` makes
+after every COMPLETE run, writing ``.apm/runs/<id>/receipt``) end to end, over
+a deliberately tiny public application, so the resulting receipt is a genuine,
+reproducible product of APMX's own code paths rather than a hand-authored JSON
+sample. Verify it with ``apmx audit <destination>``.
 
 Exactly ONE thing is deliberately stood in, and it is disclosed here (an
 earlier revision of this docstring also named the capability inventory as
@@ -56,7 +58,7 @@ mocked; that is no longer true -- see below):
    using this exact real purl/bodySha256 pair).
 
 Everything downstream of the model-backend substitution (baseline capture,
-checker execution, in-toto/SLSA statements, CycloneDX export, package
+checker execution, in-toto/SLSA statements, CycloneDX export, receipt
 assembly) is real apmx code running for real against real files on disk.
 
 No private evidence, transcript, or credential is read or published by this
@@ -67,6 +69,7 @@ import argparse
 import hashlib
 import json
 import shlex
+import shutil
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -116,7 +119,7 @@ def _contract_body(variant: str) -> str:
     )
     if variant != "approved":
         # A distinct, self-consistent contract body from an otherwise-unapproved
-        # factory identity. The produced evidence is internally valid and its
+        # factory identity. The produced receipt is internally valid and its
         # check genuinely passes; only the factory/definition identity differs,
         # which is what the receiver's factory allowlist must catch on its own.
         instruction += f"\n\nFactory variant label: {variant} (not on the receiver allowlist)."
@@ -267,7 +270,7 @@ def make_fixture(
     destination: Path, variant: str = "approved", skill_source_dir: Path | None = None
 ) -> dict:
     with TemporaryDirectory(prefix="apmx-enterprise-receiver-fixture-") as temporary:
-        project_root = Path(temporary) / "project"
+        project_root = Path(temporary).resolve() / "project"
         project_root.mkdir()
         plan = _build_plan(project_root, variant, skill_source_dir=skill_source_dir)
         with pytest.MonkeyPatch.context() as monkeypatch:
@@ -276,12 +279,13 @@ def make_fixture(
             result = engine.run_contract(plan, logger=logger, allow_advisory=True)
             if result.outcome.name != "COMPLETE":
                 raise SystemExit(f"Fixture contract did not complete: {result.outcome.name}")
-            package_path = evidence.export_package(
-                result.run_directory / "record.json", destination
-            )
-    manifest = json.loads((package_path / "index.json").read_bytes())
+            delivered = evidence.export_completed(result)
+            if delivered is None or delivered.name != evidence.RECEIPT_DIRECTORY:
+                raise SystemExit(f"COMPLETE fixture run delivered no receipt: {delivered}")
+            shutil.copytree(delivered, destination)
+    manifest = json.loads((destination / "index.json").read_bytes())
     return {
-        "package": str(package_path),
+        "receipt": str(destination),
         "files": sorted(manifest["files"]),
         "definitionSha256": manifest["definition"]["digest"]["sha256"],
     }
@@ -289,12 +293,12 @@ def make_fixture(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("destination", type=Path, help="New directory for the Evidence Package")
+    parser.add_argument("destination", type=Path, help="New directory for the receipt")
     parser.add_argument(
         "--variant",
         default="approved",
         help="Factory-identity label. 'approved' matches the receiver allowlist; "
-        "any other value produces self-consistent evidence from a different, "
+        "any other value produces a self-consistent receipt from a different, "
         "unapproved factory definition (used for the factory-policy negative case).",
     )
     args = parser.parse_args()

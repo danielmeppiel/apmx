@@ -3,14 +3,14 @@ name: Receiver Evidence Attestation
 # Privileged signing boundary for the enterprise-receiver demo. This workflow
 # never checks out or executes a pull request head; it only runs for pushes
 # to the trusted examples/enterprise-receiver base branch (or an explicit
-# manual dispatch), over evidence already committed to that trusted tree. It
+# manual dispatch), over a receipt already committed to that trusted tree. It
 # has no access to any candidate's working tree and performs no candidate
 # checking itself -- that is receiver-candidate-check.yml's unprivileged job.
 #
 # Same three-job, artifact-bridged pipeline as receiver-candidate-check.yml,
 # so the ONLY job holding id-token:write/attestations:write (sign) never
 # shares a runner or workspace with the job that actually executes the
-# canonical evidence's candidate bytes:
+# canonical receipt's candidate bytes:
 #
 #   prepare (job A) -- contents:read only, re-derives every digest, writes
 #     the execution bundle for job B.
@@ -30,7 +30,7 @@ name: Receiver Evidence Attestation
 # The signature this workflow produces authenticates one claim only: "this
 # exact CI assessment workflow ran its full policy assessment -- including
 # the receiver-required behavioral execution check -- against this exact
-# evidence package and it was accepted". It is not a SLSA build-provenance
+# receipt and it was accepted". It is not a SLSA build-provenance
 # claim about the underlying candidate code, it is not a per-PR binding
 # claim (binding only applies to a specific candidate PR, and is the
 # unprivileged job's responsibility), and it does not retroactively
@@ -41,7 +41,7 @@ on:
     branches:
       - "examples/enterprise-receiver"
     paths:
-      - "examples/enterprise-receiver/fixtures/approved-evidence/**"
+      - "examples/enterprise-receiver/fixtures/approved-receipt/**"
   workflow_dispatch:
 
 permissions:
@@ -49,7 +49,7 @@ permissions:
 
 env:
   PREDICATE_TYPE: "https://danielmeppiel.dev/apmx/receiver-ci-assessment/v1"
-  EVIDENCE_DIR: examples/enterprise-receiver/fixtures/approved-evidence
+  RECEIPT_DIR: examples/enterprise-receiver/fixtures/approved-receipt
   BUNDLE_ARTIFACT: receiver-attest-bundle-${{ github.run_id }}
   RESULTS_ARTIFACT: receiver-attest-results-${{ github.run_id }}
 
@@ -69,44 +69,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install independent evidence verifier
+      - name: Install the receipt verifier's pinned dependencies (apmx audit rows, no apmx package)
         run: |
           set -euo pipefail
           python3 -m venv .venv-evidence
           .venv-evidence/bin/python -m pip install --quiet --upgrade pip
           .venv-evidence/bin/python -m pip install --quiet -r scripts/evidence-requirements.txt
 
-      - name: Fetch pinned evidence schemas (offline afterwards)
-        run: |
-          set -euo pipefail
-          .venv-evidence/bin/python - "$PWD/.schema-cache" <<'PY'
-          import hashlib
-          import sys
-          from pathlib import Path
-          from urllib.request import urlopen
-
-          sys.path.insert(0, "scripts")
-          import verify_evidence as ve
-
-          cache = Path(sys.argv[1])
-          cache.mkdir(parents=True, exist_ok=True)
-          for name, expected in ve.SCHEMAS.items():
-              url = f"https://raw.githubusercontent.com/CycloneDX/specification/{ve.SCHEMA_COMMIT}/schema/{name}"
-              with urlopen(url, timeout=30) as response:
-                  raw = response.read(2 * 1024 * 1024)
-              digest = hashlib.sha256(raw).hexdigest()
-              assert digest == expected, f"schema hash mismatch for {name}: {digest}"
-              (cache / name).write_bytes(raw)
-          PY
-
-      - name: Prepare the execution bundle for the canonical evidence package
+      - name: Prepare the execution bundle for the canonical receipt
         run: |
           set -euo pipefail
           .venv-evidence/bin/python examples/enterprise-receiver/receiver/check.py \
             prepare-canonical \
-            --evidence-dir "$EVIDENCE_DIR" \
+            --receipt-dir "$RECEIPT_DIR" \
             --base-sha "${{ github.sha }}" \
-            --schemas "$PWD/.schema-cache" \
             --bundle-dir bundle
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -125,7 +101,7 @@ jobs:
     steps:
       # Deliberately NO actions/checkout step and NO access to any signing
       # credential: this job's entire code is the one trusted file job A
-      # placed in the bundle (run_bundle.py). The canonical evidence's
+      # placed in the bundle (run_bundle.py). The canonical receipt's
       # candidate bytes are executed here, and ONLY here -- never in the
       # signing job below.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -133,7 +109,7 @@ jobs:
           name: ${{ env.BUNDLE_ARTIFACT }}
           path: bundle/
 
-      - name: Execute the canonical evidence's candidate inside an isolated container
+      - name: Execute the canonical receipt's candidate inside an isolated container
         run: |
           set -euo pipefail
           python3 bundle/run_bundle.py --bundle-dir bundle --results results.json
@@ -163,35 +139,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install independent evidence verifier
+      - name: Install the receipt verifier's pinned dependencies (apmx audit rows, no apmx package)
         run: |
           set -euo pipefail
           python3 -m venv .venv-evidence
           .venv-evidence/bin/python -m pip install --quiet --upgrade pip
           .venv-evidence/bin/python -m pip install --quiet -r scripts/evidence-requirements.txt
-
-      - name: Fetch pinned evidence schemas (offline afterwards, independently)
-        run: |
-          set -euo pipefail
-          .venv-evidence/bin/python - "$PWD/.schema-cache" <<'PY'
-          import hashlib
-          import sys
-          from pathlib import Path
-          from urllib.request import urlopen
-
-          sys.path.insert(0, "scripts")
-          import verify_evidence as ve
-
-          cache = Path(sys.argv[1])
-          cache.mkdir(parents=True, exist_ok=True)
-          for name, expected in ve.SCHEMAS.items():
-              url = f"https://raw.githubusercontent.com/CycloneDX/specification/{ve.SCHEMA_COMMIT}/schema/{name}"
-              with urlopen(url, timeout=30) as response:
-                  raw = response.read(2 * 1024 * 1024)
-              digest = hashlib.sha256(raw).hexdigest()
-              assert digest == expected, f"schema hash mismatch for {name}: {digest}"
-              (cache / name).write_bytes(raw)
-          PY
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -209,35 +162,34 @@ jobs:
           set -euo pipefail
           result="$(.venv-evidence/bin/python examples/enterprise-receiver/receiver/check.py \
             assess-canonical \
-            --evidence-dir "$EVIDENCE_DIR" \
+            --receipt-dir "$RECEIPT_DIR" \
             --base-sha "${{ github.sha }}" \
-            --schemas "$PWD/.schema-cache" \
             --bundle-dir bundle \
             --results results-download/results.json)"
           echo "$result"
           status="$(echo "$result" | .venv-evidence/bin/python -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
           if [ "$status" != "accepted" ]; then
-            echo "::error::Receiver policy assessment rejected the canonical evidence; refusing to sign."
+            echo "::error::Receiver policy assessment rejected the canonical receipt; refusing to sign."
             exit 1
           fi
           definition_sha256="$(echo "$result" | .venv-evidence/bin/python -c 'import json,sys; print(json.load(sys.stdin)["definitionSha256"])')"
           echo "definition_sha256=${definition_sha256}" >> "$GITHUB_OUTPUT"
 
-      - name: Write the assessment receipt for the gate job (even on rejection)
+      - name: Write the assessment verdict for the gate job (even on rejection)
         if: always()
         run: |
           set -euo pipefail
           python3 -c '
           import json
-          json.dump({"accepted": "${{ steps.assess.outcome }}" == "success"}, open("receipt.json", "w"))
+          json.dump({"accepted": "${{ steps.assess.outcome }}" == "success"}, open("verdict.json", "w"))
           '
 
-      - name: Upload the assessment receipt for the gate job
+      - name: Upload the assessment verdict for the gate job
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: receiver-attest-receipt-${{ github.run_id }}
-          path: receipt.json
+          name: receiver-attest-verdict-${{ github.run_id }}
+          path: verdict.json
           retention-days: 1
           if-no-files-found: ignore
 
@@ -252,14 +204,14 @@ jobs:
             --arg assessment "accepted" \
             --arg definitionSha256 "$DEFINITION_SHA256" \
             '{assessedBy: $assessedBy, assessment: $assessment,
-              assessedChecks: ["integrity", "factory", "capability-revocation", "execution"],
+              assessedChecks: ["audit", "factory", "capability-revocation", "execution"],
               definitionSha256: $definitionSha256}' \
             > predicate.json
           cat predicate.json
 
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: ${{ env.EVIDENCE_DIR }}/index.json
+          subject-path: ${{ env.RECEIPT_DIR }}/index.json
           predicate-type: ${{ env.PREDICATE_TYPE }}
           predicate-path: predicate.json
 
@@ -284,8 +236,8 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: receiver-attest-receipt-${{ github.run_id }}
-          path: receipt/
+          name: receiver-attest-verdict-${{ github.run_id }}
+          path: verdict/
         continue-on-error: true
 
       - name: Evaluate the fail-closed gate
@@ -295,5 +247,5 @@ jobs:
             --job-result "prepare=${{ needs.prepare.result }}" \
             --job-result "execute=${{ needs.execute.result }}" \
             --job-result "sign=${{ needs.sign.result }}" \
-            --receipt receipt/receipt.json
+            --verdict verdict/verdict.json
 

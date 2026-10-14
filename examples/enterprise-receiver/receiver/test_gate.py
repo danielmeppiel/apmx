@@ -6,7 +6,7 @@ decision logic was deliberately extracted into pure, directly testable
 Python (see gate.py's module docstring). Every combination exercised here
 corresponds to a real GitHub Actions scenario the gate job must handle
 correctly: a genuinely passing run, each individual upstream job
-failing/skipped/cancelled, a missing or malformed receipt, and a receipt
+failing/skipped/cancelled, a missing or malformed verdict, and a verdict
 whose case set doesn't exactly match what job A actually prepared.
 """
 
@@ -24,11 +24,11 @@ ALL_SUCCESS = {"prepare": "success", "execute": "success", "assess": "success"}
 THREE_CASES = ["case-a", "case-b", "case-c"]
 
 
-def _receipt(*, accepted: bool, cases: list[dict] | None = None) -> dict:
-    receipt: dict = {"accepted": accepted}
+def _verdict(*, accepted: bool, cases: list[dict] | None = None) -> dict:
+    verdict: dict = {"accepted": accepted}
     if cases is not None:
-        receipt["cases"] = cases
-    return receipt
+        verdict["cases"] = cases
+    return verdict
 
 
 def _full_accepted_cases(names: list[str]) -> list[dict]:
@@ -40,10 +40,10 @@ def _full_accepted_cases(names: list[str]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def test_gate_passes_when_all_jobs_succeed_and_receipt_is_complete():
+def test_gate_passes_when_all_jobs_succeed_and_verdict_is_complete():
     outcome = gate.evaluate_gate(
         ALL_SUCCESS,
-        _receipt(accepted=True, cases=_full_accepted_cases(THREE_CASES)),
+        _verdict(accepted=True, cases=_full_accepted_cases(THREE_CASES)),
         expected_case_names=THREE_CASES,
     )
     assert outcome.ok is True
@@ -53,7 +53,7 @@ def test_gate_passes_for_single_canonical_package_with_no_expected_cases():
     # The attest workflow's sign job has no multi-case list to compare.
     outcome = gate.evaluate_gate(
         {"prepare": "success", "execute": "success", "sign": "success"},
-        _receipt(accepted=True),
+        _verdict(accepted=True),
         expected_case_names=None,
     )
     assert outcome.ok is True
@@ -72,7 +72,7 @@ def test_gate_fails_closed_when_any_upstream_job_is_not_success(which_job, bad_r
     job_results[which_job] = bad_result
     outcome = gate.evaluate_gate(
         job_results,
-        _receipt(accepted=True, cases=_full_accepted_cases(THREE_CASES)),
+        _verdict(accepted=True, cases=_full_accepted_cases(THREE_CASES)),
         expected_case_names=THREE_CASES,
     )
     assert outcome.ok is False
@@ -90,33 +90,33 @@ def test_gate_fails_when_assess_is_skipped_because_execute_failed():
 
 
 # ---------------------------------------------------------------------------
-# Receipt-level failures
+# Verdict-level failures
 # ---------------------------------------------------------------------------
 
 
-def test_gate_fails_when_receipt_is_missing():
+def test_gate_fails_when_verdict_is_missing():
     outcome = gate.evaluate_gate(ALL_SUCCESS, None, expected_case_names=THREE_CASES)
     assert outcome.ok is False
-    assert "no readable receipt" in outcome.reason
+    assert "no readable verdict" in outcome.reason
 
 
-def test_gate_fails_when_receipt_is_not_a_dict():
+def test_gate_fails_when_verdict_is_not_a_dict():
     outcome = gate.evaluate_gate(ALL_SUCCESS, ["not", "a", "dict"], expected_case_names=None)  # type: ignore[arg-type]
     assert outcome.ok is False
     assert "JSON object" in outcome.reason
 
 
-def test_gate_fails_when_receipt_accepted_is_false():
+def test_gate_fails_when_verdict_accepted_is_false():
     outcome = gate.evaluate_gate(
         ALL_SUCCESS,
-        _receipt(accepted=False, cases=_full_accepted_cases(THREE_CASES)),
+        _verdict(accepted=False, cases=_full_accepted_cases(THREE_CASES)),
         expected_case_names=THREE_CASES,
     )
     assert outcome.ok is False
     assert "did not record acceptance" in outcome.reason
 
 
-def test_gate_fails_when_receipt_accepted_is_truthy_but_not_literal_true():
+def test_gate_fails_when_verdict_accepted_is_truthy_but_not_literal_true():
     # "accepted": 1 or "true" must not be treated the same as True.
     outcome = gate.evaluate_gate(
         ALL_SUCCESS,
@@ -139,7 +139,7 @@ def test_gate_fails_when_cases_list_is_missing_for_multi_case_workflow():
 def test_gate_fails_when_a_case_is_silently_dropped():
     outcome = gate.evaluate_gate(
         ALL_SUCCESS,
-        _receipt(accepted=True, cases=_full_accepted_cases(["case-a", "case-b"])),
+        _verdict(accepted=True, cases=_full_accepted_cases(["case-a", "case-b"])),
         expected_case_names=THREE_CASES,
     )
     assert outcome.ok is False
@@ -149,7 +149,7 @@ def test_gate_fails_when_a_case_is_silently_dropped():
 def test_gate_fails_when_a_forged_extra_case_is_present():
     outcome = gate.evaluate_gate(
         ALL_SUCCESS,
-        _receipt(
+        _verdict(
             accepted=True,
             cases=_full_accepted_cases(THREE_CASES + ["case-forged"]),
         ),
@@ -164,7 +164,7 @@ def test_gate_fails_when_one_case_entry_itself_is_not_accepted():
     cases[1] = {"name": "case-b", "accepted": False}
     outcome = gate.evaluate_gate(
         ALL_SUCCESS,
-        _receipt(accepted=True, cases=cases),
+        _verdict(accepted=True, cases=cases),
         expected_case_names=THREE_CASES,
     )
     assert outcome.ok is False
@@ -174,15 +174,15 @@ def test_gate_fails_when_one_case_entry_itself_is_not_accepted():
 def test_gate_fails_when_a_case_entry_is_malformed():
     outcome = gate.evaluate_gate(
         ALL_SUCCESS,
-        _receipt(accepted=True, cases=["not-a-dict"]),
+        _verdict(accepted=True, cases=["not-a-dict"]),
         expected_case_names=THREE_CASES,
     )
     assert outcome.ok is False
     assert "malformed" in outcome.reason
 
 
-def test_gate_fails_when_receipt_contains_a_duplicate_case_name():
-    # The exact reproduced bug: a receipt that lists one real, accepted
+def test_gate_fails_when_verdict_contains_a_duplicate_case_name():
+    # The exact reproduced bug: a verdict that lists one real, accepted
     # case TWICE and omits a different expected case must still be
     # rejected -- a naive `set(names)` comparison would silently fold the
     # duplicate away and see the same cardinality as the fully-correct
@@ -190,7 +190,7 @@ def test_gate_fails_when_receipt_contains_a_duplicate_case_name():
     cases = _full_accepted_cases(["case-a", "case-a", "case-b"])
     outcome = gate.evaluate_gate(
         ALL_SUCCESS,
-        _receipt(accepted=True, cases=cases),
+        _verdict(accepted=True, cases=cases),
         expected_case_names=THREE_CASES,
     )
     assert outcome.ok is False
@@ -202,7 +202,7 @@ def test_gate_fails_when_job_results_is_empty():
     # A workflow misconfiguration that supplies zero `--job-result` facts
     # at all must never vacuously pass merely because there is nothing to
     # disagree with.
-    outcome = gate.evaluate_gate({}, _receipt(accepted=True), expected_case_names=None)
+    outcome = gate.evaluate_gate({}, _verdict(accepted=True), expected_case_names=None)
     assert outcome.ok is False
     assert "no upstream job results" in outcome.reason
 
@@ -212,18 +212,18 @@ def test_gate_fails_when_job_results_is_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_load_receipt_returns_none_for_missing_file(tmp_path):
-    assert gate._load_receipt(tmp_path / "does-not-exist.json") is None
+def test_load_verdict_returns_none_for_missing_file(tmp_path):
+    assert gate._load_verdict(tmp_path / "does-not-exist.json") is None
 
 
-def test_load_receipt_returns_none_for_malformed_json(tmp_path):
-    path = tmp_path / "receipt.json"
+def test_load_verdict_returns_none_for_malformed_json(tmp_path):
+    path = tmp_path / "verdict.json"
     path.write_text("{not valid json")
-    assert gate._load_receipt(path) is None
+    assert gate._load_verdict(path) is None
 
 
-def test_load_receipt_returns_none_when_path_is_none():
-    assert gate._load_receipt(None) is None
+def test_load_verdict_returns_none_when_path_is_none():
+    assert gate._load_verdict(None) is None
 
 
 def test_load_expected_case_names_parses_tab_separated_bundles_cases(tmp_path):
@@ -238,7 +238,7 @@ def test_load_expected_case_names_raises_for_missing_file(tmp_path):
     # supplied at all" (which legitimately returns None for the
     # single-canonical-package workflow) -- collapsing both into an empty
     # list would let a missing cases.txt degrade into "zero cases
-    # expected", which an empty receipt could then trivially satisfy.
+    # expected", which an empty verdict could then trivially satisfy.
     with pytest.raises(gate.ExpectedCaseLoadError):
         gate._load_expected_case_names(tmp_path / "missing.txt")
 
@@ -260,9 +260,9 @@ def test_load_expected_case_names_returns_none_when_path_is_none():
 
 
 def test_cli_exits_zero_and_prints_pass_on_success(tmp_path, capsys):
-    receipt_path = tmp_path / "receipt.json"
-    receipt_path.write_text(
-        json.dumps(_receipt(accepted=True, cases=_full_accepted_cases(THREE_CASES)))
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text(
+        json.dumps(_verdict(accepted=True, cases=_full_accepted_cases(THREE_CASES)))
     )
     cases_path = tmp_path / "cases.txt"
     cases_path.write_text("".join(f"{name}\tbundles/{name}\n" for name in THREE_CASES))
@@ -275,8 +275,8 @@ def test_cli_exits_zero_and_prints_pass_on_success(tmp_path, capsys):
             "execute=success",
             "--job-result",
             "assess=success",
-            "--receipt",
-            str(receipt_path),
+            "--verdict",
+            str(verdict_path),
             "--expected-cases",
             str(cases_path),
         ]
@@ -294,7 +294,7 @@ def test_cli_exits_nonzero_and_prints_fail_on_failure(tmp_path, capsys):
             "execute=failure",
             "--job-result",
             "assess=skipped",
-            "--receipt",
+            "--verdict",
             str(tmp_path / "missing.json"),
         ]
     )
@@ -315,11 +315,11 @@ def test_cli_requires_at_least_one_job_result_argument():
 def test_cli_fails_closed_when_expected_cases_file_is_missing(tmp_path, capsys):
     # The exact reproduced bug: job A's prepare step failed to produce
     # bundles/cases.txt (file absent), while an otherwise-complete,
-    # vacuously-accepted empty receipt was recorded. Without this fix the
+    # vacuously-accepted empty verdict was recorded. Without this fix the
     # gate treated "file not found" as "zero cases expected" and the empty
-    # receipt trivially satisfied that, producing a wrongly PASS result.
-    receipt_path = tmp_path / "receipt.json"
-    receipt_path.write_text(json.dumps(_receipt(accepted=True, cases=[])))
+    # verdict trivially satisfied that, producing a wrongly PASS result.
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text(json.dumps(_verdict(accepted=True, cases=[])))
     rc = gate.main(
         [
             "--job-result",
@@ -328,8 +328,8 @@ def test_cli_fails_closed_when_expected_cases_file_is_missing(tmp_path, capsys):
             "execute=success",
             "--job-result",
             "assess=success",
-            "--receipt",
-            str(receipt_path),
+            "--verdict",
+            str(verdict_path),
             "--expected-cases",
             str(tmp_path / "does-not-exist.txt"),
         ]
@@ -353,7 +353,7 @@ def test_cli_as_actual_subprocess_fails_closed_end_to_end(tmp_path):
             "execute=success",
             "--job-result",
             "assess=cancelled",
-            "--receipt",
+            "--verdict",
             str(tmp_path / "missing.json"),
         ],
         capture_output=True,

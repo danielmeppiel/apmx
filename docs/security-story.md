@@ -18,11 +18,14 @@ ordinary software security checks remain necessary.
 
 ## Existing capability and missing work
 
-Existing portable evidence contains an in-toto Statement v1 / SLSA provenance
-v1 production record, artifact-linked assessment statements, a CycloneDX 1.5
-ABOM from APM, retained inputs and outputs, and a normalized factory identity.
-The maintained independent consumer checks pinned schemas, bytes and semantic
-relationships without importing APMX. These packages are currently unsigned.
+Every COMPLETE `apmx` run delivers a receipt next to its record
+(`.apm/runs/<id>/receipt`, `.apm/chains/<id>/receipt` or
+`.apm/controllers/<id>/receipt`). It contains an in-toto Statement v1 / SLSA
+provenance v1 production record, artifact-linked assessment statements, a
+CycloneDX 1.5 ABOM from APM, retained inputs and outputs, and a normalized
+factory identity. [`apmx audit`](audit.md) is the single owner of receipt
+verification: it checks pinned schemas, bytes and semantic relationships, and
+its verifier loads without importing APMX. Receipts are currently unsigned.
 
 New work is the receiving policy, exact Git revision/change binding, trusted
 assessment and signing boundary, CI integration, and public PR examples.
@@ -48,6 +51,54 @@ Do not invent compatibility with an external verifier that has not been tested.
 6. A required PR check accepts only the verified candidate and policy result.
    Mutations, unapproved factory definitions, missing evidence and unauthorized
    signers produce genuine failures and block the affected PR revision.
+
+## How the receiver uses `apmx audit`
+
+The receiver does not maintain its own integrity or standards checks. Its
+trusted jobs load `src/apmx/audit/verifier.py`, the module behind
+`apmx audit`, by file path from the PR's trusted base checkout. They install
+only the pinned upstream packages in `scripts/evidence-requirements.txt`,
+never the `apmx` package or anything from the PR head. The CycloneDX schemas
+ship next to the verifier and are pinned by SHA-256, so no job fetches them.
+
+`receiver/check.py` runs the structural rows (Integrity, Standards, Factory,
+Checks, Outputs), which is what `apmx audit --offline` reports. A failing row
+rejects the case with control `audit` and names the row. Receiver controls then
+read only the facts the audit established (definition digest, file index,
+selected attempt and capability bindings), never raw receipt files. A
+regression test asserts that each recorded row matches
+`apmx audit --offline --format json` for the same receipt.
+
+The Ingredients row (an APM reinstall plus `apm audit --ci`) is not run in the
+receiver. It needs the receipt's dependencies to resolve on the runner, and a
+local-path dependency resolves only at the absolute path recorded at
+production. Capability trust is decided by the receiver's revocation policy
+instead. A producer can still run the full `apmx audit <receipt>` before
+submitting.
+
+Receiver-specific trust stays in the receiver, on top of a VALID audit:
+
+| Control | Decides | Where |
+| --- | --- | --- |
+| `factory` | The audited definition digest is on the approved factory allowlist | `receipt_policy.py` |
+| `binding` | Recorded baseline and candidate digests equal the exact PR base and head blobs, and the PR changes nothing outside the bound scope and its case directory | `check.py` |
+| `capability-revoked` | No audited capability binding matches a revoked `(purl, bodySha256)` pair or `lockIdentity` | `receipt_policy.py` |
+| `execution` | Receiver-required cases, run on the candidate bytes in a pinned container, produce the expected output | `check.py`, `container/` |
+| `signer` | A pinned, approved signer revision attested this receipt index, definition and assessment set | `check.py` |
+| gate | Every upstream job succeeded and the assessment verdict names exactly the prepared cases | `gate.py` |
+
+The factory allowlist and revocation decisions are pure functions over a policy
+document and audited facts, with no git, workflow or receiver trust-boundary
+code. This maps to the deferred "slice 5" of the apmx CLI plan: factory
+identity policy in `apmx audit --policy`. Today `--policy` passes only APM
+dependency policy to `apm audit`, so the allowlist stays receiver-side until
+that slice lands, then can move without changing its inputs.
+
+A PR case adds `examples/enterprise-receiver/cases/<name>/receipt/`, a copy of
+the run's `receipt` directory. The canonical receipt assessed before signing
+lives at `examples/enterprise-receiver/fixtures/approved-receipt/`. The
+fail-closed gate's own JSON artifact is called the assessment *verdict* so it
+is not confused with an apmx receipt.
 
 ## Meaning of the signature
 
@@ -127,7 +178,7 @@ main's rules or merge requirements. Do not merge demonstration PRs.
 | Approved candidate, complete evidence and authorized assessment | Passes |
 | Patch changed after the evidence was captured | Fails: candidate binding |
 | Self-consistent evidence from an unapproved factory | Fails: factory policy |
-| Required evidence omitted | Fails: missing evidence |
+| Required receipt omitted | Fails: missing receipt |
 | Missing or unauthorized attestation identity | Fails: signer policy |
 
 Prove GitHub actually reports the negative examples as blocked by the required
@@ -150,7 +201,7 @@ complete runtime observation or infer model consumption from inventory alone.
 
 ## Presentation
 
-- Produce the change using a real `apmx` invocation.
+- Produce the change using a real `apmx` invocation, then `apmx audit` its receipt.
 - Open the PR and watch the required check with `gh pr checks --watch`.
 - Verify the signed artifact with stock `gh attestation verify`, enforcing the
   chosen repository, signer workflow and immutable signer revision.

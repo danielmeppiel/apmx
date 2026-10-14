@@ -121,8 +121,9 @@ and that its files are bound by content to this factory definition, these
 ingredients and these check results. It does not authenticate who ran the
 factory. Anyone who can rewrite every file and hash can forge a
 self-consistent receipt. Signing, authenticated builder identity and an
-approved-factory allowlist are out of scope here; they follow the trusted
-receiver work. VALID is not a sandbox, a correctness guarantee or permission
+approved-factory allowlist are out of scope here; the
+[trusted receiver](security-story.md#how-the-receiver-uses-apmx-audit) builds
+them on top of this verifier. VALID is not a sandbox, a correctness guarantee or permission
 to merge or deploy.
 
 ## Independent verification

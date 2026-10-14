@@ -23,12 +23,12 @@ already used by the real positive/negative demo PRs):
                     check can observe me"; job C must REJECT it too (no
                     observation recorded, not a false pass).
 
-It also exercises receipt tampering directly against ``gate.py``: builds a
-forged receipt that claims every scenario was accepted when job C's own
+It also exercises verdict tampering directly against ``gate.py``: builds a
+forged verdict that claims every scenario was accepted when job C's own
 real verdicts say otherwise, and asserts ``evaluate_gate`` rejects it. This
 is the same decision function the actual required-check gate jobs use; see
 ``gate.py``'s module docstring for why GitHub's own skipped/neutral
-semantics make this receipt-based check necessary.
+semantics make this verdict-based check necessary.
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ def cmd_assess(args: argparse.Namespace) -> int:
     results_root = args.results_root
     base_sha = (bundle_root / "base_sha.txt").read_text().strip()
 
-    scenario_receipts = []
+    scenario_verdicts = []
     mismatches = []
     for name in _scenario_names(bundle_root):
         manifest = json.loads((bundle_root / name / "manifest.json").read_text())
@@ -144,51 +144,51 @@ def cmd_assess(args: argparse.Namespace) -> int:
             mismatches.append(
                 f"scenario {name!r}: expected accepted={expected_accept}, got {accepted}"
             )
-        scenario_receipts.append({"name": name, "accepted": accepted})
+        scenario_verdicts.append({"name": name, "accepted": accepted})
 
     if mismatches:
         for mismatch in mismatches:
             print(f"::error::{mismatch}", file=sys.stderr)
 
-    # Receipt-tampering check: forge a receipt claiming every scenario was
+    # Verdict-tampering check: forge a verdict claiming every scenario was
     # accepted (including the ones job C just actually rejected) and assert
     # gate.py's own decision function refuses it -- the gate must trust its
-    # OWN comparison against the real per-scenario receipt, never a bare
+    # OWN comparison against the real per-scenario verdict, never a bare
     # upstream "accepted: true" claim alone.
-    forged_receipt = {
+    forged_verdict = {
         "accepted": True,
-        "cases": [{"name": r["name"], "accepted": True} for r in scenario_receipts],
+        "cases": [{"name": r["name"], "accepted": True} for r in scenario_verdicts],
     }
     forged_outcome = gate.evaluate_gate(
         {"prepare": "success", "execute": "success", "assess": "success"},
-        forged_receipt,
+        forged_verdict,
         expected_case_names=[name for name in _EXPECTED_ACCEPTED],
     )
     if forged_outcome.ok:
         mismatches.append(
-            "receipt-tampering check FAILED: gate.evaluate_gate accepted a forged "
-            "receipt whose case set does not match the expected (accepted-only) set"
+            "verdict-tampering check FAILED: gate.evaluate_gate accepted a forged "
+            "verdict whose case set does not match the expected (accepted-only) set"
         )
     else:
         print(
-            f"receipt-tampering check: gate correctly rejected forged receipt "
+            f"verdict-tampering check: gate correctly rejected forged verdict "
             f"({forged_outcome.reason})"
         )
 
-    # gate.py's receipt contract mirrors production: every NAMED case must
+    # gate.py's verdict contract mirrors production: every NAMED case must
     # itself be accepted, and the name set must exactly match
     # --expected-cases. The intentionally-rejected scenarios (tampered,
     # early-exit) are proof that verify_execution_results correctly
     # rejects them -- they are not "required checks" gate.py should ever
     # see as a passing case, so only the genuinely-accepted scenario(s)
-    # go into the receipt gate.py itself evaluates.
-    real_receipt_cases = (
+    # go into the verdict gate.py itself evaluates.
+    real_verdict_cases = (
         [{"name": name, "accepted": True} for name in sorted(_EXPECTED_ACCEPTED)]
         if not mismatches
         else []
     )
-    real_receipt = {"accepted": not mismatches, "cases": real_receipt_cases}
-    (args.receipt).write_text(json.dumps(real_receipt, indent=2))
+    real_verdict = {"accepted": not mismatches, "cases": real_verdict_cases}
+    (args.verdict).write_text(json.dumps(real_verdict, indent=2))
 
     if mismatches:
         print(
@@ -198,7 +198,7 @@ def cmd_assess(args: argparse.Namespace) -> int:
         return 1
     print(
         "assess: all scenarios matched expected accept/reject outcomes; "
-        "receipt-tampering check passed"
+        "verdict-tampering check passed"
     )
     return 0
 
@@ -219,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     assess_parser = subparsers.add_parser("assess")
     assess_parser.add_argument("--bundle-root", type=Path, required=True)
     assess_parser.add_argument("--results-root", type=Path, required=True)
-    assess_parser.add_argument("--receipt", type=Path, required=True)
+    assess_parser.add_argument("--verdict", type=Path, required=True)
     assess_parser.set_defaults(func=cmd_assess)
 
     args = parser.parse_args(argv)

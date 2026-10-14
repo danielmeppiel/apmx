@@ -16,14 +16,14 @@ name: Receiver Candidate Check
 #     contents:read), NO actions/checkout step of any kind. Its entire
 #     code is the ONE file job A placed in the bundle
 #     (container/run_bundle.py); it never imports check.py, never reads
-#     scripts/verify_evidence.py, never touches git. It runs each
+#     the receipt verifier, never touches git. It runs each
 #     candidate inside a disposable, digest-pinned, network-isolated,
 #     read-only, non-root Docker container that only ever reports a raw,
 #     untrusted observed value per case -- it never sees expectedOutput
 #     and never decides pass/fail itself.
 #
 #   assess (job C) -- CONTENTS:READ, independently re-does every
-#     deterministic identity check (integrity/factory/binding/capability-
+#     deterministic identity check (apmx audit/factory/binding/capability-
 #     revocation) rather than trusting job A's verdict, and independently
 #     RE-DERIVES every case's pass/fail status from job B's raw observed
 #     values against its OWN copy of expectedOutput (verify_execution_
@@ -120,36 +120,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install independent evidence verifier
+      - name: Install the receipt verifier's pinned dependencies (apmx audit rows, no apmx package)
         run: |
           set -euo pipefail
           python3 -m venv .venv-evidence
           .venv-evidence/bin/python -m pip install --quiet --upgrade pip
           .venv-evidence/bin/python -m pip install --quiet -r scripts/evidence-requirements.txt
-
-      - name: Fetch pinned evidence schemas (offline afterwards)
-        run: |
-          set -euo pipefail
-          .venv-evidence/bin/python - "$PWD/.schema-cache" <<'PY'
-          import hashlib
-          import sys
-          from pathlib import Path
-          from urllib.request import urlopen
-
-          sys.path.insert(0, "scripts")
-          import verify_evidence as ve
-
-          cache = Path(sys.argv[1])
-          cache.mkdir(parents=True, exist_ok=True)
-          for name, expected in ve.SCHEMAS.items():
-              url = f"https://raw.githubusercontent.com/CycloneDX/specification/{ve.SCHEMA_COMMIT}/schema/{name}"
-              with urlopen(url, timeout=30) as response:
-                  raw = response.read(2 * 1024 * 1024)
-              digest = hashlib.sha256(raw).hexdigest()
-              assert digest == expected, f"schema hash mismatch for {name}: {digest}"
-              (cache / name).write_bytes(raw)
-              print(f"fetched {name}")
-          PY
 
       - name: Discover cases and write trusted execution bundles
         env:
@@ -179,7 +155,6 @@ jobs:
               --case-dir "$case_dir" \
               --base-sha "$BASE_SHA" \
               --head-sha "$HEAD_SHA" \
-              --schemas "$PWD/.schema-cache" \
               --bundle-dir "bundles/$case_name"; then
               # case_name<TAB>case_dir, so later jobs can reconstruct both
               # without needing to recompute the merge-base diff themselves.
@@ -208,7 +183,7 @@ jobs:
       # Deliberately NO actions/checkout step: this job's entire code is
       # the one trusted file job A placed in the bundle
       # (run_bundle.py) -- it never imports check.py, never reads
-      # scripts/verify_evidence.py, never invokes git, and has zero
+      # the receipt verifier, never invokes git, and has zero
       # permissions (not even contents:read). Docker is preinstalled on
       # GitHub-hosted ubuntu-24.04 runners.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -270,35 +245,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install independent evidence verifier
+      - name: Install the receipt verifier's pinned dependencies (apmx audit rows, no apmx package)
         run: |
           set -euo pipefail
           python3 -m venv .venv-evidence
           .venv-evidence/bin/python -m pip install --quiet --upgrade pip
           .venv-evidence/bin/python -m pip install --quiet -r scripts/evidence-requirements.txt
-
-      - name: Fetch pinned evidence schemas (offline afterwards, independently)
-        run: |
-          set -euo pipefail
-          .venv-evidence/bin/python - "$PWD/.schema-cache" <<'PY'
-          import hashlib
-          import sys
-          from pathlib import Path
-          from urllib.request import urlopen
-
-          sys.path.insert(0, "scripts")
-          import verify_evidence as ve
-
-          cache = Path(sys.argv[1])
-          cache.mkdir(parents=True, exist_ok=True)
-          for name, expected in ve.SCHEMAS.items():
-              url = f"https://raw.githubusercontent.com/CycloneDX/specification/{ve.SCHEMA_COMMIT}/schema/{name}"
-              with urlopen(url, timeout=30) as response:
-                  raw = response.read(2 * 1024 * 1024)
-              digest = hashlib.sha256(raw).hexdigest()
-              assert digest == expected, f"schema hash mismatch for {name}: {digest}"
-              (cache / name).write_bytes(raw)
-          PY
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -317,11 +269,11 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Builds the "complete validated receipt" the new fail-closed gate
+          # Builds the "complete validated verdict" the new fail-closed gate
           # job (below) independently checks: one entry per case job A
           # actually prepared, each explicitly recorded as accepted or not.
           # A case this loop never reaches for any reason (crash, early
-          # exit) is simply absent from receipt.json's "cases" list, which
+          # exit) is simply absent from verdict.json's "cases" list, which
           # the gate job's own case-set comparison against bundles/cases.txt
           # treats as a hard failure -- never a silent "nothing to check".
           python3 - "$BASE_SHA" "$HEAD_SHA" <<'PY'
@@ -338,7 +290,7 @@ jobs:
               case_name, case_dir = line.split("\t", 1)
               cases.append((case_name, case_dir))
 
-          receipt_cases = []
+          verdict_cases = []
           overall_ok = True
           for case_name, case_dir in cases:
               print(f"::group::assess case: {case_name}")
@@ -351,7 +303,6 @@ jobs:
                       "--case-dir", case_dir,
                       "--base-sha", base_sha,
                       "--head-sha", head_sha,
-                      "--schemas", f"{Path.cwd()}/.schema-cache",
                       "--bundle-dir", f"bundles/{case_name}",
                       "--results", f"results/{case_name}.json",
                   ],
@@ -360,21 +311,21 @@ jobs:
               accepted = completed.returncode == 0
               if not accepted:
                   overall_ok = False
-              receipt_cases.append({"name": case_name, "accepted": accepted})
+              verdict_cases.append({"name": case_name, "accepted": accepted})
               print("::endgroup::")
 
-          Path("receipt.json").write_text(
-              json.dumps({"accepted": overall_ok, "cases": receipt_cases}, indent=2)
+          Path("verdict.json").write_text(
+              json.dumps({"accepted": overall_ok, "cases": verdict_cases}, indent=2)
           )
           sys.exit(0 if overall_ok else 1)
           PY
 
-      - name: Upload the assess receipt for the gate job (even on failure)
+      - name: Upload the assess verdict for the gate job (even on failure)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: receiver-assess-receipt-${{ github.event.pull_request.number }}-${{ github.run_id }}
-          path: receipt.json
+          name: receiver-assess-verdict-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: verdict.json
           retention-days: 1
           if-no-files-found: ignore
 
@@ -387,7 +338,7 @@ jobs:
     # conclusions as SATISFYING a required check, not blocking it. This job
     # instead always runs (`if: always()`) and explicitly fails closed
     # unless prepare, execute, AND assess all genuinely succeeded AND
-    # assess's own receipt artifact proves every prepared case was actually
+    # assess's own verdict artifact proves every prepared case was actually
     # reached and accepted.
     name: Receiver Candidate Check / gate (required)
     if: always()
@@ -410,8 +361,8 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: receiver-assess-receipt-${{ github.event.pull_request.number }}-${{ github.run_id }}
-          path: receipt/
+          name: receiver-assess-verdict-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: verdict/
         continue-on-error: true
 
       - name: Evaluate the fail-closed gate
@@ -421,5 +372,5 @@ jobs:
             --job-result "prepare=${{ needs.prepare.result }}" \
             --job-result "execute=${{ needs.execute.result }}" \
             --job-result "assess=${{ needs.assess.result }}" \
-            --receipt receipt/receipt.json \
+            --verdict verdict/verdict.json \
             --expected-cases bundles/cases.txt

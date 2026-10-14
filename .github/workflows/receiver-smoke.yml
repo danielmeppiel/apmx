@@ -4,7 +4,7 @@ name: Receiver Branch Smoke (unprivileged, feature-branch only)
 # (container/run_bundle.py, container/container_driver.py,
 # container/executor.py, check.py's write_execution_bundle/
 # run_execution_bundle/verify_execution_results) and of gate.py's own
-# receipt-tampering resistance -- authorized explicitly as validation
+# verdict-tampering resistance -- authorized explicitly as validation
 # infrastructure for THIS implementation branch, separate from and prior to
 # any demo-branch/main integration or signing activation.
 #
@@ -31,11 +31,15 @@ name: Receiver Branch Smoke (unprivileged, feature-branch only)
 #               via the real verify_execution_results, asserts the
 #               outcomes match what each scenario is supposed to produce,
 #               and separately proves gate.py's evaluate_gate rejects a
-#               forged "everything accepted" receipt.
+#               forged "everything accepted" verdict.
+#   receipt-policy -- independent of the three jobs above: generates real
+#               receipts with the pinned APM backend and runs the receiver's
+#               apmx audit, factory, binding, revocation, signer and real
+#               Docker execution suites.
 #   gate     -- the same fail-closed required-check aggregator pattern as
 #               the production workflows (if: always()), run here purely
 #               to prove the aggregator itself behaves correctly end to
-#               end against this branch's own real job results/receipt.
+#               end against this branch's own real job results/verdict.
 
 on:
   push:
@@ -47,6 +51,10 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.26"
+  UV_NO_CONFIG: "true"
+  UV_DEFAULT_INDEX: https://pypi.org/simple
+  UV_PYTHON_DOWNLOADS: never
 
 jobs:
   prepare:
@@ -64,7 +72,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install independent evidence verifier (same dep set as production)
+      - name: Install the receipt verifier's pinned dependencies (same set as production)
         run: |
           set -euo pipefail
           python3 -m venv .venv-evidence
@@ -118,7 +126,7 @@ jobs:
           retention-days: 1
 
   assess:
-    name: assess (independent re-derivation + receipt-tampering proof)
+    name: assess (independent re-derivation + verdict-tampering proof)
     needs: [prepare, execute]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -133,7 +141,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install independent evidence verifier (same dep set as production)
+      - name: Install the receipt verifier's pinned dependencies (same set as production)
         run: |
           set -euo pipefail
           python3 -m venv .venv-evidence
@@ -150,27 +158,72 @@ jobs:
           name: smoke-results
           path: results/
 
-      - name: Independently re-derive every scenario and prove receipt-tampering is rejected
+      - name: Independently re-derive every scenario and prove verdict-tampering is rejected
         run: |
           set -euo pipefail
           .venv-evidence/bin/python examples/enterprise-receiver/receiver/smoke.py assess \
             --bundle-root bundles/ \
             --results-root results/ \
-            --receipt receipt.json
+            --verdict verdict.json
 
-      - name: Upload the assess receipt for the gate job (even on failure)
+      - name: Upload the assess verdict for the gate job (even on failure)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: smoke-receipt
-          path: receipt.json
+          name: smoke-verdict
+          path: verdict.json
           retention-days: 1
           if-no-files-found: ignore
+
+  receipt-policy:
+    name: receipt-policy (apmx audit + receiver policy suites, real APM and Docker)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pinned dependency manager from the public index
+        run: python -m pip --isolated --disable-pip-version-check install --index-url https://pypi.org/simple "uv==$UV_VERSION"
+
+      - name: Install the frozen public lock
+        env:
+          UV_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: uv sync --frozen --extra dev --extra build --extra factory
+
+      - name: Provision the genuine pinned native APM backend
+        id: backend
+        env:
+          UV_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: uv run --frozen --extra dev --extra build --extra factory python scripts/release.py provision-apm --target linux-x86_64 --output dist/apm-backend
+
+      # Generates real receipts with the pinned backend (make_fixture.py),
+      # checks the receiver's audit rows against `apmx audit --offline
+      # --format json`, and runs every receiver policy control, including
+      # the real-Docker execution test.
+      - name: Run the receiver policy and gate suites
+        env:
+          UV_PYTHON: ${{ steps.python.outputs.python-path }}
+          APMX_APM_BACKEND: ${{ steps.backend.outputs.backend }}
+        run: |
+          set -euo pipefail
+          uv run --frozen --extra dev --extra build --extra factory python -m pytest \
+            examples/enterprise-receiver/receiver/test_check.py \
+            examples/enterprise-receiver/receiver/test_gate.py \
+            -q -rs -p no:cacheprovider --basetemp "$RUNNER_TEMP/receiver-tests"
 
   gate:
     name: gate (required-check aggregator proof)
     if: always()
-    needs: [prepare, execute, assess]
+    needs: [prepare, execute, assess, receipt-policy]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -188,8 +241,8 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: smoke-receipt
-          path: receipt/
+          name: smoke-verdict
+          path: verdict/
         continue-on-error: true
 
       - name: Evaluate the fail-closed gate against this branch's own real results
@@ -199,5 +252,6 @@ jobs:
             --job-result "prepare=${{ needs.prepare.result }}" \
             --job-result "execute=${{ needs.execute.result }}" \
             --job-result "assess=${{ needs.assess.result }}" \
-            --receipt receipt/receipt.json \
+            --job-result "receipt-policy=${{ needs['receipt-policy'].result }}" \
+            --verdict verdict/verdict.json \
             --expected-cases <(printf 'positive\tbundles/positive\n')

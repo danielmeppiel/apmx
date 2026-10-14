@@ -14,21 +14,22 @@ whose own definition or dependencies are loaded from the PR head.
 
 Everything here reads from two kinds of trusted/untrusted sources:
 
-  * TRUSTED (the PR base ref only): the independent, pinned Evidence Package
-    verifier (``scripts/verify_evidence``, imported and reused, not
-    duplicated), and the receiver's factory allowlist, candidate binding map
-    and signer policy under ``examples/enterprise-receiver/policy/``.
-  * UNTRUSTED (the PR head): candidate source file bytes and the evidence
-    package the PR adds. These are never executed, imported, or installed --
+  * TRUSTED (the PR base ref only): the structural receipt verifier that
+    ``apmx audit`` uses (``src/apmx/audit/verifier.py``, the single owner of
+    receipt verification, loaded by path and never duplicated here), and the
+    receiver's factory allowlist, candidate binding map, revocation list and
+    signer policy under ``examples/enterprise-receiver/policy/``.
+  * UNTRUSTED (the PR head): candidate source file bytes and the apmx
+    receipt the PR adds. These are never executed, imported, or installed --
     only read as bytes via ``git show``/``git ls-tree`` into bounded,
     permission-stripped scratch copies, then hashed, diffed, or schema
-    validated. The evidence directory in particular is materialized through
-    ``materialized_case_evidence`` with explicit file-count/size bounds and
+    validated. The receipt directory in particular is materialized through
+    ``materialized_case_receipt`` with explicit file-count/size bounds and
     no tar extraction, precisely because it is untrusted archive-shaped
     input.
 
 ``gh attestation verify`` (stock GitHub CLI) is used to authenticate that
-evidence was signed by the pinned, privileged attestation workflow, and the
+the receipt was signed by the pinned, privileged attestation workflow, and the
 signed predicate's own claimed fields are independently compared against the
 exact values the trusted policy expects -- a successful exit code alone is
 not treated as sufficient. The privileged signing boundary
@@ -37,8 +38,8 @@ untrusted PR head; see that workflow and ``assess_canonical`` below for what
 it actually verifies before it signs.
 
 A signature produced by that boundary only authenticates "this CI assessment
-of this exact evidence package (structural integrity, factory policy,
-capability revocation) was produced and approved by the pinned receiver
+of this exact receipt (``apmx audit`` structural rows, factory policy,
+capability revocation, receiver-required execution) was produced and approved by the pinned receiver
 workflow" -- it does not retroactively authenticate whatever an agent
 executed locally, it is not a SLSA security level claim, and it is not a
 per-PR binding claim (binding is this module's own job, done separately,
@@ -48,8 +49,8 @@ per candidate, at verification time).
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
-import re
 import subprocess
 import sys
 import tempfile
@@ -61,18 +62,18 @@ _RECEIVER_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _RECEIVER_ROOT.parent.parent
 _POLICY_DIR_RELATIVE = "examples/enterprise-receiver/policy"
 
-# Bounds applied when materializing an untrusted PR's evidence directory from
+# Bounds applied when materializing an untrusted PR's receipt directory from
 # git objects. This is deliberately conservative for a demo-scale package;
-# raise it only if real evidence packages this receiver accepts legitimately
+# raise it only if real receipts this receiver accepts legitimately
 # exceed it, not to make a particular PR pass.
-_MAX_EVIDENCE_FILES = 2000
-_MAX_EVIDENCE_TOTAL_BYTES = 64 * 1024 * 1024
+_MAX_RECEIPT_FILES = 2000
+_MAX_RECEIPT_TOTAL_BYTES = 64 * 1024 * 1024
 # Per-blob cap, enforced from trusted git object metadata (git cat-file
 # --batch-check) BEFORE any blob's content is read into memory. Without
 # this, a single PR-supplied blob near the total cap would still be fully
 # read into a subprocess capture_output buffer first, making the total-byte
 # enforcement after-the-fact rather than byte-bounded.
-_MAX_EVIDENCE_BLOB_BYTES = 8 * 1024 * 1024
+_MAX_RECEIPT_BLOB_BYTES = 8 * 1024 * 1024
 # Raw ``git ls-tree -z`` output itself is bounded defensively: a PR cannot
 # make the *content* of any blob larger than the cap above, but an adversary
 # could in principle still try to inflate the listing's own output (e.g. an
@@ -81,8 +82,29 @@ _MAX_EVIDENCE_BLOB_BYTES = 8 * 1024 * 1024
 # subprocess capture itself.
 _MAX_LS_TREE_OUTPUT_BYTES = 16 * 1024 * 1024
 
-sys.path.insert(0, str(_REPO_ROOT / "scripts"))
-import verify_evidence
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import receipt_policy
+
+_AUDIT_VERIFIER = _REPO_ROOT / "src" / "apmx" / "audit" / "verifier.py"
+
+
+def _load_audit_verifier():
+    """Load ``apmx audit``'s structural verifier from this trusted checkout.
+
+    It is loaded by file path, exactly as ``scripts/verify_evidence.py``
+    does, so the receiver needs only the pinned upstream packages in
+    ``scripts/evidence-requirements.txt`` and never imports the ``apmx``
+    package. Its CycloneDX schemas are bundled next to it and hash-pinned.
+    """
+    spec = importlib.util.spec_from_file_location("_receiver_audit_verifier", _AUDIT_VERIFIER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+audit_verifier = _load_audit_verifier()
 
 
 class ReceiverFailure(Exception):
@@ -174,12 +196,12 @@ def _git_ls_tree_blobs(ref: str, path_prefix: str) -> list[tuple[str, str, str]]
     )
     if completed.returncode != 0:
         raise ReceiverFailure(
-            "missing-evidence", f"Unable to list {path_prefix} at {ref}: {completed.stderr!r}"
+            "missing-receipt", f"Unable to list {path_prefix} at {ref}: {completed.stderr!r}"
         )
     if len(completed.stdout) > _MAX_LS_TREE_OUTPUT_BYTES:
         raise ReceiverFailure(
-            "missing-evidence",
-            f"Evidence tree listing for {path_prefix} at {ref} exceeds the bounded "
+            "missing-receipt",
+            f"Receipt tree listing for {path_prefix} at {ref} exceeds the bounded "
             f"output size of {_MAX_LS_TREE_OUTPUT_BYTES} bytes before it is even parsed.",
         )
     entries: list[tuple[str, str, str]] = []
@@ -190,8 +212,8 @@ def _git_ls_tree_blobs(ref: str, path_prefix: str) -> list[tuple[str, str, str]]
         mode, obj_type, blob_sha = meta.split(" ", 2)
         if obj_type != "blob" or mode == "120000":
             raise ReceiverFailure(
-                "missing-evidence",
-                f"Evidence tree entry {path!r} at {ref} is not a plain file "
+                "missing-receipt",
+                f"Receipt tree entry {path!r} at {ref} is not a plain file "
                 f"(mode={mode}, type={obj_type}); refusing to materialize it.",
             )
         entries.append((mode, blob_sha, path))
@@ -216,7 +238,7 @@ def _git_blob_sizes(blob_shas: list[str]) -> dict[str, int]:
     )
     if completed.returncode != 0:
         raise ReceiverFailure(
-            "missing-evidence", f"Unable to read blob metadata: {completed.stderr!r}"
+            "missing-receipt", f"Unable to read blob metadata: {completed.stderr!r}"
         )
     sizes: dict[str, int] = {}
     for line in completed.stdout.decode().splitlines():
@@ -228,10 +250,10 @@ def _git_blob_sizes(blob_shas: list[str]) -> dict[str, int]:
 
 
 @contextmanager
-def materialized_case_evidence(head_sha: str, case_dir_relative: str):
-    """Safely copy a PR's own ``evidence/`` directory out of git objects.
+def materialized_case_receipt(head_sha: str, case_dir_relative: str):
+    """Safely copy a PR's own ``receipt/`` directory out of git objects.
 
-    The PR head is untrusted and its evidence directory is archive-shaped
+    The PR head is untrusted and its receipt directory is archive-shaped
     input (many files, including nested JSON), so this never does a blind
     ``git archive | tar -x``: every path is listed explicitly via
     ``git ls-tree``, every blob's SIZE is checked from trusted git object
@@ -240,49 +262,49 @@ def materialized_case_evidence(head_sha: str, case_dir_relative: str):
     byte is written with plain file permissions (no symlinks, no executable
     bits) to a throwaway temporary directory that is removed afterwards.
     """
-    evidence_prefix = f"{case_dir_relative.rstrip('/')}/evidence"
-    blobs = _git_ls_tree_blobs(head_sha, evidence_prefix)
+    receipt_prefix = f"{case_dir_relative.rstrip('/')}/receipt"
+    blobs = _git_ls_tree_blobs(head_sha, receipt_prefix)
     if not blobs:
         raise ReceiverFailure(
-            "missing-evidence",
-            f"No evidence files found under {evidence_prefix} at {head_sha}.",
+            "missing-receipt",
+            f"No receipt files found under {receipt_prefix} at {head_sha}.",
         )
-    if len(blobs) > _MAX_EVIDENCE_FILES:
+    if len(blobs) > _MAX_RECEIPT_FILES:
         raise ReceiverFailure(
-            "missing-evidence",
-            f"Evidence directory has {len(blobs)} files, exceeding the "
-            f"bounded limit of {_MAX_EVIDENCE_FILES}.",
+            "missing-receipt",
+            f"Receipt directory has {len(blobs)} files, exceeding the "
+            f"bounded limit of {_MAX_RECEIPT_FILES}.",
         )
     sizes = _git_blob_sizes([blob_sha for _mode, blob_sha, _path in blobs])
     total_bytes = 0
     for _mode, blob_sha, path in blobs:
         size = sizes.get(blob_sha)
         if size is None:
-            raise ReceiverFailure("missing-evidence", f"Unable to size blob for {path!r}.")
-        if size > _MAX_EVIDENCE_BLOB_BYTES:
+            raise ReceiverFailure("missing-receipt", f"Unable to size blob for {path!r}.")
+        if size > _MAX_RECEIPT_BLOB_BYTES:
             raise ReceiverFailure(
-                "missing-evidence",
-                f"Evidence file {path!r} is {size} bytes, exceeding the bounded "
-                f"per-file limit of {_MAX_EVIDENCE_BLOB_BYTES} bytes; refusing to "
+                "missing-receipt",
+                f"Receipt file {path!r} is {size} bytes, exceeding the bounded "
+                f"per-file limit of {_MAX_RECEIPT_BLOB_BYTES} bytes; refusing to "
                 "read its content at all.",
             )
         total_bytes += size
-        if total_bytes > _MAX_EVIDENCE_TOTAL_BYTES:
+        if total_bytes > _MAX_RECEIPT_TOTAL_BYTES:
             raise ReceiverFailure(
-                "missing-evidence",
-                f"Evidence directory exceeds the bounded size limit of "
-                f"{_MAX_EVIDENCE_TOTAL_BYTES} bytes (checked from object metadata, "
+                "missing-receipt",
+                f"Receipt directory exceeds the bounded size limit of "
+                f"{_MAX_RECEIPT_TOTAL_BYTES} bytes (checked from object metadata, "
                 "before reading any content).",
             )
-    with tempfile.TemporaryDirectory(prefix="receiver-evidence-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="receiver-receipt-") as scratch:
         scratch_root = Path(scratch)
         for _mode, _blob_sha, path in blobs:
-            relative = PurePosixPath(path).relative_to(evidence_prefix)
+            relative = PurePosixPath(path).relative_to(receipt_prefix)
             if ".." in relative.parts:
-                raise ReceiverFailure("missing-evidence", f"Refusing path traversal: {path!r}")
+                raise ReceiverFailure("missing-receipt", f"Refusing path traversal: {path!r}")
             completed = _run_git(["show", f"{head_sha}:{path}"])
             if completed.returncode != 0:
-                raise ReceiverFailure("missing-evidence", f"Unable to read {path} at {head_sha}")
+                raise ReceiverFailure("missing-receipt", f"Unable to read {path} at {head_sha}")
             destination = scratch_root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(completed.stdout)
@@ -290,81 +312,105 @@ def materialized_case_evidence(head_sha: str, case_dir_relative: str):
         yield scratch_root
 
 
-def _evidence_index(evidence_dir: Path) -> dict:
-    index_path = evidence_dir / "index.json"
-    if not index_path.is_file():
-        raise ReceiverFailure("missing-evidence", f"No index.json under {evidence_dir}")
-    return json.loads(index_path.read_bytes())
+@dataclass(frozen=True)
+class AuditedReceipt:
+    """Facts ``apmx audit`` established about a receipt; the receiver's only view of it.
+
+    Receiver controls read these facts rather than re-parsing receipt files,
+    so nothing downstream sees a byte the audit has not already verified.
+    """
+
+    root: Path
+    definition_sha256: str
+    files: dict
+    attempts: tuple[dict, ...]
+    capability_bindings: tuple[dict, ...]
+    rows: dict[str, str]
 
 
-def _run_id(index: dict) -> str:
-    attempts = index.get("attempts") or []
-    selected = [a["runId"] for a in attempts if a.get("selected")]
+def audit_receipt(receipt_dir: Path) -> AuditedReceipt:
+    """Run the structural rows of ``apmx audit`` (as with ``--offline``).
+
+    Integrity, Standards, Factory, Checks and Outputs come from the single
+    verifier. The Ingredients row (an APM reinstall plus ``apm audit --ci``)
+    is not run here: it needs the receipt's dependencies to be resolvable on
+    this runner and the APM backend in the trusted job. Capability trust is
+    instead decided by the receiver's own revocation policy below.
+    """
+    if not (receipt_dir / "index.json").is_file():
+        raise ReceiverFailure("missing-receipt", f"No receipt index.json under {receipt_dir}")
+    receipt, failure = audit_verifier.inspect(receipt_dir)
+    if failure is not None:
+        raise ReceiverFailure("audit", f"apmx audit {failure.row} row failed: {failure}")
+    return AuditedReceipt(
+        root=receipt_dir,
+        definition_sha256=receipt.facts["definitionSha256"],
+        files=receipt.index["files"],
+        attempts=tuple(receipt.index["attempts"]),
+        capability_bindings=tuple(receipt.bindings),
+        rows=dict(receipt.details),
+    )
+
+
+def _run_id(audited: AuditedReceipt) -> str:
+    selected = [attempt["runId"] for attempt in audited.attempts if attempt["selected"]]
     if len(selected) != 1:
-        raise ReceiverFailure("binding", "Evidence does not name exactly one selected attempt.")
+        raise ReceiverFailure("binding", "Receipt does not name exactly one selected attempt.")
     return selected[0]
 
 
-def check_integrity(evidence_dir: Path, schemas_dir: Path) -> dict:
-    if not evidence_dir.is_dir():
-        raise ReceiverFailure("missing-evidence", f"No evidence directory at {evidence_dir}")
+def _apply_policy(evaluate, *args) -> None:
     try:
-        return verify_evidence.verify(evidence_dir, schemas_dir)
-    except ValueError as error:
-        raise ReceiverFailure("integrity", str(error)) from error
+        evaluate(*args)
+    except receipt_policy.PolicyViolation as violation:
+        raise ReceiverFailure(violation.control, str(violation)) from violation
 
 
 def check_factory_policy(definition_sha256: str, base_sha: str) -> None:
     policy = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/approved-factories.json")
-    allowed = set(policy.get("definitionSha256", []))
-    if definition_sha256 not in allowed:
-        raise ReceiverFailure(
-            "factory",
-            f"Evidence definition {definition_sha256} is not on the receiver's "
-            "approved-factories allowlist.",
-        )
+    _apply_policy(receipt_policy.evaluate_factory_allowlist, policy, definition_sha256)
 
 
 def check_binding(
-    evidence_dir: Path, index: dict, base_sha: str, head_sha: str, case_dir_relative: str
+    audited: AuditedReceipt, base_sha: str, head_sha: str, case_dir_relative: str
 ) -> None:
     binding_map = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/binding-map.json")
-    run_id = _run_id(index)
-    files = index["files"]
+    run_id = _run_id(audited)
+    files = audited.files
     accounted: set[str] = set()
 
-    for evidence_relative, real_path in binding_map.get("baseline", {}).items():
-        full_name = f"attempts/{run_id}/baseline/{evidence_relative}"
+    for receipt_relative, real_path in binding_map.get("baseline", {}).items():
+        full_name = f"attempts/{run_id}/baseline/{receipt_relative}"
         expected = files.get(full_name)
         if expected is None:
             raise ReceiverFailure(
-                "binding", f"Evidence has no recorded baseline material {full_name}."
+                "binding", f"Receipt has no recorded baseline material {full_name}."
             )
         accounted.add(full_name)
         actual = git_blob_sha256(base_sha, real_path)
         if actual != expected["sha256"]:
             raise ReceiverFailure(
                 "binding",
-                f"Baseline mismatch for {real_path} at {base_sha}: evidence recorded "
+                f"Baseline mismatch for {real_path} at {base_sha}: receipt recorded "
                 f"{expected['sha256']}, the PR base tree has {actual}. The recorded "
-                "evidence no longer matches the PR's actual base content.",
+                "receipt no longer matches the PR's actual base content.",
             )
 
-    for evidence_relative, real_path in binding_map.get("candidate", {}).items():
-        full_name = f"attempts/{run_id}/artifacts/{evidence_relative}"
+    for receipt_relative, real_path in binding_map.get("candidate", {}).items():
+        full_name = f"attempts/{run_id}/artifacts/{receipt_relative}"
         expected = files.get(full_name)
         if expected is None:
             raise ReceiverFailure(
-                "binding", f"Evidence has no recorded candidate artifact {full_name}."
+                "binding", f"Receipt has no recorded candidate artifact {full_name}."
             )
         accounted.add(full_name)
         actual = git_blob_sha256(head_sha, real_path)
         if actual != expected["sha256"]:
             raise ReceiverFailure(
                 "binding",
-                f"Candidate mismatch for {real_path} at {head_sha}: evidence recorded "
+                f"Candidate mismatch for {real_path} at {head_sha}: receipt recorded "
                 f"{expected['sha256']}, the PR head tree has {actual}. The patch was "
-                "changed after the evidence was captured (stale/tampered patch).",
+                "changed after the receipt was captured (stale/tampered patch).",
             )
 
     del accounted  # every mapped entry was checked above; unmapped baseline/artifact
@@ -389,88 +435,9 @@ def check_binding(
         )
 
 
-_SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}")
-
-
-def _validated_revoked_pairs(entries) -> set[tuple[str, str]]:
-    """Validate every structured capability-revocation selector explicitly,
-    never silently drop a malformed one. A typo'd or missing digest in an
-    intended deny rule must fail closed (reject the whole policy) rather
-    than quietly narrowing the revocation set and turning an intended deny
-    into an accidental allow. An absent/empty ``capabilities`` list remains
-    valid (legacy lockIdentity-only policies stay supported)."""
-    if not isinstance(entries, list):
-        raise ReceiverFailure(
-            "capability-revoked",
-            f"revoked-capabilities.json 'capabilities' must be an array, got: {entries!r}",
-        )
-    validated: set[tuple[str, str]] = set()
-    for index, entry in enumerate(entries):
-        if not isinstance(entry, dict):
-            raise ReceiverFailure(
-                "capability-revoked",
-                f"revoked-capabilities.json capabilities[{index}] is not an object: {entry!r}",
-            )
-        purl = entry.get("purl")
-        body_sha256 = entry.get("bodySha256")
-        if not isinstance(purl, str) or not purl:
-            raise ReceiverFailure(
-                "capability-revoked",
-                f"revoked-capabilities.json capabilities[{index}] has a missing or "
-                f"non-string 'purl' selector field: {entry!r}",
-            )
-        # fullmatch (not match/$) rejects a trailing newline or any other
-        # extra character after the 64 hex digits: a bare `match` with a
-        # `$`-anchored pattern accepts one trailing "\n" because `$` matches
-        # just before a final newline, not only at the true end of string.
-        if not isinstance(body_sha256, str) or not _SHA256_HEX_PATTERN.fullmatch(body_sha256):
-            raise ReceiverFailure(
-                "capability-revoked",
-                f"revoked-capabilities.json capabilities[{index}] has a missing, "
-                "non-string, or malformed (not exactly 64 lowercase hex characters) "
-                f"'bodySha256' selector field: {entry!r}",
-            )
-        validated.add((purl, body_sha256))
-    return validated
-
-
-def check_capability_revocation(evidence_dir: Path, base_sha: str) -> None:
-    bindings_path = evidence_dir / "capability-bindings.json"
-    bindings = json.loads(bindings_path.read_bytes()) if bindings_path.is_file() else []
-    if not bindings:
-        return
+def check_capability_revocation(bindings: tuple[dict, ...] | list[dict], base_sha: str) -> None:
     policy = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/revoked-capabilities.json")
-    # Legacy whole-identity revocation, kept for a coarse-grained incident
-    # response that distrusts an entire recorded lockIdentity outright
-    # (e.g. a known-compromised install root).
-    revoked_identities = set(policy.get("lockIdentity", []))
-    # Structured selector revocation: an immutable (package identity, exact
-    # content digest) pair. lockIdentity alone is not a stable public
-    # identity for a local-path dependency -- it is an absolute install
-    # path that differs between checkouts even for byte-identical content.
-    # purl + bodySha256 are the fields that stay constant across
-    # reinstalls/relocations of the same real capability, so this is the
-    # selector a genuine public incident-response rule must use. Every
-    # entry is explicitly validated (see _validated_revoked_pairs) rather
-    # than silently filtered, so a malformed policy entry fails closed
-    # instead of quietly becoming an accidental allow.
-    revoked_pairs = _validated_revoked_pairs(policy.get("capabilities", []))
-    for binding in bindings:
-        lock_identity = binding.get("lockIdentity")
-        purl = binding.get("purl")
-        body_sha256 = binding.get("bodySha256")
-        if lock_identity in revoked_identities:
-            raise ReceiverFailure(
-                "capability-revoked",
-                f"Capability {binding.get('capability')} (lockIdentity="
-                f"{lock_identity}) has been revoked by receiver incident response.",
-            )
-        if purl and body_sha256 and (purl, body_sha256) in revoked_pairs:
-            raise ReceiverFailure(
-                "capability-revoked",
-                f"Capability {binding.get('capability')} (purl={purl}, "
-                f"bodySha256={body_sha256}) has been revoked by receiver incident response.",
-            )
+    _apply_policy(receipt_policy.evaluate_capability_revocation, policy, list(bindings))
 
 
 _CONTAINER_RELATIVE = "examples/enterprise-receiver/receiver/container"
@@ -706,15 +673,15 @@ def verify_execution_results(base_sha: str, manifest: dict, results: list[dict])
             "execution",
             "Independent re-verification of receiver-required check(s) against the "
             f"candidate's actual observed behavior failed: {failed}. A signed "
-            "assessment, a structurally-valid evidence package, or the execution "
+            "assessment, a structurally-valid receipt, or the execution "
             "job's own self-reported verdict never overrides this.",
         )
 
 
-def check_signer(evidence_dir: Path, base_sha: str, definition_sha256: str) -> None:
-    """Authenticate that this exact evidence index was signed by the pinned
+def check_signer(receipt_dir: Path, base_sha: str, definition_sha256: str) -> None:
+    """Authenticate that this exact receipt index was signed by the pinned
     attestation workflow, AT an approved signer revision, binding the
-    signer's identity/ref, the specific evidence content it claims to have
+    signer's identity/ref, the specific receipt content it claims to have
     assessed, and the specific set of checks it claims to have run.
 
     A zero exit code from ``gh attestation verify`` only proves a valid
@@ -738,14 +705,14 @@ def check_signer(evidence_dir: Path, base_sha: str, definition_sha256: str) -> N
         predicate. A workflow-path-plus-mutable-ref pin alone is NOT
         equivalent to this: ``signerWorkflow``/``sourceRef`` only say "some
         commit on this ref", not "a commit this receiver has reviewed".
-        Revision trust is never read from the predicate/evidence itself --
+        Revision trust is never read from the predicate/receipt itself --
         only from the certificate the verifier independently checks;
       * every field in the policy's ``expectedPredicate`` is compared
         exactly against the signed predicate (rejecting a validly-signed
         predicate that never actually claims policy acceptance);
-      * the signed ``definitionSha256`` must equal the specific evidence
+      * the signed ``definitionSha256`` must equal the specific receipt
         digest independently computed by this check (not merely "some
-        generic accepted predicate" -- it must be THIS evidence's own
+        generic accepted predicate" -- it must be THIS receipt's own
         definition); and
       * the signed ``assessedChecks`` must be a superset of the policy's
         ``requiredAssessedChecks`` (rejecting a signature that is silent
@@ -760,7 +727,7 @@ def check_signer(evidence_dir: Path, base_sha: str, definition_sha256: str) -> N
             "signer revision until the bootstrap commit-digest allowlist is populated.",
         )
     required_assessed_checks = set(signers.get("requiredAssessedChecks", []))
-    subject = evidence_dir / "index.json"
+    subject = receipt_dir / "index.json"
     expected_digest = hashlib.sha256(subject.read_bytes()).hexdigest()
     args = [
         "gh",
@@ -782,7 +749,7 @@ def check_signer(evidence_dir: Path, base_sha: str, definition_sha256: str) -> N
     if completed.returncode != 0:
         raise ReceiverFailure(
             "signer",
-            "gh attestation verify failed for the evidence index: "
+            "gh attestation verify failed for the receipt index: "
             + completed.stderr.decode(errors="replace").strip(),
         )
     try:
@@ -821,7 +788,7 @@ def check_signer(evidence_dir: Path, base_sha: str, definition_sha256: str) -> N
         f"({expected_digest}), an approved signer commit digest, predicate "
         f"{expected_predicate!r}, definitionSha256 {definition_sha256}, and required "
         f"assessedChecks {sorted(required_assessed_checks)}. A signature exists but "
-        "does not authenticate this evidence's actual content/claims/revision.",
+        "does not authenticate this receipt's actual content/claims/revision.",
     )
 
 
@@ -833,28 +800,56 @@ def _case_candidate_bytes(base_sha: str, head_sha: str) -> dict[str, bytes]:
     }
 
 
-def prepare_case(
-    *, case_dir_relative: str, base_sha: str, head_sha: str, schemas_dir: Path, bundle_dir: Path
-) -> dict:
+def _identity_checks(
+    receipt_dir: Path, base_sha: str, *, head_sha: str | None = None, case_dir: str | None = None
+) -> AuditedReceipt:
+    """``apmx audit`` first, then the receiver's own controls over its facts.
+
+    Binding runs only for a PR case (``head_sha``/``case_dir``): the
+    canonical pre-signing receipt has no PR candidate to bind.
+    """
+    audited = audit_receipt(receipt_dir)
+    check_factory_policy(audited.definition_sha256, base_sha)
+    if head_sha is not None and case_dir is not None:
+        check_binding(audited, base_sha, head_sha, case_dir)
+    check_capability_revocation(audited.capability_bindings, base_sha)
+    return audited
+
+
+def _write_manifest(bundle_dir: Path, manifest: dict, definition_sha256: str) -> dict:
+    manifest["definitionSha256"] = definition_sha256
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    return manifest
+
+
+def _bundle_for(bundle_dir: Path, audited: AuditedReceipt) -> dict:
+    manifest = json.loads((bundle_dir / "manifest.json").read_bytes())
+    if manifest.get("definitionSha256") != audited.definition_sha256:
+        raise ReceiverFailure(
+            "execution",
+            "The execution bundle was prepared for a different receipt definition "
+            "than this job independently re-audited; refusing to accept execution "
+            "observations for the wrong candidate/receipt.",
+        )
+    return manifest
+
+
+def prepare_case(*, case_dir_relative: str, base_sha: str, head_sha: str, bundle_dir: Path) -> dict:
     """Job A for a PR-introduced case: trusted, zero-execution identity
-    checks (integrity/factory/binding/capability-revocation) followed by
+    checks (audit/factory/binding/capability-revocation) followed by
     writing the execution bundle job B will run with no checkout and no
-    permissions. Binding already proves the evidence's recorded candidate
+    permissions. Binding already proves the receipt's recorded candidate
     hash matches the PR head's actual tree before any candidate byte is
     ever placed in the bundle, so it is safe to let a disposable, zero-
     permission job execute them next.
     """
-    with materialized_case_evidence(head_sha, case_dir_relative) as evidence_dir:
-        summary = check_integrity(evidence_dir, schemas_dir)
-        index = _evidence_index(evidence_dir)
-        check_factory_policy(summary["definitionSha256"], base_sha)
-        check_binding(evidence_dir, index, base_sha, head_sha, case_dir_relative)
-        check_capability_revocation(evidence_dir, base_sha)
+    with materialized_case_receipt(head_sha, case_dir_relative) as receipt_dir:
+        audited = _identity_checks(
+            receipt_dir, base_sha, head_sha=head_sha, case_dir=case_dir_relative
+        )
         candidate_bytes_by_real_path = _case_candidate_bytes(base_sha, head_sha)
         manifest = write_execution_bundle(base_sha, candidate_bytes_by_real_path, bundle_dir)
-        manifest["definitionSha256"] = summary["definitionSha256"]
-        (bundle_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-        return manifest
+        return _write_manifest(bundle_dir, manifest, audited.definition_sha256)
 
 
 def assess_case(
@@ -863,39 +858,28 @@ def assess_case(
     case_dir_relative: str,
     base_sha: str,
     head_sha: str,
-    schemas_dir: Path,
     bundle_dir: Path,
     execution_results: list[dict],
     skip_signer: bool = False,
 ) -> CaseResult:
     """Job C for a PR-introduced case: fully, independently RE-DOES the
-    deterministic identity checks (integrity/factory/binding/capability-
+    deterministic identity checks (audit/factory/binding/capability-
     revocation -- cheap, no execution involved, so job A's verdict on them
     is never trusted blindly either), then holds job B's execution
     observations to account via ``verify_execution_results``, then signer.
     """
-    with materialized_case_evidence(head_sha, case_dir_relative) as evidence_dir:
-        summary = check_integrity(evidence_dir, schemas_dir)
-        index = _evidence_index(evidence_dir)
-        check_factory_policy(summary["definitionSha256"], base_sha)
-        check_binding(evidence_dir, index, base_sha, head_sha, case_dir_relative)
-        check_capability_revocation(evidence_dir, base_sha)
-        checks = ["integrity", "factory", "binding", "capability-revocation"]
-        manifest = json.loads((bundle_dir / "manifest.json").read_bytes())
-        if manifest.get("definitionSha256") != summary["definitionSha256"]:
-            raise ReceiverFailure(
-                "execution",
-                "The execution bundle was prepared for a different evidence "
-                "definition than this job independently re-verified; refusing to "
-                "accept execution observations for the wrong candidate/evidence.",
-            )
-        verify_execution_results(base_sha, manifest, execution_results)
+    with materialized_case_receipt(head_sha, case_dir_relative) as receipt_dir:
+        audited = _identity_checks(
+            receipt_dir, base_sha, head_sha=head_sha, case_dir=case_dir_relative
+        )
+        checks = ["audit", "factory", "binding", "capability-revocation"]
+        verify_execution_results(base_sha, _bundle_for(bundle_dir, audited), execution_results)
         checks.append("execution")
         if not skip_signer:
-            check_signer(evidence_dir, base_sha, summary["definitionSha256"])
+            check_signer(receipt_dir, base_sha, audited.definition_sha256)
             checks.append("signer")
         return CaseResult(
-            case=case, definition_sha256=summary["definitionSha256"], checks=tuple(checks)
+            case=case, definition_sha256=audited.definition_sha256, checks=tuple(checks)
         )
 
 
@@ -905,7 +889,6 @@ def check_case(
     case_dir_relative: str,
     base_sha: str,
     head_sha: str,
-    schemas_dir: Path,
     skip_signer: bool = False,
 ) -> CaseResult:
     """Convenience wrapper combining prepare/execute/assess in a single
@@ -922,7 +905,6 @@ def check_case(
             case_dir_relative=case_dir_relative,
             base_sha=base_sha,
             head_sha=head_sha,
-            schemas_dir=schemas_dir,
             bundle_dir=bundle_dir,
         )
         execution_results = run_execution_bundle(bundle_dir)
@@ -931,53 +913,42 @@ def check_case(
             case_dir_relative=case_dir_relative,
             base_sha=base_sha,
             head_sha=head_sha,
-            schemas_dir=schemas_dir,
             bundle_dir=bundle_dir,
             execution_results=execution_results,
             skip_signer=skip_signer,
         )
 
 
-def prepare_canonical(
-    evidence_dir: Path, base_sha: str, schemas_dir: Path, bundle_dir: Path
-) -> dict:
-    """Job A for the canonical (pre-signing) evidence package: identical
+def prepare_canonical(receipt_dir: Path, base_sha: str, bundle_dir: Path) -> dict:
+    """Job A for the canonical (pre-signing) receipt: identical
     trust story to ``prepare_case``, but sourcing candidate bytes from the
-    canonical evidence package's own recorded artifacts (there is no PR
+    canonical receipt's own audited artifacts (there is no PR
     head to read from at sign time).
     """
-    summary = check_integrity(evidence_dir, schemas_dir)
-    check_factory_policy(summary["definitionSha256"], base_sha)
-    check_capability_revocation(evidence_dir, base_sha)
-    index = _evidence_index(evidence_dir)
-    run_id = _run_id(index)
+    audited = _identity_checks(receipt_dir, base_sha)
+    run_id = _run_id(audited)
     binding_map = trusted_json(base_sha, f"{_POLICY_DIR_RELATIVE}/binding-map.json")
     candidate_bytes_by_real_path = {
-        real_path: (
-            evidence_dir / "attempts" / run_id / "artifacts" / evidence_relative
-        ).read_bytes()
-        for evidence_relative, real_path in binding_map.get("candidate", {}).items()
+        real_path: (receipt_dir / "attempts" / run_id / "artifacts" / receipt_relative).read_bytes()
+        for receipt_relative, real_path in binding_map.get("candidate", {}).items()
     }
     manifest = write_execution_bundle(base_sha, candidate_bytes_by_real_path, bundle_dir)
-    manifest["definitionSha256"] = summary["definitionSha256"]
-    (bundle_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    return manifest
+    return _write_manifest(bundle_dir, manifest, audited.definition_sha256)
 
 
 def assess_canonical(
-    evidence_dir: Path,
+    receipt_dir: Path,
     base_sha: str,
-    schemas_dir: Path,
     *,
     bundle_dir: Path | None = None,
     execution_results: list[dict] | None = None,
-) -> dict:
+) -> AuditedReceipt:
     """The privileged, pre-signing assessment run only on the receiver's own
     trusted branch (never against an untrusted PR), reused unmodified by
     ``receiver-attest.yml`` so the signed predicate's "accepted" claim is
     actually backed by the same factory-allowlist and capability-revocation
-    policy this module enforces for every candidate -- not merely a
-    structural/schema check.
+    policy this module enforces for every candidate -- not merely
+    ``apmx audit``'s structural verdict.
 
     Binding and signer checks are deliberately not run here: binding is
     specific to a PR candidate (there is none at sign time) and signer
@@ -985,7 +956,7 @@ def assess_canonical(
     execution observations ARE verified here (independently, from job B's
     artifact), so the signed predicate's "accepted" claim also proves the
     behavioral check's raw observed output actually matched policy, not
-    merely that the evidence's own self-report was internally consistent.
+    merely that the receipt's own self-report was internally consistent.
 
     When ``bundle_dir``/``execution_results`` are omitted, this function
     prepares and executes the bundle itself in-process (local/unit-test
@@ -993,28 +964,20 @@ def assess_canonical(
     instead always supplies both, produced by its own separate, zero-
     permission execution job.
     """
-    summary = check_integrity(evidence_dir, schemas_dir)
-    check_factory_policy(summary["definitionSha256"], base_sha)
-    check_capability_revocation(evidence_dir, base_sha)
+    audited = _identity_checks(receipt_dir, base_sha)
     if bundle_dir is None:
         with tempfile.TemporaryDirectory(prefix="receiver-bundle-") as bundle:
             bundle_dir = Path(bundle)
-            manifest = prepare_canonical(evidence_dir, base_sha, schemas_dir, bundle_dir)
+            manifest = prepare_canonical(receipt_dir, base_sha, bundle_dir)
             if execution_results is None:
                 execution_results = run_execution_bundle(bundle_dir)
             verify_execution_results(base_sha, manifest, execution_results)
     else:
-        manifest = json.loads((bundle_dir / "manifest.json").read_bytes())
-        if manifest.get("definitionSha256") != summary["definitionSha256"]:
-            raise ReceiverFailure(
-                "execution",
-                "The execution bundle was prepared for a different evidence "
-                "definition than this job independently re-verified.",
-            )
+        manifest = _bundle_for(bundle_dir, audited)
         if execution_results is None:
             execution_results = run_execution_bundle(bundle_dir)
         verify_execution_results(base_sha, manifest, execution_results)
-    return summary
+    return audited
 
 
 def main() -> int:
@@ -1031,7 +994,6 @@ def main() -> int:
     check_case_parser.add_argument("--case-dir", required=True, help="Repo-relative case directory")
     check_case_parser.add_argument("--base-sha", required=True)
     check_case_parser.add_argument("--head-sha", required=True)
-    check_case_parser.add_argument("--schemas", type=Path, required=True)
     check_case_parser.add_argument("--skip-signer", action="store_true")
 
     prepare_case_parser = subparsers.add_parser(
@@ -1041,7 +1003,6 @@ def main() -> int:
     prepare_case_parser.add_argument("--case-dir", required=True)
     prepare_case_parser.add_argument("--base-sha", required=True)
     prepare_case_parser.add_argument("--head-sha", required=True)
-    prepare_case_parser.add_argument("--schemas", type=Path, required=True)
     prepare_case_parser.add_argument("--bundle-dir", type=Path, required=True)
 
     execute_bundle_parser = subparsers.add_parser(
@@ -1059,26 +1020,23 @@ def main() -> int:
     assess_case_parser.add_argument("--case-dir", required=True)
     assess_case_parser.add_argument("--base-sha", required=True)
     assess_case_parser.add_argument("--head-sha", required=True)
-    assess_case_parser.add_argument("--schemas", type=Path, required=True)
     assess_case_parser.add_argument("--bundle-dir", type=Path, required=True)
     assess_case_parser.add_argument("--results", type=Path, required=True)
     assess_case_parser.add_argument("--skip-signer", action="store_true")
 
     prepare_canonical_parser = subparsers.add_parser(
-        "prepare-canonical", help="Job A for the canonical pre-signing evidence package."
+        "prepare-canonical", help="Job A for the canonical pre-signing receipt."
     )
-    prepare_canonical_parser.add_argument("--evidence-dir", type=Path, required=True)
+    prepare_canonical_parser.add_argument("--receipt-dir", type=Path, required=True)
     prepare_canonical_parser.add_argument("--base-sha", required=True)
-    prepare_canonical_parser.add_argument("--schemas", type=Path, required=True)
     prepare_canonical_parser.add_argument("--bundle-dir", type=Path, required=True)
 
     assess_parser = subparsers.add_parser(
         "assess-canonical",
-        help="Privileged pre-signing assessment of the canonical evidence package.",
+        help="Privileged pre-signing assessment of the canonical receipt.",
     )
-    assess_parser.add_argument("--evidence-dir", type=Path, required=True)
+    assess_parser.add_argument("--receipt-dir", type=Path, required=True)
     assess_parser.add_argument("--base-sha", required=True)
-    assess_parser.add_argument("--schemas", type=Path, required=True)
     assess_parser.add_argument("--bundle-dir", type=Path, required=True)
     assess_parser.add_argument("--results", type=Path, required=True)
 
@@ -1096,7 +1054,6 @@ def main() -> int:
                 case_dir_relative=args.case_dir,
                 base_sha=args.base_sha,
                 head_sha=args.head_sha,
-                schemas_dir=args.schemas,
                 bundle_dir=args.bundle_dir,
             )
         except ReceiverFailure as failure:
@@ -1112,7 +1069,7 @@ def main() -> int:
 
     if args.mode == "prepare-canonical":
         try:
-            prepare_canonical(args.evidence_dir, args.base_sha, args.schemas, args.bundle_dir)
+            prepare_canonical(args.receipt_dir, args.base_sha, args.bundle_dir)
         except ReceiverFailure as failure:
             return _emit_rejection(failure)
         print(json.dumps({"status": "prepared"}))
@@ -1121,16 +1078,23 @@ def main() -> int:
     if args.mode == "assess-canonical":
         execution_results = json.loads(args.results.read_bytes())
         try:
-            summary = assess_canonical(
-                args.evidence_dir,
+            audited = assess_canonical(
+                args.receipt_dir,
                 args.base_sha,
-                args.schemas,
                 bundle_dir=args.bundle_dir,
                 execution_results=execution_results,
             )
         except ReceiverFailure as failure:
             return _emit_rejection(failure)
-        print(json.dumps({"status": "accepted", "definitionSha256": summary["definitionSha256"]}))
+        print(
+            json.dumps(
+                {
+                    "status": "accepted",
+                    "definitionSha256": audited.definition_sha256,
+                    "audit": audited.rows,
+                }
+            )
+        )
         return 0
 
     if args.mode == "assess-case":
@@ -1141,7 +1105,6 @@ def main() -> int:
                 case_dir_relative=args.case_dir,
                 base_sha=args.base_sha,
                 head_sha=args.head_sha,
-                schemas_dir=args.schemas,
                 bundle_dir=args.bundle_dir,
                 execution_results=execution_results,
                 skip_signer=args.skip_signer,
@@ -1166,7 +1129,6 @@ def main() -> int:
             case_dir_relative=args.case_dir,
             base_sha=args.base_sha,
             head_sha=args.head_sha,
-            schemas_dir=args.schemas,
             skip_signer=args.skip_signer,
         )
     except ReceiverFailure as failure:
