@@ -28,6 +28,10 @@ class Invalid(Exception):
     """Missing, unsupported or incomplete check input or execution."""
 
 
+class OutOfScope(Exception):
+    """A well-formed patch whose file set differs from the check profile: a rejection."""
+
+
 def read_file(root: Path, name: str, limit: int = MAX_FILE) -> bytes:
     """Read a bounded regular file without following symlink components."""
     path = Path(name)
@@ -101,29 +105,41 @@ def patch_paths(
     changed_files: tuple[str, ...] = CHANGED_FILES,
     added_files: tuple[str, ...] = ("tests/test_free_shipping.py",),
 ) -> tuple[str, ...]:
-    """Accept exactly the regular-file edits named by a trusted check profile."""
+    """Accept exactly the regular-file edits named by a trusted check profile.
+
+    Malformed, unsafe or duplicate patch content is invalid input (exit 2). A
+    well-formed patch that edits a different file set is an assessed rejection
+    (exit 1), so an authored repair budget can retry it.
+    """
     try:
         text = raw.decode("ascii")
     except UnicodeError as exc:
         raise Invalid("This example expects an ASCII text patch.") from exc
     sections = re.split(r"(?m)^diff --git ", text)
-    if sections[0] or len(sections) != len(changed_files) + 1:
-        raise Invalid("Patch must change exactly the files required by this check profile.")
-    paths = []
+    if sections[0] or len(sections) == 1:
+        raise Invalid("Expected a Git patch with at least one file section.")
+    paths: list[str] = []
     for section in sections[1:]:
-        lines = section.splitlines()
+        lines = section.splitlines() or [""]
         header = re.fullmatch(r"a/([a-zA-Z0-9_./-]+) b/\1", lines[0])
-        if not header or header[1] not in changed_files or header[1] in paths:
-            raise Invalid("Patch contains an unsafe, duplicate or protected path.")
+        if (
+            not header
+            or header[1] in paths
+            or any(part in ("", ".", "..") for part in header[1].split("/"))
+        ):
+            raise Invalid("Patch contains an unsafe or duplicate path.")
         name = header[1]
         paths.append(name)
-        addition = name in added_files
+        position = 1
+        if name in changed_files:
+            addition = name in added_files
+            if addition and lines[position : position + 1] != ["new file mode 100644"]:
+                raise Invalid("The generated regression test must be a new regular file.")
+        else:
+            addition = lines[position : position + 1] == ["new file mode 100644"]
         before = "--- /dev/null" if addition else f"--- a/{name}"
         after = f"+++ b/{name}"
-        position = 1
         if addition:
-            if lines[position] != "new file mode 100644":
-                raise Invalid("The generated regression test must be a new regular file.")
             position += 1
         if re.fullmatch(r"index [0-9a-f]+\.\.[0-9a-f]+(?: 100644)?", lines[position]):
             position += 1
@@ -151,6 +167,21 @@ def patch_paths(
                 position += 1
                 if position < len(lines) and lines[position] == r"\ No newline at end of file":
                     position += 1
+    unexpected = [name for name in paths if name not in changed_files]
+    missing = [name for name in changed_files if name not in paths]
+    if unexpected or missing:
+        reasons = []
+        if unexpected:
+            reasons.append("it also changes " + ", ".join(unexpected))
+        if missing:
+            reasons.append("it does not change " + ", ".join(missing))
+        raise OutOfScope(
+            "Patch is outside this check profile: "
+            + "; ".join(reasons)
+            + ". Change exactly "
+            + ", ".join(changed_files)
+            + "."
+        )
     return tuple(paths)
 
 
@@ -351,6 +382,10 @@ def execute(
         if tree_hash(check_inventory(root)) != subject["checks"]:
             raise Invalid("Supplied check resources changed while checks were running.")
         evidence["status"] = "passed" if code == 0 else "failed"
+    except OutOfScope as exc:
+        code = 1
+        evidence["status"] = "failed"
+        evidence["detail"] = str(exc).encode("ascii", "backslashreplace").decode("ascii")[:600]
     except (
         Invalid,
         OSError,

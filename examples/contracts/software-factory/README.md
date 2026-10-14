@@ -191,9 +191,10 @@ exclusions. Capture is not a secret scanner or native-host isolation.
 The [versioned example formats](checks/document-formats.md) keep reports readable
 and references machine-checkable. They are not a universal APMX schema.
 Document checks assess format/reference consistency, not prose truth or review quality.
-The build alone declares a [bounded repair budget](../../../docs/repair.md):
-at most three attempts sharing 600 seconds for native execution and checks.
-Planning, specification, documentation and review each remain one attempt.
+Two stages declare a [bounded repair budget](../../../docs/repair.md): the
+build allows at most three attempts sharing 600 seconds, and documentation at
+most two attempts sharing 300 seconds, for native execution and checks.
+Planning, specification and review each remain one attempt.
 These are execution limits, not model-latency or spending guarantees.
 The planning check retains its public `plan-sections` key for compatibility;
 in this development version it checks the full format and typed references,
@@ -352,8 +353,14 @@ only; they do not change global Git configuration or normalize captured bytes.
 Checker exit codes:
 
 - `0`: every required observation completed and passed within that check's scope.
-- `1`: document format/references, application behavior or a test assertion failed.
-- `2`: tooling, inputs, patch application or execution was invalid/incomplete.
+- `1`: document format/references, application behavior or a test assertion
+  failed, or a well-formed patch changed a different set of files than the
+  check's profile allows (for example, the build also editing `docs/checkout.md`).
+- `2`: tooling, inputs, patch application or execution was invalid/incomplete,
+  including malformed, unsafe or duplicate patch content.
+
+A patch outside its profile is an assessed rejection, so a budgeted stage can
+retry it with the checker's reason; malformed patches still stop the stage.
 
 Empty, filtered, skipped, undefined or pending Gherkin does not pass. External
 Behave configuration and environment selection are ignored. Missing optional
@@ -361,11 +368,12 @@ Behave returns `2` with setup guidance, not a passing skipped check.
 
 ## Recover after a failed or incomplete run
 
-The build automatically retries only eligible candidate rejections within its
-declared budget, retaining every attempt and keeping the original goal, project,
-capability and checks fixed. Operational failures stop without retrying.
-Exhausted or unchanged rejected candidates stop dependent work. The other four
-stages remain single-attempt, and APMX does not resume a stopped factory.
+The build and documentation stages automatically retry only eligible candidate
+rejections within their declared budgets, retaining every attempt and keeping
+the original goal, project, capability and checks fixed. Operational failures
+stop without retrying. Exhausted or unchanged rejected candidates stop dependent
+work. The other three stages remain single-attempt, and APMX does not resume a
+stopped factory.
 A stopped factory may have per-run artifacts but no completed aggregate
 `artifacts/` view.
 
@@ -375,11 +383,12 @@ A stopped factory may have per-run artifacts but no completed aggregate
    `checks`, their `normalized` values and raw `process` observations. Read the
    adjacent `transcript.log` for retained checker stdout/stderr and diagnostics.
    A leaf record's `complete` field means finalization finished; it does not by
-   itself mean outputs/checks passed. For a budgeted build, also follow the
-   result's `controller` reference to its ordered attempt history and stop reason.
+   itself mean outputs/checks passed. For a budgeted build or documentation
+   stage, also follow the result's `controller` reference to its ordered
+   attempt history and stop reason.
 2. **Distinguish a defect from incomplete execution.** A check's exit `1`
-   rejects behavior; `2` means missing tooling, invalid inputs or incomplete
-   execution. For a missing Behave import, return to `APMX_SOURCE` and repair
+   rejects behavior or an out-of-profile patch; `2` means missing tooling,
+   invalid inputs or incomplete execution. For a missing Behave import, return to `APMX_SOURCE` and repair
    the environment for your installation route. With a prebuilt APMX, repeat
    the dependency repair for the existing
    [checks-only environment](../../../docs/install.md#example-tools-for-a-native-installation)
@@ -507,7 +516,8 @@ that native inference ran on Windows/Linux. The factory remained
 
 This example accepts regular ASCII text edits to `src/pricing.py` and
 `src/checkout.py`, plus a new `tests/test_free_shipping.py`. It rejects edits
-to protected check resources, existing tests, symlinks, modes and other paths.
+to protected check resources, existing tests and other paths (exit `1`), and
+refuses symlinks, modes and unsafe paths as invalid input (exit `2`).
 These are this example's patch requirements, not restrictions on all APMX
 artifact types. The separate docs profile permits only regular text edits to
 `docs/checkout.md` and requires every accepted non-doc byte to remain unchanged.

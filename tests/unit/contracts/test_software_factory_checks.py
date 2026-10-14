@@ -127,7 +127,7 @@ def test_supplied_acceptance_rejects_baseline_and_off_by_one_even_with_vacuous_g
 
 @pytest.mark.parametrize("checker", ["regression.py", pytest.param("acceptance.py", marks=BDD)])
 @pytest.mark.parametrize(
-    "fault", ("missing-patch", "invalid-patch", "wrong-base", "protected", "mode")
+    "fault", ("missing-patch", "invalid-patch", "wrong-base", "unsafe", "duplicate", "mode")
 )
 def test_invalid_patch_subject_is_operational_not_passing(
     candidate: Path, checker: str, fault: str
@@ -139,8 +139,13 @@ def test_invalid_patch_subject_is_operational_not_passing(
         patch.write_bytes(b"not a patch\n")
     elif fault == "wrong-base":
         (candidate / "src/pricing.py").write_bytes(b"wrong baseline\n")
-    elif fault == "protected":
-        patch.write_bytes(patch.read_bytes().replace(b"src/pricing.py", b"checks/steps.py"))
+    elif fault == "unsafe":
+        patch.write_bytes(patch.read_bytes().replace(b"src/pricing.py", b"src/../steps.py"))
+    elif fault == "duplicate":
+        raw = patch.read_bytes()
+        first = raw.index(b"diff --git ")
+        second = raw.index(b"diff --git ", first + 1)
+        patch.write_bytes(raw + raw[first:second])
     else:
         patch.write_bytes(
             patch.read_bytes().replace(b"new file mode 100644", b"new file mode 100755")
@@ -148,6 +153,51 @@ def test_invalid_patch_subject_is_operational_not_passing(
     code, report = invoke(candidate, checker, "changes.diff")
     assert code == 2 and report["status"] == "error", report
     assert not list(candidate.glob(".software-factory-check-*"))
+
+
+OUT_OF_PROFILE = (
+    b"diff --git a/docs/checkout.md b/docs/checkout.md\n"
+    b"index 1111111..2222222 100644\n"
+    b"--- a/docs/checkout.md\n"
+    b"+++ b/docs/checkout.md\n"
+    b"@@ -1 +1 @@\n"
+    b"-# Checkout\n"
+    b"+# Checkout page\n"
+)
+
+
+@pytest.mark.parametrize("checker", ["regression.py", pytest.param("acceptance.py", marks=BDD)])
+@pytest.mark.parametrize("fault", ("extra-file", "protected", "missing-file"))
+def test_well_formed_patch_outside_the_profile_is_an_assessed_rejection(
+    candidate: Path, checker: str, fault: str
+) -> None:
+    """A producer editing the wrong files is rejected (exit 1), so repair can retry it."""
+    patch = candidate / "changes.diff"
+    raw = patch.read_bytes()
+    if fault == "extra-file":
+        patch.write_bytes(raw + OUT_OF_PROFILE)
+        expected = "it also changes docs/checkout.md"
+    elif fault == "protected":
+        patch.write_bytes(raw.replace(b"src/pricing.py", b"checks/steps.py"))
+        expected = "it also changes checks/steps.py; it does not change src/pricing.py"
+    else:
+        start = raw.index(b"diff --git a/src/checkout.py")
+        end = raw.index(b"diff --git ", start + 1)
+        patch.write_bytes(raw[:start] + raw[end:])
+        expected = "it does not change src/checkout.py"
+    code, report = invoke(candidate, checker, "changes.diff")
+    assert code == 1 and report["status"] == "failed", report
+    assert expected in report["detail"] and "Change exactly" in report["detail"], report
+    assert report["subject"] is None and report["observed"] == []
+    assert not list(candidate.glob(".software-factory-check-*"))
+
+
+def test_malformed_section_outside_the_profile_stays_operational(candidate: Path) -> None:
+    """Scope is judged only after every section is well formed."""
+    patch = candidate / "changes.diff"
+    patch.write_bytes(patch.read_bytes() + OUT_OF_PROFILE.replace(b"@@ -1 +1 @@", b"@@ -1,3 +1 @@"))
+    code, report = invoke(candidate, "regression.py", "changes.diff")
+    assert code == 2 and report["status"] == "error", report
 
 
 @pytest.mark.parametrize(

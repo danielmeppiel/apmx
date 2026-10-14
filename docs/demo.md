@@ -124,9 +124,9 @@ fingerprints establish the same contracts/checks/capabilities/budget, not identi
 generated code. Evidence is unsigned, not authenticated attestation.
 
 For a tight talk, run one harness live and label the other result as a prepared
-run. Do not promise bounded whole-factory latency. Only the build declares three
-attempts/600 shared seconds; the other stages remain single-attempt. Narrate
-repair only if it actually occurs.
+run. Do not promise bounded whole-factory latency. The build declares three
+attempts/600 shared seconds and documentation two attempts/300 shared seconds;
+the other stages remain single-attempt. Narrate repair only if it actually occurs.
 
 ## Reset and relaunch
 

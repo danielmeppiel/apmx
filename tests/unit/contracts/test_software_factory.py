@@ -98,12 +98,23 @@ def test_factory_check_names_describe_the_proven_outcomes() -> None:
     assert sum(map(len, actual.values())) == 9
 
 
-def test_only_build_declares_a_shared_repair_budget() -> None:
+BUDGETS = {
+    "build.contract.md": {"max_attempts": 3, "max_seconds": 600},
+    "documentation.contract.md": {"max_attempts": 2, "max_seconds": 300},
+}
+
+
+def test_build_and_documentation_declare_shared_repair_budgets() -> None:
     for name in DELIVERIES:
         document = load_frontmatter_document(EXAMPLE / "contracts" / name)
-        assert document.metadata.get("budget") == (
-            {"max_attempts": 3, "max_seconds": 600} if name == "build.contract.md" else None
-        )
+        assert document.metadata.get("budget") == BUDGETS.get(name)
+
+
+def test_documentation_links_stay_inside_the_delivered_candidate() -> None:
+    body = load_frontmatter_document(EXAMPLE / "contracts/documentation.contract.md").body
+    text = " ".join(body.split())
+    assert "Link only to files delivered in the combined candidate" in text
+    assert "Do not link to checks/" in text
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
@@ -246,9 +257,13 @@ def test_factory_native_preview_and_five_real_leaf_handoffs(
     assert [tuple(item["checks"]) for item in data["graph"]["order"]] == list(CHECKS.values())
     for node, declared_outputs in zip(data["nodes"], DELIVERIES.values(), strict=True):
         reference = node["result"].get("controller")
-        if "changes.diff" in declared_outputs:
+        budget = next(
+            (value for key, value in BUDGETS.items() if DELIVERIES[key] == declared_outputs),
+            None,
+        )
+        if budget is not None:
             controller = json.loads(Path(reference["path"]).read_bytes())
-            assert controller["budget"] == {"max_attempts": 3, "max_seconds": 600}
+            assert controller["budget"] == budget
             assert len(controller["attempts"]) == 1
             assert controller["selected_run_id"] == node["result"]["run_id"]
         else:

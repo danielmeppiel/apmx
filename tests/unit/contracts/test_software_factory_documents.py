@@ -168,6 +168,7 @@ def test_documentation_patch_is_checked_with_unchanged_code(documents: Path, che
         "malformed-link",
         "space-link",
         "escape-link",
+        "check-resource-link",
     ],
 )
 def test_documentation_content_failures_reject_the_delivery(
@@ -190,6 +191,8 @@ def test_documentation_content_failures_reject_the_delivery(
         text += "\n[Missing page][missing]\n\n[missing]: missing.md\n"
     elif fault == "malformed-link":
         text += "\n[Broken](missing.md\n"
+    elif fault == "check-resource-link":
+        text += "\n[Canonical cases](../checks/software_factory_cases.py)\n"
     elif fault == "space-link":
         text += "\n[Broken](missing file.md)\n"
     else:
@@ -203,7 +206,8 @@ def test_documentation_cannot_edit_the_accepted_application(documents: Path) -> 
     patch = documents / "documentation.diff"
     patch.write_bytes(patch.read_bytes().replace(b"docs/checkout.md", b"src/checkout.py"))
     code, report = invoke(documents, "documentation.py", "changes.diff", patch.name)
-    assert code == 2 and report["status"] == "error", report
+    assert code == 1 and report["status"] == "failed", report
+    assert "it also changes src/checkout.py" in report["detail"], report
 
 
 @pytest.mark.parametrize(
