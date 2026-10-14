@@ -127,6 +127,9 @@ def test_attestations_that_do_not_match_are_never_signed(plain_receipt, change, 
 def test_no_attestation_is_unsigned_and_errors_are_unavailable(plain_receipt) -> None:
     missing = _verify(plain_receipt, Gh((1, b"", b"Error: no attestations found\n")))
     assert missing.status == "unsigned"
+    # Recorded from gh 2.102.0 (non-TTY) for an attestation signed by a different workflow.
+    other = _verify(plain_receipt, Gh((1, b"", b'\nError: verifying with issuer "sigstore.dev"\n')))
+    assert other.status == "unsigned" and "no attestation from this signer" in other.notes[0]
     network = _verify(plain_receipt, Gh((1, b"", b"Error: failed to fetch: timeout\n")))
     assert network.status == "unavailable" and "timeout" in network.notes[0]
     garbled = _verify(plain_receipt, Gh((0, b"not json", b"")))

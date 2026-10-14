@@ -30,6 +30,11 @@ from . import verifier
 PREDICATE_TYPE = "https://github.com/danielmeppiel/apmx/attestation/receipt/v1"
 ISSUER = "https://token.actions.githubusercontent.com"
 _NOT_FOUND = ("no attestations found", "no matching attestations", "http 404")
+# Attestations exist but none satisfies the signer constraints. gh reports this,
+# when not on a terminal, only as `Error: verifying with issuer "sigstore.dev"`
+# (observed with gh 2.102.0). Treating it as "no matching attestation" can only
+# reject a receipt, never accept one.
+_MISMATCH = ("verifying with issuer", "verification failed", "failed to verify")
 _GITHUB = re.compile(r"(?:https://|git@|ssh://git@)github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$")
 
 Runner = Callable[[list[str]], tuple[int, bytes, bytes]]
@@ -159,6 +164,9 @@ def verify(
         text = err.decode("utf-8", errors="replace")
         if code != 0:
             if any(marker in text.lower() for marker in _NOT_FOUND):
+                continue
+            if any(marker in text.lower() for marker in _MISMATCH):
+                mismatches.append(f"{signer.workflow}: no attestation from this signer verified")
                 continue
             last = [line for line in text.splitlines() if line.strip()]
             unavailable.append(f"{signer.workflow}: {_ascii(last[-1] if last else 'gh failed')}")
