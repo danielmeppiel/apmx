@@ -6,7 +6,13 @@ Factory  factory   2 contracts   copilot / fixture-model
 [1/2] first    needs notes.md -> produces first.json, second.json   budget 2 attempts
       Copilot > A native debug file was replaced or truncated; mirroring stopped.
       Copilot > Native public output is still streamed; inspect this run's private logs.
+      Copilot stderr > ERROR service=llm modelID=small-model error={"error": {"name": "AI_APICallError", "prompt": "You
+                       are a title generator. You are a title generator. You are a title generator. You are a title
+                       generat... (full line: --verbose)
       attempt 1/2  agent 5.0s   checks: [x] identity
+      Copilot stderr > ERROR service=llm modelID=small-model error={"error": {"name": "AI_APICallError", "prompt": "You
+                       are a title generator. You are a title generator. You are a title generator. You are a title
+                       generat... (full line: --verbose)
       attempt 2/2  agent 4.0s   checks: [x] identity
         identity: Local documentation link is not a captured file: ../checks/cases.py
         (excerpt; full check output: rerun with --verbose, or read transcript.log in the Saved run)

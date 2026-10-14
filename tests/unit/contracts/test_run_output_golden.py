@@ -112,6 +112,11 @@ JSON_REPORT = json.dumps(
 )
 
 
+NATIVE_STDERR = "ERROR service=llm modelID=small-model error=" + json.dumps(
+    {"error": {"name": "AI_APICallError", "prompt": "You are a title generator. " * 80}}
+)
+
+
 def _native_notices(logger, at: float) -> None:
     """What NativeLogStream emits for each attempt of a real Copilot run."""
     for message, routine in ((ROUTINE_NOTICE, True), (ANOMALY_NOTICE, False)):
@@ -171,6 +176,7 @@ def _attempt(
     )
     if native:
         _native_notices(logger, at=0.45)
+        _emit(logger, "activity", at=0.46, source="harness", stream="stderr", text=NATIVE_STDERR)
     _emit(logger, "phase", at=0.2 + agent, name="capture")
     _emit(logger, "phase", at=0.3 + agent, name="checks")
     _emit(logger, "check_started", at=0.3 + agent, name="identity", command="python -I check.py")
@@ -647,3 +653,17 @@ def test_rejection_shows_a_bounded_reason_not_the_raw_json_report(tmp_path, monk
 )
 def test_check_excerpt_is_bounded_and_prefers_a_stated_reason(line, expected, condensed):
     assert contract_logger._check_excerpt(line) == (expected, condensed)
+
+
+def test_harness_stderr_stays_visible_but_bounded_by_default(tmp_path, monkeypatch):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    scenario = "factory-reject-native-json"
+    default = _render(tmp_path / "a", monkeypatch, scenario, **PROFILES["redirected"])
+    verbose = _render(tmp_path / "b", monkeypatch, scenario, **PROFILES["verbose"])
+    flat = " ".join(default.split())
+    # One bounded line per attempt; the full native error stays behind --verbose.
+    assert flat.count("ERROR service=llm modelID=small-model") == 2
+    assert flat.count("(full line: --verbose)") == 2
+    assert "title generator. " * 10 not in flat
+    assert " ".join(verbose.split()).count("You are a title generator.") >= 80

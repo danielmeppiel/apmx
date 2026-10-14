@@ -1228,13 +1228,20 @@ class ContractLogger:
             else:
                 formatter = _ProseDisplay()
             displayed = formatter.render(text)
+        harness_stderr = stderr and event.source != "checker"
+        if harness_stderr and not self.verbose and displayed is None:
+            # Default output keeps every stderr line visible but bounded; --verbose and
+            # the retained transcript keep the full text (e.g. a 4 KB native API error).
+            shown = " ".join(text.split())
+            if len(shown) > EXCERPT_CHARS:
+                displayed = shown[: EXCERPT_CHARS - 3].rstrip() + "... (full line: --verbose)"
         self._write(
             text,
             severity=severity,
             attribution=source,
             accent=text if tool_status == "failed" else "",
             display_message=displayed,
-            detail=not (stderr and event.source != "checker"),
+            detail=not harness_stderr,
             layout=_Layout.PROSE if not tool_status else _Layout.LITERAL,
             retained_limit=TEXT_LINE_BYTES if checker_stdout else None,
             display=(

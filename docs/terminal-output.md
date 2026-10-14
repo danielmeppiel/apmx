@@ -75,6 +75,10 @@ directory. OpenCode producers use `--print-logs --log-level DEBUG`.
 that mirror, such as an omitted oversized native debug line, appear only with
 `--verbose`. Notices that a native log changed or could not be read appear
 once per run in default output. Every notice stays in the retained transcript.
+Harness stderr lines are always shown immediately. In default output, a line
+longer than 200 characters is cut and ends `... (full line: --verbose)`; for
+example, OpenCode can print a multi-kilobyte API error from its internal title
+call. `--verbose` and the retained transcript keep the full line.
 Configuration/authentication inventory probes remain quiet. Public JSON event
 decoders still exclude private reasoning and retained-only protocol events.
 Native debug diagnostics are less structured and may contain sensitive native
