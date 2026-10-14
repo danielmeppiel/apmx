@@ -78,8 +78,10 @@ def _fake_apm(monkeypatch, enforcement: str = "block") -> list:
 def pull(tmp_path, plain_receipt, monkeypatch):
     """A repository whose PR adds the factory's output and its receipt."""
 
-    def build(*, policy_base=None, policy_head=None, extra=None, output=None, receipts=1):
-        repo = tmp_path / "repo"
+    def build(
+        *, policy_base=None, policy_head=None, extra=None, output=None, receipts=1, directory="repo"
+    ):
+        repo = tmp_path / directory
         repo.mkdir()
         _git(repo, "init", "-q", "-b", "main")
         _git(repo, "config", "core.autocrlf", "false")
@@ -308,8 +310,7 @@ def test_pull_request_without_a_receipt_or_with_several_is_exit_2(pull, tmp_path
     pull(receipts=0)
     result = _audit()
     assert result.exit_code == 2 and "PR #7 adds no receipt" in result.output
-    shutil.rmtree(tmp_path / "repo")
-    pull(receipts=2)
+    pull(receipts=2, directory="several")
     result = _audit()
     assert result.exit_code == 2 and "adds 2 receipts" in result.output
 
