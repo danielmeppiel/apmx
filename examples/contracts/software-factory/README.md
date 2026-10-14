@@ -419,6 +419,37 @@ rejected at exactly 5000 cents. Fix the proposed implementation, not the
 threshold check. The controlled replay below demonstrates that rejection;
 it is not evidence of an automatically repaired or failed model-generated run.
 
+## Release rehearsal on Copilot's default model (2026-10-14)
+
+These are unpublished, local macOS ARM64 runs through the demo kit with native
+CI-built bundles and real model inference. Copilot CLI 1.0.97 used its default
+model, observed as `gpt-6.1-sol`; OpenCode 1.2.24 used
+`github-copilot/gpt-5.6-sol`.
+
+- **Before this hardening** (`f543944`): Copilot's default model failed this
+  factory three times out of three. Twice the documentation stage linked
+  `../checks/software_factory_cases.py`, a file outside the delivered
+  candidate, and was REJECTED (exit `20`) with no repair budget. Once the build
+  also edited `docs/checkout.md`; the check exited `2`, so the run was UNPROVEN
+  (exit `21`) and the build budget never applied.
+- **Organic repair:** with the out-of-profile rejection in place, one Copilot
+  build attempt again edited `docs/checkout.md`. It was rejected with
+  `Patch is outside this check profile: it also changes docs/checkout.md`, and
+  attempt 2/3 passed. That run completed 5/5 contracts and 9/9 checks but
+  exposed a receipt-export failure (exit `23`) that the current checker fixes:
+  rejected attempts now report the candidate they assessed.
+- **After:** Copilot's default model completed **3 of 3** runs, each with
+  5/5 contracts, 9/9 checks and seven outputs, in 4m52s to 5m21s. Every stage
+  passed on its first attempt, including documentation (budget 2 attempts).
+  OpenCode completed once in 2m53s, also on first attempts.
+- **Receipts:** all four receipts audited VALID with `apmx audit`, including
+  `--outputs` re-hashing and `apm audit --ci` clean against APM 0.33.0 with the
+  pinned `python-testing-patterns` dependency. All four share factory
+  definition `6f4e0bd2fb520b3610d45bf5b3e602b02841d308ec21a1a5d236a521ceffcf79`.
+
+Three runs on one model are a small sample, not a reliability guarantee.
+Receipts are unsigned and prove content binding, not who ran the factory.
+
 ## Development observations (2026-10-06)
 
 An unpublished local-source rehearsal at commit `40d7658` completed all five
