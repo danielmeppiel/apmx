@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,7 @@ from test_software_factory_support import (
     GENERATED_TESTS,
     authored_patch,
     factory,
+    git_edit_section,
     invoke,
     outputs,
     seed,
@@ -155,22 +157,6 @@ def test_invalid_patch_subject_is_operational_not_passing(
     assert not list(candidate.glob(".software-factory-check-*"))
 
 
-def _edit_first_line(root: Path, name: str) -> bytes:
-    """A well-formed one-line Git hunk that really applies to the supplied file."""
-    first, second = (root / name).read_bytes().split(b"\n", 2)[:2]
-    return (
-        f"diff --git a/{name} b/{name}\nindex 1111111..2222222 100644\n"
-        f"--- a/{name}\n+++ b/{name}\n@@ -1,2 +1,2 @@\n".encode()
-        + b"-"
-        + first
-        + b"\n+"
-        + first
-        + b" (edited)\n "
-        + second
-        + b"\n"
-    )
-
-
 def _reconstructs(root: Path, subject: dict, tmp_path: Path) -> None:
     """The receipt exporter can rebuild exactly the candidate the checker rejected."""
     from apmx.contracts import check_subjects
@@ -191,10 +177,10 @@ def test_well_formed_patch_outside_the_profile_is_an_assessed_rejection(
     patch = candidate / "changes.diff"
     raw = patch.read_bytes()
     if fault == "extra-file":
-        patch.write_bytes(raw + _edit_first_line(candidate, "docs/checkout.md"))
+        patch.write_bytes(raw + git_edit_section(candidate, "docs/checkout.md", tmp_path))
         expected = "it also changes docs/checkout.md"
     elif fault == "check-resource":
-        patch.write_bytes(raw + _edit_first_line(candidate, "checks/acceptance.py"))
+        patch.write_bytes(raw + git_edit_section(candidate, "checks/acceptance.py", tmp_path))
         expected = "it also changes checks/acceptance.py"
     else:
         start = raw.index(b"diff --git a/src/checkout.py")
@@ -213,15 +199,32 @@ def test_well_formed_patch_outside_the_profile_is_an_assessed_rejection(
     assert not list(candidate.glob(".software-factory-check-*"))
 
 
+@pytest.mark.windows_compat
+def test_out_of_profile_edit_of_a_crlf_file_is_still_a_reconstructable_rejection(
+    candidate: Path, tmp_path: Path
+) -> None:
+    """Windows checkouts can supply CRLF project files; scope rejection must not depend on it."""
+    page = candidate / "docs/checkout.md"
+    page.write_bytes(page.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    patch = candidate / "changes.diff"
+    patch.write_bytes(
+        patch.read_bytes() + git_edit_section(candidate, "docs/checkout.md", tmp_path)
+    )
+    code, report = invoke(candidate, "regression.py", "changes.diff")
+    assert code == 1 and "it also changes docs/checkout.md" in report["detail"], report
+    _reconstructs(candidate, report["subject"], tmp_path)
+
+
 @pytest.mark.parametrize("fault", ("malformed", "does-not-apply"))
 def test_out_of_profile_sections_that_are_not_valid_patches_stay_operational(
-    candidate: Path, fault: str
+    candidate: Path, tmp_path: Path, fault: str
 ) -> None:
     """Scope is judged only for well-formed patches that apply to the baseline."""
     patch = candidate / "changes.diff"
-    extra = _edit_first_line(candidate, "docs/checkout.md")
+    extra = git_edit_section(candidate, "docs/checkout.md", tmp_path)
     if fault == "malformed":
-        extra = extra.replace(b"@@ -1,2 +1,2 @@", b"@@ -1,3 +1,2 @@")
+        extra = re.sub(rb"(?m)^(@@ -1,\d+ \+1,)(\d+)", rb"\g<1>9\2", extra, count=1)
+        assert extra.count(b"+1,9") == 1
     else:
         extra = extra.replace(b"docs/checkout.md", b"docs/missing.md")
     patch.write_bytes(patch.read_bytes() + extra)

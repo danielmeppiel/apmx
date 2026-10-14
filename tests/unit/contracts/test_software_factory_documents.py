@@ -16,6 +16,7 @@ from test_software_factory_support import (
     authored_patch,
     documentation_text,
     factory,
+    git_edit_section,
     invoke,
     outputs,
     seed,
@@ -218,14 +219,9 @@ def test_documentation_patch_outside_its_profile_is_a_reconstructable_rejection(
 ) -> None:
     from apmx.contracts import check_subjects
 
-    (documents / "README.md").write_text("# Checkout project\n", encoding="ascii")
+    (documents / "README.md").write_bytes(b"# Checkout project\n\nA small example.\n")
     patch = documents / "documentation.diff"
-    patch.write_bytes(
-        patch.read_bytes()
-        + b"diff --git a/README.md b/README.md\nindex 1111111..2222222 100644\n"
-        + b"--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n"
-        + b"-# Checkout project\n+# Checkout project (docs)\n"
-    )
+    patch.write_bytes(patch.read_bytes() + git_edit_section(documents, "README.md", tmp_path))
     code, report = invoke(documents, checker, "changes.diff", patch.name)
     assert code == 1 and report["status"] == "failed", report
     assert "it also changes README.md" in report["detail"], report

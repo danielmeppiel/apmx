@@ -11,7 +11,14 @@ import pytest
 from click.testing import CliRunner
 from test_chain import caller, producer
 from test_chain_sources import private_preparation
-from test_software_factory_support import EXAMPLE, PROJECT, invoke, outputs, seed
+from test_software_factory_support import (
+    EXAMPLE,
+    PROJECT,
+    git_edit_section,
+    invoke,
+    outputs,
+    seed,
+)
 
 from apmx.cli import main
 from apmx.contracts import resolution, workspace
@@ -104,18 +111,8 @@ def test_out_of_scope_build_attempt_is_repaired_and_the_receipt_audits(
     prepare_example(caller)
     install(caller, limits=ContractLimits())
     expected = outputs(caller.parent)
-    first, second = (caller / "docs/checkout.md").read_bytes().split(b"\n", 2)[:2]
-    scope_creep = expected["changes.diff"] + (
-        b"diff --git a/docs/checkout.md b/docs/checkout.md\n"
-        b"index 1111111..2222222 100644\n"
-        b"--- a/docs/checkout.md\n+++ b/docs/checkout.md\n@@ -1,2 +1,2 @@\n"
-        + b"-"
-        + first
-        + b"\n+"
-        + first
-        + b" (edited)\n "
-        + second
-        + b"\n"
+    scope_creep = expected["changes.diff"] + git_edit_section(
+        caller, "docs/checkout.md", caller.parent
     )
     builds = []
 
