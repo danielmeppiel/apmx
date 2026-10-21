@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import urllib.parse
 from pathlib import Path
 
@@ -13,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("run_deliver", ROOT / "scripts/run_deliver.py")
 run_deliver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(run_deliver)
+
+# run.yml's deliver job runs on ubuntu-24.04 only (POSIX paths, symbolic links, file:// remotes).
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the deliver job runs on Linux")
 
 
 def _run(cwd: Path, *args: str) -> str:
