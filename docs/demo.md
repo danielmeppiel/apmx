@@ -220,6 +220,37 @@ The helper creates a minimal consumer `apm.yml` declaring `../factory` when abse
 official APM resolves and locks its dependencies. Application source and the
 original seed are not edited.
 
+### Use a versioned factory package
+
+To show the same factory definition that a shop's CI runs, prepare against a
+pinned remote package instead of the local example copy:
+
+```sh
+python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
+  --archive /absolute/path/to/apmx-0.6.0-macos-arm64.tar.gz \
+  --sha256 EXPECTED_ARCHIVE_SHA256 \
+  --python /absolute/path/to/checker-environment/bin/python \
+  --verifier-python /absolute/path/to/independent-verifier/bin/python \
+  --schemas /absolute/path/to/pinned-schema-cache \
+  --factory-ref danielmeppiel/apmx-demo-factory#v1.0.0
+```
+
+Why: a receiving repository's `apm-policy.yml` pins the definition digest of a
+CI run of `factory: "owner/repo#ref"`. That definition records the package's
+repository, resolved commit and content hash. A `../factory` run records a
+local source instead, so its digest never matches. With `--factory-ref`, each
+consumer `apm.yml` declares the reference, official APM locks its commit, and
+presenters run `apmx --from danielmeppiel/apmx-demo-factory#v1.0.0` (the demo
+shell prints the exact command; `--plan` works offline from the lock). Compare
+the definition SHA-256 from `demo proof` with the digest the policy pins.
+
+Only GitHub `OWNER/REPO#REF` references are accepted, and the `#REF` pin is
+required; prefer an immutable tag or a full commit. The kit then contains no
+local example copy: `factory/` holds a read-only copy of the bytes APM
+installed for that reference, for your editor. Every reset compares each
+freshly installed package with it and stops if the reference moved; prepare a
+new kit to adopt another version.
+
 The checker and verifier environments must stay available. The kit copies and
 inventories the maintained independent verification scripts; it does not clone
 their logic into the demo helper or install their dependencies. Setup asks that

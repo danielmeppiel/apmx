@@ -4,6 +4,11 @@
 
 ### Added
 
+- `scripts/demo.py prepare --factory-ref OWNER/REPO#TAG` prepares the demo kit
+  against a pinned remote factory package instead of the local example copy, so
+  `demo proof` shows the same definition digest as a CI receipt pinned by a
+  receiving policy. `factory/` then holds a read-only copy of the installed
+  package, re-checked on every reset.
 - `apmx audit` binds applied patch outputs in pull requests. When a receipt
   output is an `export_changes`-format patch (identified from the receipt's own
   bytes and the attempt's captured baseline), the PR may apply it instead of

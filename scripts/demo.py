@@ -30,6 +30,11 @@ EVIDENCE_TOOLS = {
     "evidence-requirements.txt": "scripts/evidence-requirements.txt",
 }
 CHAIN_ID = re.compile(r"\d{8}T\d{6}Z-[a-f0-9]{12}")
+LOCAL_FACTORY = "../factory"
+FACTORY_REF = re.compile(
+    r"(?P<package>[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9_.-]+)#[A-Za-z0-9_][\w./-]*",
+    re.ASCII,
+)
 
 
 def digest(path: Path) -> str:
@@ -76,6 +81,31 @@ def populate_inputs(source: Path, destination: Path) -> None:
         shutil.copy2(source / relative, target)
     if inventory(destination) != files:
         raise ValueError("Demo inputs changed while being copied; do not use this kit.")
+
+
+def factory_reference(value: str) -> str:
+    """Accept only a pinned GitHub package reference; APM resolves and locks it."""
+    if not value.partition("#")[2]:
+        raise ValueError(
+            "Pin the factory package: use OWNER/REPO#TAG, "
+            "for example danielmeppiel/apmx-demo-factory#v1.0.0."
+        )
+    match = FACTORY_REF.fullmatch(value)
+    if match is None or ".." in value or match["package"].endswith("/."):
+        raise ValueError(
+            "Expected a GitHub factory package reference OWNER/REPO#REF; "
+            "local paths, other hosts and subdirectories are not supported here."
+        )
+    return value
+
+
+def factory_source(config: dict) -> str:
+    return config.get("factory_ref") or LOCAL_FACTORY
+
+
+def package_path(reference: str) -> Path:
+    """Where official APM installs a GitHub OWNER/REPO package in a consumer."""
+    return Path("apm_modules", *reference.partition("#")[0].split("/"))
 
 
 def save(root: Path, config: dict) -> None:
@@ -238,9 +268,8 @@ def archive(root: Path, config: dict, names: list[str]) -> None:
     print(f"Previous applications and evidence preserved: {destination}")
 
 
-def install(root: Path, name: str) -> None:
+def run_apm(root: Path, application: Path, source: str, label: str, retry: str) -> None:
     """Only official APM owns capability acquisition and materialization."""
-    application = root / f"checkout-{name}"
     manifest = application / "apm.yml"
     if not manifest.exists():
         with manifest.open("x", encoding="ascii") as stream:
@@ -248,13 +277,13 @@ def install(root: Path, name: str) -> None:
                 {
                     "name": "checkout-demo",
                     "version": "1.0.0",
-                    "dependencies": {"apm": ["../factory"]},
+                    "dependencies": {"apm": [source]},
                 },
                 stream,
                 indent=2,
             )
             stream.write("\n")
-    log = root / ".demo/logs" / f"prepare-{name}-{uuid.uuid4().hex}.log"
+    log = root / ".demo/logs" / f"prepare-{label}-{uuid.uuid4().hex}.log"
     env = environment(root)
     env["APM_NO_SCRIPTS"] = "1"
     with log.open("x") as stream:
@@ -263,7 +292,7 @@ def install(root: Path, name: str) -> None:
             [
                 str(bundle(root) / "libexec/apm/apm"),
                 "install",
-                "../factory",
+                source,
                 "--root",
                 ".",
                 "--only",
@@ -281,13 +310,39 @@ def install(root: Path, name: str) -> None:
         )
     if result.returncode:
         raise ValueError(
-            f"APM preparation failed for {name}. Inspect the private log: {log}. "
-            f"Then retry './demo reset {name}'."
+            f"APM preparation failed for {label}. Inspect the private log: {log}. Then {retry}"
         )
 
 
-def factory_command(name: str) -> list[str]:
-    argv = ["apmx", "--from", "../factory"]
+def install(root: Path, name: str) -> None:
+    config = load(root)
+    source = factory_source(config)
+    application = root / f"checkout-{name}"
+    run_apm(root, application, source, name, f"retry './demo reset {name}'.")
+    if (
+        source != LOCAL_FACTORY
+        and inventory(application / package_path(source)) != config["factory"]
+    ):
+        raise ValueError(
+            f"{source} now resolves to different content than this kit's factory/ copy; "
+            "the reference may have moved. Prepare a new kit."
+        )
+
+
+def fetch_factory(root: Path, reference: str) -> None:
+    """Show presenters the exact remote package bytes, never the local example."""
+    staging = root / ".demo/factory-package"
+    staging.mkdir(mode=0o700)
+    run_apm(root, staging, reference, "factory", "check the reference and prepare a new kit.")
+    copy_inputs(staging / package_path(reference), root / "factory")
+    for path in (root / "factory").rglob("*"):
+        if path.is_file():
+            path.chmod(0o444)
+    shutil.rmtree(staging)
+
+
+def factory_command(name: str, source: str = LOCAL_FACTORY) -> list[str]:
+    argv = ["apmx", "--from", source]
     if name == "opencode":
         argv += ["--on", name, "--model", "github-copilot/gpt-5.6-sol"]
     return argv
@@ -295,7 +350,11 @@ def factory_command(name: str) -> list[str]:
 
 def preview(root: Path, name: str) -> None:
     subprocess.run(
-        [str(bundle(root) / "apmx"), *factory_command(name)[1:], "--plan"],
+        [
+            str(bundle(root) / "apmx"),
+            *factory_command(name, factory_source(load(root)))[1:],
+            "--plan",
+        ],
         cwd=root / f"checkout-{name}",
         env=environment(root),
         check=True,
@@ -341,7 +400,7 @@ def shell(root: Path, name: str) -> int:
         env = environment(root)
         env["PS1"] = f"{name} $ "
         env["BASH_SILENCE_DEPRECATION_WARNING"] = "1"
-        command = shlex.join(factory_command(name))
+        command = shlex.join(factory_command(name, factory_source(config)))
         print(f"\nApplication: {path}")
         print(f"Preview: {command} --plan")
         print(f"Run:     {command}")
@@ -360,6 +419,10 @@ def status(root: Path) -> None:
         validate(root, config)
         print(f"Native candidate: {config['source_commit']}")
         print(f"Kit: {root}")
+        if config.get("factory_ref"):
+            print(f"Factory: {config['factory_ref']} (factory/ is its installed bytes, read-only)")
+        else:
+            print(f"Factory: {LOCAL_FACTORY} (local copy of the APMX example)")
         for name in HARNESSES:
             path = workspace(root, config, name)
             ready = config["workspaces"].get(name, {}).get("ready", False)
@@ -511,12 +574,15 @@ def prepare(
     *,
     verifier_python: Path | None = None,
     schemas: Path | None = None,
+    factory_ref: str | None = None,
 ) -> None:
     """Create a fresh, outside-Git kit from a trusted archive and current examples."""
     if root.exists() or root.is_symlink():
         raise ValueError(
             "Preparation requires a fresh destination; existing files are never replaced."
         )
+    if factory_ref is not None:
+        factory_reference(factory_ref)
     if os.name != "posix":
         raise ValueError("The demo kit currently supports macOS/Linux terminals only.")
     if __package__:
@@ -579,7 +645,8 @@ def prepare(
         raise ValueError(
             "Archive targets another platform; prepare with the matching native archive."
         )
-    copy_inputs(ROOT / "examples/contracts/software-factory", root / "factory")
+    if factory_ref is None:
+        copy_inputs(ROOT / "examples/contracts/software-factory", root / "factory")
     copy_inputs(ROOT / "examples/contracts/checkout-project", private / "seed")
     (root / "history").mkdir(mode=0o700)
     (private / "logs").mkdir(mode=0o700)
@@ -613,7 +680,7 @@ def prepare(
         "archive_sha256": expected,
         "binary_sha256": digest(native / "apmx"),
         "backend_sha256": digest(native / "libexec/apm/apm"),
-        "factory": inventory(root / "factory"),
+        "factory": {} if factory_ref else inventory(root / "factory"),
         "seed": inventory(private / "seed"),
         "workspaces": {},
     }
@@ -627,7 +694,14 @@ def prepare(
             "schemas": str(schemas),
             "tools": inventory(tools),
         }
+    if factory_ref is not None:
+        config["factory_ref"] = factory_ref
     save(root, config)
+    if factory_ref is not None:
+        print(f"Installing {factory_ref} with official APM (no model calls)...", flush=True)
+        fetch_factory(root, factory_ref)
+        config["factory"] = inventory(root / "factory")
+        save(root, config)
     reset(root, list(HARNESSES))
 
 
@@ -642,6 +716,10 @@ def main() -> int:
     create.add_argument("--python", type=Path, required=True, help="Checker environment Python")
     create.add_argument("--verifier-python", type=Path, help="Existing independent verifier Python")
     create.add_argument("--schemas", type=Path, help="Existing offline pinned schema cache")
+    create.add_argument(
+        "--factory-ref",
+        help="Pinned factory package OWNER/REPO#TAG instead of the local example copy",
+    )
     for name in HARNESSES:
         commands.add_parser(name, help=f"Enter the {name} application shell")
     for name in ("reset", "clean"):
@@ -672,6 +750,7 @@ def main() -> int:
                     args.verifier_python.expanduser().absolute() if args.verifier_python else None
                 ),
                 schemas=args.schemas.expanduser().absolute() if args.schemas else None,
+                factory_ref=args.factory_ref,
             )
         elif args.root is None:
             raise ValueError("Use the prepared kit's './demo' launcher.")

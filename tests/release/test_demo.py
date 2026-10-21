@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from scripts import demo
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="The demo shell is POSIX-only")
 REAL_INSTALL = demo.install
 REAL_PREVIEW = demo.preview
+FACTORY_REF = "danielmeppiel/apmx-demo-factory#v1.0.0"
 
 
 @pytest.fixture
@@ -304,6 +306,7 @@ def test_shell_runs_real_binary_without_hidden_consent_or_models(
     assert "APM_NO_SCRIPTS" not in options["env"]
 
 
+@pytest.mark.parametrize("reference", [None, FACTORY_REF])
 @pytest.mark.parametrize(
     "name,options",
     [
@@ -312,7 +315,12 @@ def test_shell_runs_real_binary_without_hidden_consent_or_models(
     ],
 )
 def test_displayed_short_command_matches_the_native_preview(
-    kit: Path, monkeypatch: pytest.MonkeyPatch, capsys, name: str, options: list[str]
+    kit: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+    name: str,
+    options: list[str],
+    reference: str | None,
 ) -> None:
     calls = []
 
@@ -320,12 +328,16 @@ def test_displayed_short_command_matches_the_native_preview(
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0)
 
+    if reference:
+        config = demo.load(kit)
+        config["factory_ref"] = reference
+        demo.save(kit, config)
     monkeypatch.setattr(demo.subprocess, "run", run)
-    command = ["apmx", "--from", "../factory", *options]
+    command = ["apmx", "--from", reference or "../factory", *options]
     REAL_PREVIEW(kit, name)
     assert calls == [[str(kit / ".demo/native/apmx-test/apmx"), *command[1:], "--plan"]]
     assert demo.shell(kit, name) == 0
-    assert f"Run:     {' '.join(command)}\n" in capsys.readouterr().out
+    assert f"Run:     {shlex.join(command)}\n" in capsys.readouterr().out
 
 
 def test_inherited_script_bypass_is_not_silently_used(
@@ -425,9 +437,7 @@ def test_input_copy_refuses_symlinks(tmp_path: Path) -> None:
         demo.copy_inputs(source, tmp_path / "destination")
 
 
-def test_prepare_verifies_archive_before_creating_owned_kit(
-    kit: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def candidate_archive(kit: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
     import shutil
 
     from scripts import release
@@ -436,10 +446,6 @@ def test_prepare_verifies_archive_before_creating_owned_kit(
     archive.write_bytes(b"verified archive fixture")
     expected = demo.digest(archive)
     archive.with_name(archive.name + ".sha256").write_text(f"{expected}  {archive.name}\n")
-    destination = kit.parent / "new kit with spaces"
-    with pytest.raises(ValueError, match="checksum"):
-        demo.prepare(destination, archive, "0" * 64, Path(sys.executable))
-    assert not destination.exists()
 
     def extract(source: Path, target: Path) -> Path:
         assert source == archive
@@ -452,10 +458,22 @@ def test_prepare_verifies_archive_before_creating_owned_kit(
 
     monkeypatch.setattr(release, "extract_archive", extract)
     monkeypatch.setattr(release, "check_native_notices", lambda *args: None)
+    return archive, expected
+
+
+def test_prepare_verifies_archive_before_creating_owned_kit(
+    kit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive, expected = candidate_archive(kit, monkeypatch)
+    destination = kit.parent / "new kit with spaces"
+    with pytest.raises(ValueError, match="checksum"):
+        demo.prepare(destination, archive, "0" * 64, Path(sys.executable))
+    assert not destination.exists()
     demo.prepare(destination, archive, expected, Path(sys.executable))
     config = demo.load(destination)
     assert config["archive_sha256"] == expected
     assert config["source_commit"] == "c" * 40
+    assert "factory_ref" not in config
     assert config["factory"] == demo.inventory(demo.ROOT / "examples/contracts/software-factory")
     assert (destination / "START-HERE.md").is_file()
     assert (destination / ".demo/bin/apmx").resolve() == destination / ".demo/native/apmx-test/apmx"
@@ -560,3 +578,91 @@ def test_copy_failure_is_owned_and_a_later_reset_recovers(
     preserved = list((kit / "history").glob("*/checkout-copilot/valuable-result"))
     assert len(preserved) == 1 and preserved[0].read_text() == "Keep this"
     assert len(list((kit / "history").glob("*/checkout-copilot"))) == 2
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "danielmeppiel/apmx-demo-factory",
+        "danielmeppiel/apmx-demo-factory#",
+        "../factory#v1.0.0",
+        "/abs/factory#v1.0.0",
+        "gitlab.com/owner/repo#v1.0.0",
+        "owner/repo/sub#v1.0.0",
+        "owner/..#v1.0.0",
+        "owner/repo#-v1",
+        "owner/repo#v1 --force",
+    ],
+)
+def test_unpinned_or_unsupported_factory_ref_is_refused_before_creating_the_kit(
+    tmp_path: Path, reference: str
+) -> None:
+    destination = tmp_path / "kit"
+    with pytest.raises(ValueError, match="Pin the factory package|OWNER/REPO#REF"):
+        demo.prepare(
+            destination,
+            tmp_path / "unused.tar.gz",
+            "0" * 64,
+            Path(sys.executable),
+            factory_ref=reference,
+        )
+    assert not destination.exists()
+
+
+def test_factory_ref_is_stored_installed_and_displayed_from_the_package(
+    kit: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    archive, expected = candidate_archive(kit, monkeypatch)
+    destination = kit.parent / "remote factory kit"
+    real_run = subprocess.run
+    installs = []
+    contract = b"# Build from the remote package\n"
+
+    def run(argv, **kwargs):
+        if argv[0] == "git":
+            return real_run(argv, **kwargs)
+        assert argv[1] == "install"
+        manifest = json.loads((kwargs["cwd"] / "apm.yml").read_text())
+        installs.append((argv, kwargs, manifest))
+        package = kwargs["cwd"] / "apm_modules/danielmeppiel/apmx-demo-factory"
+        (package / "contracts").mkdir(parents=True, exist_ok=True)
+        (package / "contracts/build.contract.md").write_bytes(contract)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(demo.subprocess, "run", run)
+    demo.prepare(destination, archive, expected, Path(sys.executable), factory_ref=FACTORY_REF)
+    config = demo.load(destination)
+    assert config["factory_ref"] == FACTORY_REF
+    assert config["factory"] == {
+        "contracts/build.contract.md": demo.digest(
+            destination / "factory/contracts/build.contract.md"
+        )
+    }
+    displayed = destination / "factory/contracts/build.contract.md"
+    assert displayed.read_bytes() == contract and not os.access(displayed, os.W_OK)
+    assert not (destination / ".demo/factory-package").exists()
+
+    REAL_INSTALL(destination, "copilot")
+    argv, options, manifest = installs[-1]
+    assert options["cwd"] == destination / "checkout-copilot"
+    assert manifest["dependencies"]["apm"] == [FACTORY_REF]
+    assert argv[1:] == [
+        "install",
+        FACTORY_REF,
+        "--root",
+        ".",
+        "--only",
+        "apm",
+        "--target",
+        "agent-skills",
+        "--no-trust-bin",
+    ]
+    assert options["env"]["APM_NO_SCRIPTS"] == "1"
+    assert all(call[0][2] == FACTORY_REF for call in installs)
+
+    demo.status(destination)
+    assert f"Factory: {FACTORY_REF}" in capsys.readouterr().out
+
+    contract = b"# A moved tag\n"
+    with pytest.raises(ValueError, match="moved"):
+        REAL_INSTALL(destination, "opencode")
