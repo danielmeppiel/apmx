@@ -22,6 +22,7 @@ jobs:
       attestations: write
     with:
       factory: tests/fixtures/run-workflow-factory
+      checks-requirements: checks/requirements.txt
       apmx-version: source
       apmx-ref: ${{ github.event.pull_request.head.sha || github.sha }}
       hermetic-actor: true

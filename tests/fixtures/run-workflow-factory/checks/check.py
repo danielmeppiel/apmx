@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import six  # noqa: F401  checks/requirements.txt, installed by run.yml
+
 
 def main():
     expected = json.loads(Path("notes.md").read_text(encoding="utf-8"))

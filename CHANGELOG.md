@@ -4,6 +4,12 @@
 
 ### Added
 
+- `run.yml` input `checks-requirements`: a requirements file inside the
+  factory, installed into a fresh virtual environment whose `python3` runs the
+  checks in the produce and check jobs (never in attest), with
+  `--require-hashes` when the file has hashes. The software-factory example
+  ships `checks/requirements.txt` (Behave 1.3.3, hash-pinned), so it can run
+  in CI.
 - Example and README section "Accept factory PRs by proof": one `factories`
   policy section and one `apmx audit` workflow step accept signed factory pull
   requests (`examples/accept-factory-prs`). It replaces the draft receiving-side
