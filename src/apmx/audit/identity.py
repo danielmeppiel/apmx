@@ -18,6 +18,8 @@ The signer's commit is the certificate's Build Signer Digest (Fulcio extension
 OID 1.3.6.1.4.1.57264.1.10, the OIDC ``job_workflow_sha`` claim), reported by
 ``gh`` as ``buildSignerDigest``. For a workflow called by an annotated tag it
 is the tag object's SHA (``git rev-parse <tag>``), not the commit it points to.
+A ``workflow_sha`` matches that digest directly, or the commit the tag object
+names, resolved read-only with ``gh api repos/<owner>/<repo>/git/tags/<sha>``.
 """
 
 from __future__ import annotations
@@ -48,8 +50,9 @@ Runner = Callable[[list[str]], tuple[int, bytes, bytes]]
 
 @dataclass
 class Identity:
-    """``signed``, ``unsigned``, ``mismatch`` (signed at a commit the policy does not pin)
-    or ``unavailable`` (could not check: never a pass)."""
+    """``signed``, ``unsigned``, ``mismatch`` (signed at a commit the policy does not pin),
+    ``unresolved`` (the signer's tag object could not be resolved to compare with
+    ``workflow_sha``) or ``unavailable`` (could not check). Only ``signed`` passes."""
 
     status: str
     detail: str
@@ -136,6 +139,8 @@ def verify(
     unavailable: list[str] = []
     mismatches: list[str] = []
     wrong: list[tuple[str, dict[str, object], str]] = []
+    unresolved: list[str] = []
+    tags: dict[tuple[str, str], str | None | _Unresolved] = {}
     for signer in signers:
         repo = signer.repo or default_repository
         if repo is None:
@@ -203,17 +208,37 @@ def verify(
                 "signerRef": ref,
                 "signerDigest": certificate.get("buildSignerDigest"),
                 "signerSha": sha,
+                "signerCommit": None,
                 "requiredSignerSha": signer.workflow_sha,
                 "signerPin": _pin(signer),
                 "sourceRepository": certificate.get("sourceRepositoryURI"),
                 "run": certificate.get("runInvocationURI"),
             }
+            at = sha[:12] if sha else None
             if signer.workflow_sha is not None and sha != signer.workflow_sha:
-                at = sha[:12] if sha else "an unknown commit"
-                required = signer.workflow_sha[:12]
-                detail = f"signed by {_ascii(signer.workflow)} at {at}, policy requires {required}"
-                wrong.append((detail, found, ref))
-                continue
+                target = None
+                if sha is not None:
+                    key = (signer.workflow, sha)
+                    if key not in tags:
+                        tags[key] = _tag_target(signer.workflow, sha, run)
+                    target = tags[key]
+                if isinstance(target, _Unresolved):
+                    unresolved.append(
+                        f"{signer.workflow}: could not resolve signer digest {sha[:12]} "
+                        f"to a commit ({target.reason})"
+                    )
+                    continue
+                if target is not None:
+                    at = f"{target[:12]} (tag object {sha[:12]})"
+                    found["signerCommit"] = target
+                if target != signer.workflow_sha:
+                    required = signer.workflow_sha[:12]
+                    detail = (
+                        f"signed by {_ascii(signer.workflow)} at {at or 'an unknown commit'}, "
+                        f"policy requires {required}"
+                    )
+                    wrong.append((detail, found, ref))
+                    continue
             facts.update(found, checks=checks)
             notes = [f"run {_ascii(certificate.get('runInvocationURI') or 'unknown')}"]
             if checks:
@@ -227,11 +252,18 @@ def verify(
             detail = f"signed by {_ascii(signer.workflow)}@{_ascii(ref, 80)}"
             return Identity(
                 "signed",
-                f"{detail} at {sha[:12]}" if sha else detail,
+                f"{detail} at {at}" if at else detail,
                 signer=signer.workflow,
                 notes=notes,
                 facts=facts,
             )
+    if unresolved:
+        return Identity(
+            "unresolved",
+            "signer commit could not be checked against workflow_sha",
+            notes=[*unresolved, *unavailable][:5],
+            facts=facts,
+        )
     if unavailable:
         return Identity(
             "unavailable",
@@ -243,11 +275,6 @@ def verify(
         detail, found, ref = wrong[0]
         facts.update(found)
         notes = [f"certificate: {_ascii(found['signer'])}@{_ascii(ref, 80)}"]
-        if ref.startswith("refs/tags/"):
-            notes.append(
-                "an annotated tag signs as its tag object SHA (git rev-parse <tag>), "
-                "not the commit it points to"
-            )
         return Identity("mismatch", detail, notes=notes, facts=facts)
     return Identity(
         "unsigned",
@@ -255,6 +282,43 @@ def verify(
         notes=mismatches[:5],
         facts=facts,
     )
+
+
+@dataclass(frozen=True)
+class _Unresolved:
+    reason: str
+
+
+def _tag_target(workflow: str, sha: str, run: Runner) -> str | None | _Unresolved:
+    """The commit an annotated tag object ``sha`` names in the workflow's repository.
+
+    ``None`` when ``sha`` is not a tag object there (GitHub answers 404, as for a
+    commit). Read-only GitHub REST lookup through ``gh api``; anything else
+    unexpected is unresolved, never a match.
+    """
+    parts = _workflow(workflow).split("/")
+    if len(parts) < 3 or parts[2] != ".github":
+        return _Unresolved("signer workflow is not on github.com")
+    repo = f"{parts[0]}/{parts[1]}"
+    try:
+        code, out, err = run(["gh", "api", f"repos/{repo}/git/tags/{sha}"])
+    except (OSError, subprocess.SubprocessError) as exc:
+        return _Unresolved(f"gh failed ({type(exc).__name__})")
+    text = err.decode("utf-8", errors="replace")
+    if code != 0:
+        if "http 404" in text.lower():
+            return None
+        last = [line for line in text.splitlines() if line.strip()]
+        return _Unresolved(_ascii(last[-1] if last else "gh failed", 120))
+    try:
+        tag = json.loads(out)
+    except ValueError:
+        return _Unresolved("gh returned unparseable output")
+    target = (tag.get("object") or {}) if isinstance(tag, dict) else {}
+    commit = str(target.get("sha") or "").lower()
+    if tag.get("sha") != sha or target.get("type") != "commit" or not _GIT_SHA.fullmatch(commit):
+        return _Unresolved("unexpected tag object")
+    return commit
 
 
 def _pin(signer) -> str:

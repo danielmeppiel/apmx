@@ -6,12 +6,10 @@ factories:
     - "acme/checkout-factory@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   require_signed: true
   signers:
-    # apmx's reusable run.yml, pinned to the Git object it signs with: the
-    # certificate's Build Signer Digest. For run.yml called at the annotated tag
-    # v0.6.0 that is the tag object (`git rev-parse v0.6.0`, which names commit
-    # cadfa207e464), not the commit. A tag can move; this SHA cannot. Re-pin when
-    # you upgrade the run.yml your factory calls.
+    # apmx's reusable run.yml, pinned to the commit your factory calls
+    # (`git rev-parse v0.6.0^{commit}`). A tag can move; this SHA cannot.
+    # Re-pin when you upgrade the run.yml your factory calls.
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: 367ca846435d34f2e89f870335eeb709f3954c49
+      workflow_sha: cadfa207e4645306199ddb85271c5f3e13340924
       repo: acme/factories   # where the factory ran
   revoked: []

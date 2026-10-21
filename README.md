@@ -192,7 +192,7 @@ factories:
   require_signed: true
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: 367ca846435d34f2e89f870335eeb709f3954c49   # git rev-parse v0.6.0
+      workflow_sha: cadfa207e4645306199ddb85271c5f3e13340924   # git rev-parse v0.6.0^{commit}
       repo: acme/factories
 ```
 

@@ -142,7 +142,7 @@ factories:                               # apmx's section
   require_signed: true                   # reject receipts that are not signed (see Identity)
   signers:                               # who may sign receipts; null = no opinion, [] = none
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml   # optional @<ref>
-      workflow_sha: 367ca846435d34f2e89f870335eeb709f3954c49   # immutable pin (run.yml@v0.6.0)
+      workflow_sha: cadfa207e4645306199ddb85271c5f3e13340924   # immutable pin: git rev-parse v0.6.0^{commit}
       repo: acme/factories                 # where the factory ran (default: this repository)
   revoked:                               # capability content revoked by incident response
     - purl: "pkg:github/acme/style@3f2a..."
@@ -169,18 +169,22 @@ is `factories` as `empty`; apmx still applies its rules and runs
   repository being audited.
 - `workflow_sha` (40 hex) pins the signer workflow's code. Whoever controls the
   workflow's repository can move a tag or a branch, so `@<ref>` alone does not
-  pin the reviewed `run.yml`; `workflow_sha` does. It must equal the signing
-  certificate's Build Signer Digest (Fulcio extension OID
-  `1.3.6.1.4.1.57264.1.10`, the OIDC `job_workflow_sha` claim; `gh attestation
-  verify --format json` shows it as `buildSignerDigest`). For a workflow called
-  by commit, that is the commit, and `workflow: <file>.yml@<40-hex sha>` is the
-  same pin. For a workflow called by an annotated tag, such as apmx's
-  `run.yml@v0.6.0`, GitHub reports the tag object's SHA, not the commit it points
-  to: use `git rev-parse v0.6.0` (or the first line of `git ls-remote
-  https://github.com/danielmeppiel/apmx refs/tags/v0.6.0`), not `v0.6.0^{commit}`.
-  For `run.yml@v0.6.0` it is `367ca846435d34f2e89f870335eeb709f3954c49` (commit
-  `cadfa207e464`). The tag object's SHA hashes its target commit, so it is just
-  as immutable. Re-pin when you upgrade the `run.yml` you call.
+  pin the reviewed `run.yml`; `workflow_sha` does. Pin the **commit**: `git
+  rev-parse v0.6.0^{commit}` (for apmx's `run.yml@v0.6.0`,
+  `cadfa207e4645306199ddb85271c5f3e13340924`). `workflow: <file>.yml@<40-hex sha>` is the
+  same pin. apmx compares it with the signing certificate's Build Signer Digest
+  (Fulcio extension OID `1.3.6.1.4.1.57264.1.10`, the OIDC `job_workflow_sha`
+  claim; `gh attestation verify --format json` shows it as
+  `buildSignerDigest`). For a workflow called by commit, that digest is the
+  commit. For a workflow called by an annotated tag, GitHub reports the tag
+  object's SHA instead (for `run.yml@v0.6.0`, `367ca846435d34f2e89f870335eeb709f3954c49`). apmx then
+  resolves that tag object read-only with `gh api
+  repos/<owner>/<repo>/git/tags/<sha>`, and the pin matches if the tag names
+  that commit; the row says `at <commit12> (tag object <sha12>)`. Pinning the
+  tag object itself (`git rev-parse v0.6.0`) also works, without the lookup;
+  it hashes its target commit, so it is just as immutable. If the lookup
+  fails, the audit is INCOMPLETE (exit 2), never a pass. Re-pin when you upgrade
+  the `run.yml` you call.
 - `revoked`: a capability is revoked only when both its `purl` and its
   `bodySha256` match exactly. The same content stays revoked when it is
   reinstalled from another path, and a `purl` alone never revokes.
@@ -316,17 +320,20 @@ or the `origin` remote) is used. `gh` needs a token
 | Verified from an allowed signer | `[+] signed by <workflow>@<ref> at <sha12>`; final line `VALID (authenticated: <workflow>)` | pass |
 | Verified, signer pinned only by `@<ref>` or not pinned | as above, plus the note `[!] signer pinned by mutable ref <ref>; pin workflow_sha` (or `[!] signer not pinned (any ref); pin workflow_sha`) | pass (a warning, exit 0, even with `factories.enforcement: block`) |
 | Verified from an allowed workflow, but not at its `workflow_sha` | `[x] signed by <workflow> at <sha12>, policy requires <sha12>`, exit 1 with or without `require_signed` (`[!]` with `factories.enforcement: warn`) | same |
+| Signed by an annotated tag object that could not be resolved to compare with `workflow_sha` | `[!] signer commit could not be checked against workflow_sha`, INCOMPLETE, exit 2 with or without `require_signed` | same |
 | None, or none that matches this receipt | `[!] unsigned: no attestation from factories.signers` | `[x]`, exit 1 (`[!]` with `factories.enforcement: warn`) |
 | Could not be checked (no `gh`, network, auth, `--offline`) | `[!] signature could not be checked` | INCOMPLETE, exit 2 |
 
 `--format json` records the signer in `facts.identity`: `signer`, `signerRef`,
-`signerSha` (the certificate's Build Signer Digest), `requiredSignerSha` (the
+`signerSha` (the certificate's Build Signer Digest), `signerCommit` (the commit
+a tag-object digest names, when apmx resolved it), `requiredSignerSha` (the
 entry's `workflow_sha`, or `null`), `signerPin` (`workflow_sha`, `ref` or
 `none`), `sourceRepository` and `run`.
 
 **Assumptions.** Verification trusts `gh attestation verify` (GitHub CLI) and
 the Sigstore public-good instance it uses, and GitHub's OIDC issuer for
-workflow identity. A `signers` entry trusts every run of that workflow file
+workflow identity, and the GitHub REST API to name the commit of a tag-object
+signer digest. A `signers` entry trusts every run of that workflow file
 unless `workflow_sha` pins its code; `@<ref>` (for example a release tag) narrows
 which ref ran, but a tag or branch can be moved. The signature says which
 workflow vouched for a structurally VALID receipt. It does not make the
@@ -363,8 +370,8 @@ jobs:
 attest actions from that tag. If you call `run.yml` by a commit SHA, pass the
 same SHA as `apmx-ref`. A signer entry can pin the tag with
 `workflow: danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.6.0`, but
-a tag can move: add `workflow_sha: 367ca846435d34f2e89f870335eeb709f3954c49`,
-the v0.6.0 tag object that `run.yml` signs with (see `factories.signers` above).
+a tag can move: add `workflow_sha: cadfa207e4645306199ddb85271c5f3e13340924`,
+the v0.6.0 commit (see `factories.signers` above).
 
 `factory` can also be an APM package reference pinned to a tag or commit,
 `owner/repo[/path]#ref`. The package runs against the caller's `workspace`

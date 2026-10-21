@@ -117,8 +117,12 @@ def test_a_pinned_signer_ref_must_match_the_certificate(plain_receipt) -> None:
     assert "signed at refs/tags/v1, not refs/heads/main" in result.notes[0]
 
 
-def test_real_run_yml_v0_6_0_certificate_reports_the_tag_object_sha() -> None:
-    """Unmodified recorded output: run.yml@v0.6.0 signs as the annotated tag's object SHA."""
+def test_real_run_yml_v0_6_0_pins_by_commit_or_tag_object() -> None:
+    """Unmodified recorded output: run.yml@v0.6.0 signs as the annotated tag's object SHA.
+
+    A commit pin resolves that tag object with a recorded, trimmed `gh api
+    repos/danielmeppiel/apmx/git/tags/<sha>` response (tagger omitted).
+    """
     (result,) = json.loads((SHOP.parent / f"{SHOP.name}.recorded.json").read_bytes())
     certificate = result["verificationResult"]["signature"]["certificate"]
     run_yml = "danielmeppiel/apmx/.github/workflows/run.yml"
@@ -127,23 +131,46 @@ def test_real_run_yml_v0_6_0_certificate_reports_the_tag_object_sha() -> None:
     index = SHOP.parent / f"{SHOP.name}.index.json"
     definition = result["verificationResult"]["statement"]["predicate"]["definitionSha256"]
     recorded = (SHOP.parent / f"{SHOP.name}.recorded.json").read_bytes()
+    tag = (SHOP.parent / "apmx-v0.6.0-git-tag.recorded.json").read_bytes()
 
-    def check(sha):
+    def check(sha, *api):
         signer = policy.Signer(run_yml, "refs/tags/v0.6.0", "danielmeppiel/apmx-demo-shop", sha)
-        return identity.verify(
-            index, definition, (signer,), default_repository=None, run=Gh((0, recorded, b""))
-        )
+        gh = Gh((0, recorded, b""), *api)
+        verified = identity.verify(index, definition, (signer,), default_repository=None, run=gh)
+        return verified, gh
 
-    signed = check(V060_TAG_OBJECT)
-    assert signed.status == "signed"
-    assert signed.detail == f"signed by {run_yml}@refs/tags/v0.6.0 at 367ca846435d"
-    assert signed.facts["signerSha"] == signed.facts["requiredSignerSha"] == V060_TAG_OBJECT
-    assert signed.facts["signerPin"] == "workflow_sha"
-    assert not any(note.startswith("[!]") for note in signed.notes)
-    commit = check(V060_COMMIT)
-    assert commit.status == "mismatch"
-    assert commit.detail == f"signed by {run_yml} at 367ca846435d, policy requires cadfa207e464"
-    assert "annotated tag signs as its tag object SHA" in commit.notes[1]
+    by_commit, gh = check(V060_COMMIT, (0, tag, b""))
+    assert by_commit.status == "signed"
+    assert by_commit.detail == (
+        f"signed by {run_yml}@refs/tags/v0.6.0 at cadfa207e464 (tag object 367ca846435d)"
+    )
+    assert gh.calls[1] == ["gh", "api", f"repos/danielmeppiel/apmx/git/tags/{V060_TAG_OBJECT}"]
+    assert by_commit.facts["signerSha"] == V060_TAG_OBJECT
+    assert by_commit.facts["signerCommit"] == by_commit.facts["requiredSignerSha"] == V060_COMMIT
+    assert not any(note.startswith("[!]") for note in by_commit.notes)
+
+    by_tag_object, gh = check(V060_TAG_OBJECT)
+    assert by_tag_object.status == "signed" and len(gh.calls) == 1
+    assert by_tag_object.detail == f"signed by {run_yml}@refs/tags/v0.6.0 at 367ca846435d"
+    assert by_tag_object.facts["signerPin"] == "workflow_sha"
+
+    other, _ = check("f" * 40, (0, tag, b""))
+    assert other.status == "mismatch"
+    assert other.detail == (
+        f"signed by {run_yml} at cadfa207e464 (tag object 367ca846435d), "
+        "policy requires ffffffffffff"
+    )
+    unresolved, _ = check(V060_COMMIT, (1, b"", b"error connecting to api.github.com\n"))
+    assert unresolved.status == "unresolved"
+    assert "could not resolve signer digest 367ca846435d" in unresolved.notes[0]
+    # A response for another object, or a tag of a tag, is never a match.
+    forged = json.loads(tag)
+    forged["object"]["type"] = "tag"
+    nested, _ = check(V060_COMMIT, (0, json.dumps(forged).encode(), b""))
+    assert nested.status == "unresolved" and "unexpected tag object" in nested.notes[0]
+
+
+NOT_A_TAG = (1, b'{"message":"Not Found","status":"404"}', b"gh: Not Found (HTTP 404)\n")
 
 
 def test_workflow_sha_must_equal_the_certificate_build_signer_digest(plain_receipt) -> None:
@@ -153,17 +180,20 @@ def test_workflow_sha_must_equal_the_certificate_build_signer_digest(plain_recei
     assert signed.detail == f"signed by {WORKFLOW}@refs/tags/v1 at {RECORDED_SHA[:12]}"
     assert signed.notes == ["checks: separate job", f"run {_run_uri()}"]
     other = policy.Signer(WORKFLOW, workflow_sha="0" * 40)
-    wrong = _verify(plain_receipt, Gh((0, _attestation(plain_receipt), b"")), (other,))
+    gh = Gh((0, _attestation(plain_receipt), b""), NOT_A_TAG)
+    wrong = _verify(plain_receipt, gh, (other,))
+    assert gh.calls[1] == ["gh", "api", f"repos/acme/factories/git/tags/{RECORDED_SHA}"]
     assert wrong.status == "mismatch"
     assert (
         wrong.detail == f"signed by {WORKFLOW} at {RECORDED_SHA[:12]}, policy requires 000000000000"
     )
     assert wrong.facts["signerSha"] == RECORDED_SHA and wrong.facts["requiredSignerSha"] == "0" * 40
+    assert wrong.facts["signerCommit"] is None
     # Another allowed entry that matches still signs; a mismatch is not sticky.
-    gh = Gh((0, _attestation(plain_receipt), b""), (0, _attestation(plain_receipt), b""))
+    gh = Gh((0, _attestation(plain_receipt), b""), NOT_A_TAG, (0, _attestation(plain_receipt), b""))
     assert _verify(plain_receipt, gh, (other, pinned)).status == "signed"
     # A network failure on another entry keeps the result unavailable, never a verdict.
-    gh = Gh((0, _attestation(plain_receipt), b""), (1, b"", b"Error: timeout\n"))
+    gh = Gh((0, _attestation(plain_receipt), b""), NOT_A_TAG, (1, b"", b"Error: timeout\n"))
     flaky = policy.Signer("acme/other/.github/workflows/x.yml")
     assert _verify(plain_receipt, gh, (other, flaky)).status == "unavailable"
 
@@ -303,24 +333,57 @@ def test_audit_rejects_a_receipt_signed_at_another_workflow_sha(
     # Rejected even without require_signed: the trusted workflow signed at the wrong commit.
     _signed_policy(tmp_path, monkeypatch, plain_receipt, require=False, signer=pin)
     receipt = tmp_path / "work/.apm/runs" / NEW / "receipt"
-    monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b"")))
+    monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b""), NOT_A_TAG))
     result = _audit()
     assert result.exit_code == 1, result.output
     assert _rows(result.output)["Identity"] == (
         f"[x] Identity      signed by {WORKFLOW} at {RECORDED_SHA[:12]}, policy requires aaaaaaaaaaaa"
     )
     assert "   unsigned" in result.output.splitlines()[0]
-    monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b"")))
+    monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b""), NOT_A_TAG))
     report = json.loads(_audit("--format", "json").output)
     assert report["signed"] is False and report["facts"]["identity"]["status"] == "mismatch"
     assert report["facts"]["identity"]["signerSha"] == RECORDED_SHA
     # factories.enforcement: warn stages the rollout, as for every factories rule.
     policy_file = tmp_path / "work/apm-policy.yml"
     policy_file.write_text(policy_file.read_text() + "  enforcement: warn\n")
-    monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b"")))
+    monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b""), NOT_A_TAG))
     result = _audit()
     assert result.exit_code == 0, result.output
     assert _rows(result.output)["Identity"].startswith("[!] Identity      signed by")
+
+
+def test_audit_accepts_the_commit_of_a_tag_object_and_never_passes_unresolved(
+    plain_receipt, tmp_path, monkeypatch
+) -> None:
+    commit = "c" * 40
+    # Unresolvable is INCOMPLETE (exit 2) even without require_signed: never a pass.
+    _signed_policy(
+        tmp_path,
+        monkeypatch,
+        plain_receipt,
+        require=False,
+        signer=f"      workflow_sha: {commit}\n",
+    )
+    receipt = tmp_path / "work/.apm/runs" / NEW / "receipt"
+    tag = json.loads((SHOP.parent / "apmx-v0.6.0-git-tag.recorded.json").read_bytes())
+    tag["sha"], tag["object"]["sha"] = RECORDED_SHA, commit
+    resolved = (0, json.dumps(tag).encode(), b"")
+    monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b""), resolved))
+    result = _audit()
+    assert result.exit_code == 0, result.output
+    assert _rows(result.output)["Identity"] == (
+        f"[+] Identity      signed by {WORKFLOW}@refs/tags/v1 at cccccccccccc "
+        f"(tag object {RECORDED_SHA[:12]})"
+    )
+    offline = (1, b"", b"error connecting to api.github.com\n")
+    monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b""), offline))
+    result = _audit()
+    assert result.exit_code == 2, result.output
+    assert _rows(result.output)["Identity"].startswith(
+        "[!] Identity      signer commit could not be checked against workflow_sha"
+    )
+    assert "INCOMPLETE   Identity:" in result.output
 
 
 def test_audit_warns_when_a_signer_is_pinned_only_by_a_mutable_ref(
