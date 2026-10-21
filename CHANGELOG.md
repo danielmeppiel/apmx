@@ -2,82 +2,90 @@
 
 ## [Unreleased]
 
+## 0.6.0 - 2026-10-21
+
+Accept factory PRs by proof: review a factory once, then gate its pull
+requests with one `apmx audit` step instead of re-reading every generated diff.
+
 ### Added
 
-- `scripts/demo.py prepare --factory-ref OWNER/REPO#TAG` prepares the demo kit
-  against a pinned remote factory package instead of the local example copy, so
-  `demo proof` shows the same definition digest as a CI receipt pinned by a
-  receiving policy. `factory/` then holds a read-only copy of the installed
-  package, re-checked on every reset.
-- `apmx audit` binds applied patch outputs in pull requests. When a receipt
-  output is an `export_changes`-format patch (identified from the receipt's own
-  bytes and the attempt's captured baseline), the PR may apply it instead of
-  committing the `.diff`: apmx applies it with strict `git apply` to the
-  merge-base in a temporary directory, and every touched file at head must equal
-  the result. A patch that does not apply, a partial application or an extra
-  edit is exit 1. PRs that commit patch files keep today's binding.
-- `run.yml` runs factory packages: `factory` accepts a pinned APM package
-  reference (`owner/repo[/path]#ref`) run against the caller's `workspace`,
-  like `apmx --from`. `apmx check PRODUCER_RECEIPT --from PACKAGE_REF`
-  re-checks a package run against the current directory; the definition digest
-  binds the package's repository, commit and content, so a moved ref withdraws
-  the receipt. The check job verifies the installed `checks-requirements` file
-  is the one the definition records.
-- `run.yml` input `checks-requirements`: a requirements file inside the
-  factory, installed into a fresh virtual environment whose `python3` runs the
-  checks in the produce and check jobs (never in attest), with
-  `--require-hashes` when the file has hashes. The software-factory example
-  ships `checks/requirements.txt` (Behave 1.3.3, hash-pinned), so it can run
-  in CI.
-- Example and README section "Accept factory PRs by proof": one `factories`
-  policy section and one `apmx audit` workflow step accept signed factory pull
-  requests (`examples/accept-factory-prs`). It replaces the draft receiving-side
-  gate of #10.
-- `apmx check PRODUCER_RECEIPT [FACTORY]` re-checks a producer's outputs where
-  no agent ran: only the output bytes are replayed (harness `replay`), the
-  factory's own checks rerun, and a new receipt of record is written; a
-  different factory definition withdraws it. `check` is now a reserved word.
-- `.github/workflows/run.yml` runs a factory in CI as three jobs: produce
-  (agent, read-only), check (`apmx check`, no agent) and attest (OIDC, no
-  candidate code). A self-test drives it end to end with the hermetic actor.
-- `apmx audit` verifies signed receipts. With `factories.signers`, the Identity
-  row finds the receipt's GitHub artifact attestation by its `index.json`
-  digest and verifies it with `gh attestation verify` against those workflows,
-  then re-checks subject, receipt and definition digests and the signer
-  itself. `require_signed` rejects unsigned receipts (exit 1) and treats a
-  signature it could not check as INCOMPLETE (exit 2).
-- `.github/actions/setup` installs the native apmx release archive after
-  checking its SHA-256 against the release's checksum file, its manifest and
-  an optional pinned digest. `.github/actions/attest` signs a receipt after
-  `apmx audit --offline` finds it VALID.
+- Accept signed factory pull requests with one `factories` section in
+  `apm-policy.yml` and one `apmx audit` workflow step
+  (`examples/accept-factory-prs`, README "Accept factory PRs by proof"). It
+  replaces the draft receiving-side gate of #10.
 - `apmx audit` needs no flags. Locally it audits the newest COMPLETE run under
-  `./.apm/`; in a GitHub pull request it audits the receipt the PR adds and
+  `./.apm/`. In a GitHub pull request it audits the receipt the PR adds and
   binds the PR's change (merge-base..head) to it: every changed file must be a
-  receipt output (or an unchanged recorded input) with the same SHA-256 at
-  head. `RECEIPT_DIR`, `--outputs`, `--policy` and `--offline` are overrides;
+  receipt output, or an unchanged recorded input, with the same SHA-256 at
+  head. `RECEIPT_DIR`, `--outputs`, `--policy` and `--offline` override;
   `--format sarif` emits SARIF 2.1.0.
-- `apmx audit` reads the same `apm-policy.yml` as `apm audit`, found the same
-  way (repository file, read from the PR base in a PR, then the org policy,
-  following `extends`). apmx owns one top-level section, `factories`
-  (`allow`, `require_signed`, `signers`, `revoked`, `enforcement`), merged
-  tighten-only across `extends`. It adds a factory allowlist, a Revocation row
-  for capability content (`purl` + `bodySha256`) and an unsigned-receipt rule.
-  These are gate rules (exit 1) unless `factories.enforcement: warn`; APM's
-  top-level `enforcement: warn` does not soften them. No policy is reported as
+- A PR may apply a factory's patch instead of committing the `.diff`. When a
+  receipt output is an `export_changes`-format patch, `apmx audit` applies it
+  with strict `git apply` to the merge-base in a temporary directory, and every
+  touched file at head must equal the result. A patch that does not apply, a
+  partial application or an extra edit is exit 1. PRs that commit patch files
+  keep the same binding.
+- One policy file for APM and apmx. `apmx audit` discovers the same
+  `apm-policy.yml` as `apm audit` (the repository file, read from the PR base
+  in a PR, then the org policy, following `extends`) and owns one section,
+  `factories`, merged tighten-only: `allow` (approved factory definition
+  digests, the Factory row), `revoked` (capability content by `purl` +
+  `bodySha256`, the Revocation row), `require_signed`, `signers` and
+  `enforcement`. Its rules gate (exit 1) unless `factories.enforcement: warn`;
+  APM's top-level `enforcement: warn` does not soften them. No policy is
   `[i] Policy  none found`; a policy that cannot be loaded is INCOMPLETE
   (exit 2). APM's own keys stay APM's, enforced in the Ingredients row.
+- Know who produced a receipt. With `factories.signers`, the Identity row finds
+  the receipt's GitHub artifact attestation by its `index.json` digest,
+  verifies it with `gh attestation verify` against those workflows (looked up
+  in the signer's `repo`), then re-checks subject, receipt and definition
+  digests and the signer. `require_signed` rejects an unsigned receipt
+  (exit 1); a signature that could not be checked is INCOMPLETE (exit 2).
+- Keep the agent away from the checks of record and the signing identity.
+  `apmx check PRODUCER_RECEIPT [FACTORY]` replays only the producer's output
+  bytes (harness `replay`), reruns the factory's own checks and writes a new
+  receipt of record; a different factory definition withdraws it. The reusable
+  `.github/workflows/run.yml` runs produce (agent, read-only), check (no agent)
+  and attest (OIDC, no candidate code) as separate jobs. `check` is now a
+  reserved word.
+- Run a versioned factory package in CI. `run.yml`'s `factory` accepts a
+  pinned APM package reference (`owner/repo[/path]#ref`) run against the
+  caller's `workspace`, like `apmx --from`; `apmx check PRODUCER_RECEIPT
+  --from PACKAGE_REF` re-checks it. The definition digest binds the package's
+  repository, commit and content, so a ref that moves between jobs withdraws
+  the receipt; an unpinned reference is refused.
+- Install a factory's check tools in CI. `run.yml`'s `checks-requirements`
+  input names a requirements file inside the factory, installed into a fresh
+  virtual environment whose `python3` runs the checks in the produce and check
+  jobs (never in attest), with `--require-hashes` when the file is hashed. The
+  check job verifies the file is the one the definition records. The
+  software-factory example ships a hash-pinned `checks/requirements.txt`
+  (Behave 1.3.3).
+- Composite actions for CI: `.github/actions/setup` installs the native apmx
+  release only if its SHA-256 matches the release's checksum file, its
+  manifest and an optional pinned digest; `.github/actions/attest` signs a
+  receipt after `apmx audit --offline` finds it VALID. Reference them and
+  `run.yml` at `@v0.6.0` (or its commit SHA); no moving major tag is
+  published.
+- `scripts/demo.py prepare --factory-ref OWNER/REPO#TAG` prepares the demo kit
+  against a pinned remote factory package, so the demo shows the same
+  definition digest as a CI receipt pinned by a receiving policy. `factory/`
+  then holds a read-only copy of the installed package, re-checked on every
+  reset.
 
 ### Fixed
 
 - `apmx --from OWNER/REPO#REF --plan` previews a Git package that is not
   installed in the calling directory instead of refusing with UNPROVEN (21).
-  The bundled APM resolves it exactly as a run would, with `apm lock` in a
-  private temporary workspace: the package and its dependency graph are
-  fetched there, nothing is installed or integrated, no model is called and
-  the calling directory is unchanged. A package the caller declares and locks
-  is still previewed offline. A fetch that fails (offline, unknown ref,
-  authentication) exits 2 with what to check. `--plan` help now reads "Show
-  steps and checks without running agents or installing dependencies."
+  The bundled APM resolves it in a private temporary workspace; nothing is
+  installed, no model is called and the calling directory is unchanged. A
+  failed fetch (offline, unknown ref, authentication) exits 2 with what to
+  check.
+- Native Windows no longer halts or fails backend installation when an
+  antivirus or indexer briefly locks the bundled APM pin or a freshly
+  extracted APM backend. Those reads and renames retry with bounded backoff
+  (about 8 seconds), then fail as before; other errors and platforms are never
+  retried.
 
 ## 0.5.0 - 2026-10-14
 

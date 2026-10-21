@@ -96,9 +96,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: danielmeppiel/apmx/.github/actions/setup@main   # pin a commit SHA
-        with:
-          version: "0.5.0"
+      - uses: danielmeppiel/apmx/.github/actions/setup@v0.6.0   # installs apmx 0.6.0
       - run: apmx audit
         env:
           GH_TOKEN: ${{ github.token }}   # gh attestation verify, for the Identity row
@@ -108,6 +106,11 @@ The setup action downloads the native release archive for the runner and
 installs it only if its SHA-256 matches the release's `.sha256` file, the
 release manifest and, if you give one, the `sha256` input. Pin `sha256` to
 trust a digest you reviewed rather than the release's own checksum files.
+
+Reference the actions and `run.yml` by an immutable release tag such as
+`@v0.6.0`, or by that tag's commit SHA. apmx publishes no moving major tag
+(`@v1`). At a release tag, the setup action's default `version` is that
+release.
 
 ## Policy: one `apm-policy.yml`, one apmx section
 
@@ -159,7 +162,7 @@ is `factories` as `empty`; apmx still applies its rules and runs
   package is a label and an unpinned pattern such as `acme/*` allows nothing
   for now; the Factory row says so.
 - `signers`: `workflow: owner/repo/.github/workflows/<file>.yml`, optionally
-  pinned to the signer's ref with `@<ref>` (for example `@refs/tags/v1`), and
+  pinned to the signer's ref with `@<ref>` (for example `@refs/tags/v0.6.0`), and
   an optional `repo: owner/repo`: the repository the factory ran in, where its
   attestations are stored. `repo` defaults to the repository being audited.
 - `revoked`: a capability is revoked only when both its `purl` and its
@@ -266,10 +269,10 @@ checks ran in a separate job (`separate-job`) or the agent's own job
       id-token: write
       attestations: write
     steps:
-      - uses: danielmeppiel/apmx/.github/actions/setup@main
+      - uses: danielmeppiel/apmx/.github/actions/setup@v0.6.0
       - uses: actions/download-artifact@v4
         with: { name: receipt, path: receipt }
-      - uses: danielmeppiel/apmx/.github/actions/attest@main
+      - uses: danielmeppiel/apmx/.github/actions/attest@v0.6.0
         with: { receipt: receipt, checks: separate-job }
 ```
 
@@ -318,7 +321,7 @@ keeps the agent away from both:
 ```yaml
 jobs:
   factory:
-    uses: danielmeppiel/apmx/.github/workflows/run.yml@<sha>
+    uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.6.0
     with:
       factory: path/to/factory
       checks-requirements: checks/requirements.txt   # optional, inside the factory
@@ -326,6 +329,12 @@ jobs:
     secrets:
       agent-token: ${{ secrets.COPILOT_TOKEN }}   # seen only by the produce job
 ```
+
+`run.yml`'s `apmx-version` and `apmx-ref` inputs default to the same release
+(`0.6.0`, `v0.6.0`), so its jobs install that apmx and use the setup and
+attest actions from that tag. If you call `run.yml` by a commit SHA, pass the
+same SHA as `apmx-ref`. A signer entry can pin the tag with
+`workflow: danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.6.0`.
 
 `factory` can also be an APM package reference pinned to a tag or commit,
 `owner/repo[/path]#ref`. The package runs against the caller's `workspace`

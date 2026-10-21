@@ -166,7 +166,7 @@ require explicit consent flags; packaged single-contract runs are unchanged.
 | Red `[x]` | Failure, rejection or halted execution |
 
 Words and ASCII indicators carry the meaning even without color. A completed
-native factory returns **COMPLETE / exit 0** in v0.5.0 source and downloads, only after
+native factory returns **COMPLETE / exit 0** in v0.6.0 source and downloads, only after
 validated durable finalization. The local-access/cost disclosure appears once
 before consent/action, not as repeated per-leaf warnings. Green results do not
 imply isolation, correct software or production certification. Historical

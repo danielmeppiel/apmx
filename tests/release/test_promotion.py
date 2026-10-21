@@ -48,6 +48,21 @@ class PromotionTests(unittest.TestCase):
         self.assertIn("COMPLETE (0)", notes)
         self.assertNotIn("## Changes in v0.4.2", notes)
 
+    def test_v060_notes_headline_accepting_factory_prs_by_proof(self):
+        notes = promotion.release_notes("0.6.0", "a" * 40)
+        self.assertIn("## Changes in v0.6.0: Accept factory PRs by proof", notes)
+        self.assertIn("`factories` section", notes)
+        self.assertIn("gh attestation verify", notes)
+        self.assertIn("apmx check PRODUCER_RECEIPT [FACTORY]", notes)
+        self.assertIn("@v0.6.0", notes)
+        self.assertIn("checks-requirements", notes)
+        self.assertIn("apmx check --from PACKAGE_REF", notes)
+        self.assertIn("strict `git apply`", notes)
+        self.assertIn("--plan", notes)
+        self.assertIn("--factory-ref", notes)
+        self.assertIn("blob/v0.6.0/CHANGELOG.md", notes)
+        self.assertNotIn("## Changes in v0.5.0", notes)
+
     def test_v042_notes_preserve_failed_v041_candidate_truth(self):
         notes = promotion.release_notes("0.4.2", "a" * 40)
         self.assertIn("No GitHub release or native assets were published for v0.4.1", notes)

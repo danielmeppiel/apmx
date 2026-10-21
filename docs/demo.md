@@ -1,132 +1,131 @@
-# A clean two-harness demo
+# A three-act demo
 
-This macOS/Linux kit separates machine preparation from the presentation.
-It uses a genuine PyInstaller APMX bundle, its official APM backend and the
-unchanged five-stage factory. It does not simulate an agent, grant consent,
-apply patches automatically, or change global shell/login configuration.
+**Story:** "Make delivery free from $50. Here are the contracts and the checks.
+Don't trust the agent; trust the proof." About 10 minutes:
+
+1. **Run the factory** on a laptop with a native harness.
+2. **Prove it** with `apmx audit`, then the same factory on another harness.
+3. **Accept the PR by proof:** the factory runs in CI, signs its receipt, and
+   opens a pull request whose only gate is that same audit.
+
+The macOS/Linux kit below separates machine preparation from the presentation.
+It uses a genuine native APMX bundle, its official APM backend and an unchanged
+five-stage factory. It does not simulate an agent, grant consent, apply patches
+automatically, or change global shell or login configuration. The public
+examples are the factory package
+[danielmeppiel/apmx-demo-factory](https://github.com/danielmeppiel/apmx-demo-factory)
+(tag `v1.0.0`) and the receiving repository
+[danielmeppiel/apmx-demo-shop](https://github.com/danielmeppiel/apmx-demo-shop).
 
 ## Present
 
-From the prepared kit directory, open the Copilot terminal:
+### Act 1: Run the factory
+
+From the prepared kit directory (see [Prepare once](#prepare-once-backstage)):
 
 ```sh
 ./demo copilot
 ```
 
-The new shell starts inside the application with the native `apmx` and checker
-Python on PATH. Show `request.md` and `../factory/contracts/build.contract.md`
-in your editor.
-
-**"Make delivery free from fifty dollars. Here are the deliverables and checks."**
-
-```sh
-apmx --from ../factory --plan
-```
-
-Expect five stages, seven outputs and nine checks. Preview performs no model
-calls and installs nothing. The application is the implicit workspace; source files need no inventory
-in the contract. The factory supplies contracts, checks and the pinned testing
-capability. The package root is the default entrypoint; Copilot is the default
-harness. Preview is optional: the execution command also displays the factory
-before asking for execution consent.
-
-**"Let Copilot operate this factory."**
+The shell starts inside the application with the native `apmx` and checker
+Python on PATH, and prints the factory reference to use. Show `request.md`,
+`../factory/contracts/build.contract.md` (its `produces`, `verify` and
+`budget` blocks) and one check under `../factory/checks/`.
 
 ```sh
-apmx --from ../factory --verbose
+apmx --from danielmeppiel/apmx-demo-factory#v1.0.0 --plan
+apmx --from danielmeppiel/apmx-demo-factory#v1.0.0
 ```
 
-First approve loading the factory and installing its dependencies with APM in a
-temporary workspace. Inspect the displayed inputs, outputs and checks, then
-approve execution. Both prompts default to **No**. Loading approval alone never
-starts an agent. Native agents and checkers can
-access host files, network and available logins; this is not a sandbox. Model
-usage can cost money. Copilot keeps its configured model. The helper supplies
-neither model overrides nor permission flags.
+A kit prepared from the local example uses `--from ../factory` instead.
+`--plan` shows five stages, seven outputs and nine checks without model calls
+or installation. The run asks twice, both defaulting to **No**: once to load
+the factory and install its pinned capability, and once to execute. Native
+agents and checks can use host files, network and logins; this is not a
+sandbox, and model use can cost money.
 
-`--verbose` streams agent activity, checker stdout/stderr and full native debug
-diagnostics, with safety bounds. Omit it for the compact story: one attempt
-line per contract with its check marks, handoff lines, and a final Outputs /
-Receipt / Next block. Inspect debug output before projecting it: native
-metadata can be sensitive. `Found input` means a file was actually captured,
-not merely declared. Narrate the check command, its output and then its
-authoritative result, in that order.
+Narrate one line per contract: attempt, check marks, then `-> handed to`. If a
+repair happens (`attempt 2/3`), narrate the check output, the result, then the
+retry; never promise one. The run ends with **Outputs / Receipt / Next**: the
+code and documentation patches, and the receipt they are bound to. Add
+`--verbose` to stream agent activity and checker output; inspect it before
+projecting, because native metadata can be sensitive.
 
-After successful execution and automatic evidence delivery, show the printed
-code patch and separate documentation patch. Required checks assess their stated
-scope; advisory review is not certification. The factory retains changes rather
-than applying them to the original application. Never treat exit 21 or
-evidence-delivery exit 23 as a successful demo.
+### Act 2: Prove it
 
-**"The patch is only half the delivery. Now show me what it is bound to."**
+Run the printed `Next` command:
 
 ```sh
-demo proof
+apmx audit .apm/chains/<run-id>/receipt
 ```
 
-Show the actual factory-definition SHA-256 and the same reference inside the
-SLSA v1 predicate, wrapped in an in-toto Statement v1. Then show the output
-subjects and their SHA-256 digests, the official APM CycloneDX 1.5 ABOM and the
-per-producer/per-check statement counts. The ABOM is an inventory byproduct,
-not a claim that the model read the inventory. Open `provenance.intoto.json`,
-`abom.cdx.json` and one `checks/*.intoto.json` in the printed Receipt directory
-when you want to show the real standard documents, not a slide about them.
+Walk the rows: **Integrity** (every file hashed in `index.json`),
+**Standards** (in-toto, SLSA v1, CycloneDX 1.5, schema-valid), **Factory**
+(the definition digest of these contracts, checks and package commit),
+**Checks**, **Ingredients** (APM reinstalls the pinned capability and runs
+`apm audit`), **Outputs**, and **Identity**: `[!] unsigned`. A laptop receipt
+proves content binding, not who ran it. Act 3 adds the signature. See
+[audit](audit.md).
 
-**"Do not take APMX's word for it. Use a separate consumer."**
+For a deeper look, `demo proof` prints the factory-definition SHA-256, the SLSA
+binding, the output subjects and the ABOM. `demo verify` and
+`demo verify --controls` check the same evidence with an independent consumer
+that does not import APMX, and test corruptions on disposable copies. From the
+kit root, use `./demo proof copilot` or `./demo verify copilot`. `--run ID`
+selects a historical run; by default the helper selects the newest attempt in
+the active application.
 
-```sh
-demo verify
-demo verify --controls
-```
-
-The first command uses the existing independent Python consumer and cached
-upstream schemas: no APMX import, model call or network fetch. It validates the
-formats, actual file bytes, definition bindings, output subjects and checker
-relationships. The second relocates the package and tests corruptions on
-disposable copies, including semantic errors with refreshed index hashes.
-The original evidence stays unchanged.
-
-**"These bytes are bound to this recorded factory, these inputs and these checks.
-Change an artifact or break a relationship, and independent verification rejects it.
-This is unsigned local evidence: it does not authenticate who operated the factory
-or establish a SLSA security level."**
-
-The helper always prints the selected run ID. By default it selects the newest
-recorded factory attempt in this active application, never an older success
-behind a newer incomplete run and never archived history. A command that fails
-before creating a run has no new record; do not misrepresent an older record
-as that command's result. Use `--run ID` for deliberate historical selection.
-From the kit root, use `./demo proof copilot` or `./demo verify copilot`.
-
-**"Change the harness, not the factory."**
-
-Open a second terminal in the kit directory:
+**Change the harness, not the factory.** In a second terminal:
 
 ```sh
 ./demo opencode
+apmx --from danielmeppiel/apmx-demo-factory#v1.0.0 --on opencode --model github-copilot/gpt-5.6-sol
+apmx audit .apm/chains/<run-id>/receipt
 ```
 
-Then run:
+The definition digest matches the Copilot run: same contracts, checks,
+capabilities and budget. The generated code may differ. For a tight talk, run
+one harness live and label the other as a prepared run.
 
-```sh
-apmx --from ../factory --on opencode --model github-copilot/gpt-5.6-sol --verbose
-demo proof
-demo verify
-```
+### Act 3: Accept the PR by proof
 
-This is the explicitly tested OpenCode provider/model selection. It requires
-your own model access; the helper does not change global OpenCode configuration.
-Both applications start from the same seed and use the same factory.
+The receiving repository's `apm-policy.yml` pins the reviewed factory
+definition digest (the one Act 2 printed), `require_signed: true`, and the
+signer workflow `danielmeppiel/apmx/.github/workflows/run.yml`. Its only PR
+gate is `apmx audit`. See [Accept factory PRs by
+proof](../examples/accept-factory-prs/README.md).
 
-Show the second run's code/docs outputs, actual standard documents and independent
-verification. Compare the two printed factory-definition hashes. Matching definition
-fingerprints establish the same contracts/checks/capabilities/budget, not identical
-generated code. Evidence is unsigned, not authenticated attestation.
+The factory runs in CI through `run.yml@v0.6.0` with `factory:
+"danielmeppiel/apmx-demo-factory#v1.0.0"` and `checks-requirements:`, as three
+jobs:
 
-For a tight talk, run one harness live and label the other result as a prepared
-run. Do not promise bounded whole-factory latency. The build declares three
-attempts/600 shared seconds and documentation two attempts/300 shared seconds;
-the other stages remain single-attempt. Narrate repair only if it actually occurs.
+- **produce:** the agent, with a read-only token; the only job that sees the
+  model token.
+- **check:** a fresh runner and no agent; `apmx check` reruns the checks on
+  the output bytes and writes the receipt of record.
+- **attest:** OIDC signs the receipt, with no candidate code present.
+
+Show two pull requests' `audit` checks:
+
+- **The genuine delivery:** Policy, Factory (on `factories.allow`), Outputs
+  (the PR's change is exactly the delivered patches, applied to the base) and
+  Identity (`signed by .../run.yml@...`) pass: `VALID (authenticated)`.
+- **The same delivery plus one unrelated edit:** the signature still verifies,
+  but Outputs fails (`PR changes <file>, which the receipt does not bind`):
+  `INVALID`, exit 1.
+
+"The signature is valid. What fails is the binding: this PR is more than the
+factory delivered, so it cannot merge."
+
+### Honest limits
+
+Say at least one. Local receipts are unsigned. A signature says which workflow
+vouched for a structurally valid receipt; it does not make the agent
+trustworthy, and checks assess only their stated scope. Native execution is not
+a sandbox. Every workflow that calls `run.yml` at the pinned ref can sign; the
+policy pins the reusable workflow, not its caller. Never present exit 20, 21,
+22 or 23 as success. With no network, `apmx audit --offline` still checks
+Integrity, Standards, Factory, Checks and Outputs.
 
 ## Reset and relaunch
 
@@ -204,7 +203,7 @@ From the source checkout, supply the trusted archive hash and checker interprete
 
 ```sh
 python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
-  --archive /absolute/path/to/apmx-0.5.0-macos-arm64.tar.gz \
+  --archive /absolute/path/to/apmx-0.6.0-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --python /absolute/path/to/checker-environment/bin/python \
   --verifier-python /absolute/path/to/independent-verifier/bin/python \
