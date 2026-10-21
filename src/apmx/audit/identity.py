@@ -8,11 +8,16 @@ like ``npm audit signatures``. Nobody passes it a signature.
 Verification is delegated to ``gh attestation verify`` (stock GitHub CLI,
 preinstalled on GitHub-hosted runners). It checks the Sigstore bundle, the
 transparency log and the Fulcio certificate. It is pinned to the signer
-workflow in ``factories.signers`` (and its ``@ref`` when pinned), the apmx
-predicate type, and GitHub-hosted runners. apmx then re-checks the verified statement
-independently: subject digest, receipt digest, definition digest, OIDC
-issuer and signer workflow. Anything unexpected is treated as unsigned or
-unavailable, never as signed.
+workflow in ``factories.signers``, the apmx predicate type, and GitHub-hosted
+runners. apmx then re-checks the verified statement independently: subject
+digest, receipt digest, definition digest, OIDC issuer, signer workflow, its
+``@ref`` and its ``workflow_sha`` when pinned. Anything unexpected is treated
+as unsigned or unavailable, never as signed.
+
+The signer's commit is the certificate's Build Signer Digest (Fulcio extension
+OID 1.3.6.1.4.1.57264.1.10, the OIDC ``job_workflow_sha`` claim), reported by
+``gh`` as ``buildSignerDigest``. For a workflow called by an annotated tag it
+is the tag object's SHA (``git rev-parse <tag>``), not the commit it points to.
 """
 
 from __future__ import annotations
@@ -36,13 +41,15 @@ _NOT_FOUND = ("no attestations found", "no matching attestations", "http 404")
 # reject a receipt, never accept one.
 _MISMATCH = ("verifying with issuer", "verification failed", "failed to verify")
 _GITHUB = re.compile(r"(?:https://|git@|ssh://git@)github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$")
+_GIT_SHA = re.compile(r"[0-9a-f]{40}")
 
 Runner = Callable[[list[str]], tuple[int, bytes, bytes]]
 
 
 @dataclass
 class Identity:
-    """``signed``, ``unsigned`` or ``unavailable`` (could not check: never a pass)."""
+    """``signed``, ``unsigned``, ``mismatch`` (signed at a commit the policy does not pin)
+    or ``unavailable`` (could not check: never a pass)."""
 
     status: str
     detail: str
@@ -128,6 +135,7 @@ def verify(
     facts: dict[str, object] = {"receiptSha256": digest, "predicateType": PREDICATE_TYPE}
     unavailable: list[str] = []
     mismatches: list[str] = []
+    wrong: list[tuple[str, dict[str, object], str]] = []
     for signer in signers:
         repo = signer.repo or default_repository
         if repo is None:
@@ -182,39 +190,74 @@ def verify(
             )
             if ref is not None and signer.ref is not None and ref != signer.ref:
                 ref, reason = None, f"signed at {ref}, not {signer.ref}"
-            if ref is not None:
-                predicate = result["verificationResult"]["statement"]["predicate"]
-                checks = predicate.get("checks")
-                certificate = result["verificationResult"]["signature"]["certificate"]
-                facts.update(
-                    signer=signer.workflow,
-                    signerRef=ref,
-                    signerDigest=certificate.get("buildSignerDigest"),
-                    sourceRepository=certificate.get("sourceRepositoryURI"),
-                    run=certificate.get("runInvocationURI"),
-                    checks=checks,
+            if ref is None:
+                mismatches.append(f"{signer.workflow}: attestation ignored ({reason})")
+                continue
+            predicate = result["verificationResult"]["statement"]["predicate"]
+            checks = predicate.get("checks")
+            certificate = result["verificationResult"]["signature"]["certificate"]
+            raw = str(certificate.get("buildSignerDigest") or "").lower()
+            sha = raw if _GIT_SHA.fullmatch(raw) else None
+            found = {
+                "signer": signer.workflow,
+                "signerRef": ref,
+                "signerDigest": certificate.get("buildSignerDigest"),
+                "signerSha": sha,
+                "requiredSignerSha": signer.workflow_sha,
+                "signerPin": _pin(signer),
+                "sourceRepository": certificate.get("sourceRepositoryURI"),
+                "run": certificate.get("runInvocationURI"),
+            }
+            if signer.workflow_sha is not None and sha != signer.workflow_sha:
+                at = sha[:12] if sha else "an unknown commit"
+                required = signer.workflow_sha[:12]
+                detail = f"signed by {_ascii(signer.workflow)} at {at}, policy requires {required}"
+                wrong.append((detail, found, ref))
+                continue
+            facts.update(found, checks=checks)
+            notes = [f"run {_ascii(certificate.get('runInvocationURI') or 'unknown')}"]
+            if checks:
+                notes.insert(0, f"checks: {_ascii(checks).replace('-', ' ')}")
+            if signer.workflow_sha is None and signer.ref is not None:
+                notes.append(
+                    f"[!] signer pinned by mutable ref {_ascii(signer.ref, 80)}; pin workflow_sha"
                 )
-                notes = [f"run {_ascii(certificate.get('runInvocationURI') or 'unknown')}"]
-                if checks:
-                    notes.insert(0, f"checks: {_ascii(checks).replace('-', ' ')}")
-                return Identity(
-                    "signed",
-                    f"signed by {_ascii(signer.workflow)}@{_ascii(ref, 80)}",
-                    signer=signer.workflow,
-                    notes=notes,
-                    facts=facts,
-                )
-            mismatches.append(f"{signer.workflow}: attestation ignored ({reason})")
+            elif signer.workflow_sha is None:
+                notes.append("[!] signer not pinned (any ref); pin workflow_sha")
+            detail = f"signed by {_ascii(signer.workflow)}@{_ascii(ref, 80)}"
+            return Identity(
+                "signed",
+                f"{detail} at {sha[:12]}" if sha else detail,
+                signer=signer.workflow,
+                notes=notes,
+                facts=facts,
+            )
     if unavailable:
         return Identity(
             "unavailable",
             "signature could not be checked",
-            notes=[*unavailable, *mismatches][:5],
+            notes=[*unavailable, *mismatches, *(detail for detail, _, _ in wrong)][:5],
             facts=facts,
         )
+    if wrong:
+        detail, found, ref = wrong[0]
+        facts.update(found)
+        notes = [f"certificate: {_ascii(found['signer'])}@{_ascii(ref, 80)}"]
+        if ref.startswith("refs/tags/"):
+            notes.append(
+                "an annotated tag signs as its tag object SHA (git rev-parse <tag>), "
+                "not the commit it points to"
+            )
+        return Identity("mismatch", detail, notes=notes, facts=facts)
     return Identity(
         "unsigned",
         "unsigned: no attestation from factories.signers",
         notes=mismatches[:5],
         facts=facts,
     )
+
+
+def _pin(signer) -> str:
+    if signer.workflow_sha is not None:
+        return "workflow_sha"
+    return "ref" if signer.ref is not None else "none"

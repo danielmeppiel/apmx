@@ -4,3 +4,6 @@ build/notices/libffi/ubuntu-source-copyright.txt whitespace=-blank-at-eol
 
 # Hash-pinned upstream CycloneDX schemas must stay byte-identical on every platform.
 src/apmx/audit/schemas/* -text
+
+# A real receipt index.json whose SHA-256 is the recorded attestation's subject.
+tests/unit/contracts/golden/attestation/*.index.json -text

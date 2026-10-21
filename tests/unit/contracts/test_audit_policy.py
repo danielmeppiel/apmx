@@ -14,6 +14,7 @@ from apmx.audit import policy as policies
 DIGEST = "a" * 64
 OTHER = "b" * 64
 WORKFLOW = "acme/factories/.github/workflows/run.yml"
+SHA = "c0ffee" + "0" * 34
 
 
 def _git(root: Path, *args: str) -> str:
@@ -94,6 +95,58 @@ factories:
     }
 
 
+def test_workflow_sha_pins_a_signer_by_field_or_by_sha_ref() -> None:
+    keys = policies.document_keys(
+        f"""
+factories:
+  signers:
+    - workflow: {WORKFLOW}@refs/tags/v1
+      workflow_sha: {SHA.upper()}
+    - workflow: {WORKFLOW}@{SHA}
+    - workflow: {WORKFLOW}@{SHA}
+      workflow_sha: {SHA}
+""",
+        "p",
+    )
+    tagged = policies.Signer(WORKFLOW, "refs/tags/v1", None, SHA)
+    by_sha = policies.Signer(WORKFLOW, None, None, SHA)
+    assert keys["signers"] == (tagged, by_sha, by_sha)
+    field = policies.document_keys(
+        f"factories:\n  signers: [{{workflow: {WORKFLOW}, workflow_sha: {SHA}}}]\n", "p"
+    )
+    assert field["signers"] == (by_sha,)
+
+
+def test_merge_keeps_a_signer_only_if_every_level_allows_it() -> None:
+    pinned = policies.Signer(WORKFLOW, workflow_sha=SHA)
+    other = policies.Signer(WORKFLOW, workflow_sha="f" * 40)
+    unpinned = policies.Signer(WORKFLOW)
+    tagged = policies.Signer(WORKFLOW, "refs/tags/v1")
+
+    def merged(*levels):
+        results = {
+            policies.merge(
+                [{"present": True, "signers": level} for level in order], source="s"
+            ).signers
+            for order in (levels, tuple(reversed(levels)))
+        }
+        assert len(results) == 1  # order-independent
+        return results.pop()
+
+    # A child cannot unpin: the parent's sha survives, the child's unpinned entry does not.
+    assert merged((pinned,), (unpinned,)) == (pinned,)
+    # A child can pin a signer its parent lists unpinned.
+    assert merged((unpinned,), (pinned,)) == (pinned,)
+    # Different pins allow nothing; a ref pin does not stand in for a sha pin.
+    assert merged((pinned,), (other,)) == ()
+    assert merged((pinned,), (tagged,)) == ()
+    assert merged((tagged,), (unpinned,)) == (tagged,)
+    both = policies.Signer(WORKFLOW, "refs/tags/v1", None, SHA)
+    assert merged((tagged,), (pinned,), (both,)) == (both,)
+    # A different repository is a different signer.
+    assert merged((pinned,), (policies.Signer(WORKFLOW, None, "acme/app"),)) == ()
+
+
 def test_null_means_no_opinion_and_empty_means_none() -> None:
     keys = policies.document_keys("factories:\n  allow: null\n  signers: null\n", "p")
     assert keys == {"present": True}
@@ -117,6 +170,9 @@ def test_null_means_no_opinion_and_empty_means_none() -> None:
         f"factories:\n  revoked: [{{purl: {PURL}}}]\n",
         f"factories:\n  revoked: [{{purl: style, bodySha256: {DIGEST}}}]\n",
         f"factories:\n  revoked: [{{purl: {PURL}, bodySha256: '{DIGEST}\\n'}}]\n",
+        f"factories:\n  signers: [{{workflow: {WORKFLOW}, workflow_sha: abc123}}]\n",
+        f'factories:\n  signers: [{{workflow: {WORKFLOW}, workflow_sha: "{SHA}\\n"}}]\n',
+        f"factories:\n  signers: [{{workflow: {WORKFLOW}@{SHA}, workflow_sha: {'f' * 40}}}]\n",
         "factories: [allow]\n",
         "- not a mapping\n",
         "name: [\n",

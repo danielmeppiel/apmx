@@ -191,7 +191,9 @@ factories:
   allow: ["acme/checkout-factory@sha256:<definition digest>"]
   require_signed: true
   signers:
-    - { workflow: danielmeppiel/apmx/.github/workflows/run.yml, repo: acme/factories }
+    - workflow: danielmeppiel/apmx/.github/workflows/run.yml
+      workflow_sha: 367ca846435d34f2e89f870335eeb709f3954c49   # git rev-parse v0.6.0
+      repo: acme/factories
 ```
 
 Then it gates every pull request with one step. `apmx audit` finds the receipt

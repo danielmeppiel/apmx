@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Security
+
+- Pin a receipt signer to immutable workflow code. A `factories.signers` entry
+  pinned only by `@refs/tags/...` or a branch trusts whatever the tag points to,
+  and whoever controls the workflow's repository can move it. The new optional
+  `workflow_sha: <40-hex>` (or `workflow: <file>.yml@<40-hex>`) must equal the
+  signing certificate's Build Signer Digest (Fulcio OID
+  1.3.6.1.4.1.57264.1.10, `job_workflow_sha`); otherwise the Identity row is
+  `[x] signed by <workflow> at <sha12>, policy requires <sha12>` and exit 1.
+  For a workflow called by an annotated tag it is the tag object's SHA: for
+  `run.yml@v0.6.0`, `367ca846435d34f2e89f870335eeb709f3954c49`
+  (`git rev-parse v0.6.0`). A signer pinned only by a ref, or not at all, still
+  passes, with the note `[!] signer pinned by mutable ref <ref>; pin
+  workflow_sha`. The Identity row shows the signer's SHA, and `--format json`
+  adds `signerSha`, `requiredSignerSha` and `signerPin` to `facts.identity`.
+  In an `extends:` chain a child can pin a signer but never unpin one.
+
 ## 0.6.0 - 2026-10-21
 
 Accept factory PRs by proof: review a factory once, then gate its pull
