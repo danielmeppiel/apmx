@@ -274,3 +274,37 @@ def test_main_needs_a_token_and_a_valid_target(tmp_path, monkeypatch, capsys) ->
     monkeypatch.setenv("TARGET", "acme/../shop")
     assert run_deliver.main(args) == 1
     assert "owner/name" in capsys.readouterr().err
+
+
+def test_deliver_only_ever_runs_git() -> None:
+    """Every subprocess run_deliver.py starts is git; nothing delivered is executed."""
+    import ast
+
+    tree = ast.parse((ROOT / "scripts/run_deliver.py").read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in {"subprocess", "os"}
+        and node.func.attr not in {"walk", "environ"}
+    ]
+    assert [ast.unparse(call.func) for call in calls] == ["subprocess.run"]
+    (command,) = [call.args[0] for call in calls]
+    assert isinstance(command, ast.List) and ast.literal_eval(command.elts[0]) == "git"
+    assert "shell=True" not in (ROOT / "scripts/run_deliver.py").read_text()
+
+
+def test_delivered_scripts_and_git_settings_are_never_executed(tmp_path, remote) -> None:
+    sentinel = tmp_path / "executed"
+    root = tmp_path / "delivery"
+    (root / ".githooks").mkdir(parents=True)
+    script = f"#!/bin/sh\ntouch {sentinel}\n"
+    for name in ("setup.py", "install.sh", ".githooks/pre-commit", ".githooks/pre-push"):
+        (root / name).write_text(script)
+        (root / name).chmod(0o755)
+    (root / ".gitattributes").write_text("* filter=run diff=run\n")
+    (root / ".gitmodules").write_text('[submodule "x"]\n  path = x\n  url = ./x\n')
+    result = _deliver(tmp_path, remote, root, None, mode="bundle")
+    assert result["commit"] and not sentinel.exists()
