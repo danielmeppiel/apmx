@@ -211,3 +211,30 @@ def test_workflows_pin_every_third_party_action() -> None:
             uses = step.get("uses")
             if uses and not uses.startswith("./"):
                 assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", uses), (path.name, uses)
+
+
+def test_published_action_refs_and_defaults_name_this_release() -> None:
+    """Documented setup/attest/run.yml refs and their defaults resolve to this release's tag."""
+    import tomllib
+
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    setup = load_yaml_str((ACTIONS / "setup/action.yml").read_text())
+    assert setup["inputs"]["version"]["default"] == version
+    run = _workflow("run.yml")
+    run_inputs = (run.get("on") or run[True])["workflow_call"]["inputs"]
+    assert run_inputs["apmx-version"]["default"] == version
+    assert run_inputs["apmx-ref"]["default"] == f"v{version}"
+    documents = [
+        ROOT / "README.md",
+        *(ROOT / "docs").glob("*.md"),
+        *(ROOT / "examples/accept-factory-prs").iterdir(),
+    ]
+    refs = set()
+    for path in documents:
+        refs.update(
+            re.findall(
+                r"danielmeppiel/apmx/\.github/(?:actions/\w+|workflows/run\.yml)@([\w./-]*\w)",
+                path.read_text(),
+            )
+        )
+    assert refs and refs <= {f"v{version}", f"refs/tags/v{version}"}

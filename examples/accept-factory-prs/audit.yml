@@ -7,6 +7,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: danielmeppiel/apmx/.github/actions/setup@main   # pin a commit SHA
+      - uses: danielmeppiel/apmx/.github/actions/setup@v0.6.0   # installs apmx 0.6.0
       - run: apmx audit
         env: { GH_TOKEN: "${{ github.token }}" }

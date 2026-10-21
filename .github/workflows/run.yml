@@ -15,7 +15,7 @@ name: apmx run
 # Caller:
 #   jobs:
 #     factory:
-#       uses: danielmeppiel/apmx/.github/workflows/run.yml@<sha>
+#       uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.6.0
 #       with: { factory: path/to/factory, checks-requirements: checks/requirements.txt }
 #   or, for a factory package run against the caller's repository:
 #       with: { factory: "owner/factory#v1", checks-requirements: checks/requirements.txt }
@@ -49,11 +49,13 @@ on:
       apmx-version:
         description: apmx release to install, or "source" to build apmx-ref (apmx's own CI).
         type: string
-        default: "0.5.0"
+        default: "0.6.0"
       apmx-ref:
-        description: Ref of danielmeppiel/apmx providing the setup and attest actions.
+        description: >
+          Ref of danielmeppiel/apmx providing the setup and attest actions. The
+          default is this release's tag; keep it equal to the run.yml ref you call.
         type: string
-        default: main
+        default: v0.6.0
       attest:
         description: Sign the receipt of record. Needs id-token and attestations write.
         type: boolean

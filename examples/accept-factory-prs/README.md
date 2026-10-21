@@ -5,7 +5,8 @@ re-reading every generated diff. This is the whole receiving side: one policy
 section and one workflow step.
 
 1. **Produce in CI.** The factory repository (here `acme/factories`) calls
-   [`run.yml`](../../.github/workflows/run.yml): the agent runs in one job,
+   [`run.yml`](../../.github/workflows/run.yml)
+   (`danielmeppiel/apmx/.github/workflows/run.yml@v0.6.0`): the agent runs in one job,
    `apmx check` reruns the checks in a fresh job without the agent, and a third
    job signs the receipt with the workflow's OIDC identity. Open a pull request
    to the receiving repository that commits the applied patch plus the receipt:
@@ -27,7 +28,7 @@ An excerpt of the gate's output:
 [+] Factory       definition sha256:0311c27f3d7b.. on factories.allow (acme/checkout-factory)
 [+] Revocation    0 of 1 capability revoked; factories.revoked is empty
 [+] Outputs       PR #42: changes.diff + documentation.diff applied to base reproduce head (5 files)
-[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v1
+[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.6.0
                   checks: separate job
 
 [+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)

@@ -9,7 +9,7 @@ Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
 **Install** the experimental
-[v0.5.0 release](https://github.com/danielmeppiel/apmx/releases/tag/v0.5.0)
+[v0.6.0 release](https://github.com/danielmeppiel/apmx/releases/tag/v0.6.0)
 with the [native installation guide](docs/install.md#install-a-prebuilt-archive).
 It runs contracts through native Copilot or the native
 [OpenCode profile](docs/opencode.md); authenticate in your chosen harness, whose
@@ -181,7 +181,8 @@ failed after a COMPLETE run. See [results](docs/results.md).
 
 ## Accept factory PRs by proof
 
-Run the factory in CI with [`run.yml`](.github/workflows/run.yml). The agent,
+Run the factory in CI with [`run.yml`](.github/workflows/run.yml)
+(`uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.6.0`). The agent,
 the checks of record and the signature each run in a separate job. The
 receiving repository pins what it accepts in its `apm-policy.yml`:
 
@@ -198,7 +199,7 @@ the PR adds, binds the PR's change to its outputs, reads the policy from the PR
 base and verifies the signature:
 
 ```yaml
-- uses: danielmeppiel/apmx/.github/actions/setup@main   # pin a commit SHA
+- uses: danielmeppiel/apmx/.github/actions/setup@v0.6.0   # installs apmx 0.6.0
 - run: apmx audit
   env: { GH_TOKEN: "${{ github.token }}" }
 ```
