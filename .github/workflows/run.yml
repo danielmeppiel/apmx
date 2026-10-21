@@ -16,7 +16,7 @@ name: apmx run
 #   jobs:
 #     factory:
 #       uses: danielmeppiel/apmx/.github/workflows/run.yml@<sha>
-#       with: { factory: path/to/factory }
+#       with: { factory: path/to/factory, checks-requirements: checks/requirements.txt }
 #       permissions: { contents: read, id-token: write, attestations: write }
 #       secrets: { agent-token: ${{ secrets.COPILOT_TOKEN }} }
 
@@ -47,6 +47,15 @@ on:
         description: Sign the receipt of record. Needs id-token and attestations write.
         type: boolean
         default: true
+      checks-requirements:
+        description: >
+          Optional pip requirements file inside the factory (for example
+          checks/requirements.txt): the factory's own approved checker
+          dependencies. Installed into a fresh virtualenv whose python3 runs
+          the checks, in the produce and check jobs only, never in attest.
+          Hashes are required when the file has any.
+        type: string
+        default: ""
       hermetic-actor:
         description: apmx CI only. Replace the agent CLI with the hermetic protocol fixture.
         type: boolean
@@ -118,6 +127,27 @@ jobs:
           FACTORY: caller/${{ inputs.factory }}
         run: |
           python3 -c 'import os, shutil; shutil.copytree(os.environ["FACTORY"], os.environ["RUNNER_TEMP"] + "/factory", ignore=shutil.ignore_patterns(".git", ".apm"))'
+      - name: Install the factory's check requirements
+        if: inputs.checks-requirements != ''
+        env:
+          FACTORY: ${{ runner.temp }}/factory
+          REQUIREMENTS: ${{ inputs.checks-requirements }}
+        run: |
+          file=$(python3 - <<'PY'
+          import os
+          from pathlib import Path
+          factory = Path(os.environ["FACTORY"]).resolve()
+          path = (factory / os.environ["REQUIREMENTS"]).resolve()
+          if not path.is_relative_to(factory) or not path.is_file():
+              raise SystemExit(f"checks-requirements must be a file inside the factory: {os.environ['REQUIREMENTS']}")
+          print(path)
+          PY
+          )
+          python3 -m venv "$RUNNER_TEMP/checks-python"
+          args=(--disable-pip-version-check --no-input --quiet -r "$file")
+          if grep -q -- '--hash=' "$file"; then args+=(--require-hashes); fi
+          "$RUNNER_TEMP/checks-python/bin/python" -m pip install "${args[@]}"
+          echo "$RUNNER_TEMP/checks-python/bin" >> "$GITHUB_PATH"
       - name: Run the factory (agent; untrusted outputs)
         working-directory: ${{ runner.temp }}
         env:
@@ -190,6 +220,27 @@ jobs:
           FACTORY: caller/${{ inputs.factory }}
         run: |
           python3 -c 'import os, shutil; shutil.copytree(os.environ["FACTORY"], os.environ["RUNNER_TEMP"] + "/factory", ignore=shutil.ignore_patterns(".git", ".apm"))'
+      - name: Install the factory's check requirements
+        if: inputs.checks-requirements != ''
+        env:
+          FACTORY: ${{ runner.temp }}/factory
+          REQUIREMENTS: ${{ inputs.checks-requirements }}
+        run: |
+          file=$(python3 - <<'PY'
+          import os
+          from pathlib import Path
+          factory = Path(os.environ["FACTORY"]).resolve()
+          path = (factory / os.environ["REQUIREMENTS"]).resolve()
+          if not path.is_relative_to(factory) or not path.is_file():
+              raise SystemExit(f"checks-requirements must be a file inside the factory: {os.environ['REQUIREMENTS']}")
+          print(path)
+          PY
+          )
+          python3 -m venv "$RUNNER_TEMP/checks-python"
+          args=(--disable-pip-version-check --no-input --quiet -r "$file")
+          if grep -q -- '--hash=' "$file"; then args+=(--require-hashes); fi
+          "$RUNNER_TEMP/checks-python/bin/python" -m pip install "${args[@]}"
+          echo "$RUNNER_TEMP/checks-python/bin" >> "$GITHUB_PATH"
       - name: Re-check the outputs here (no agent) and write the receipt of record
         working-directory: ${{ runner.temp }}
         run: apmx check "$RUNNER_TEMP/producer-receipt" "$RUNNER_TEMP/factory"

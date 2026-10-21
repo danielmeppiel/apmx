@@ -41,6 +41,10 @@ Stay in that terminal: `APMX_SOURCE` identifies the pinned example checkout,
 and PATH selects this checkout's APMX plus the checker environment.
 **Behave 1.3.3 is optional
 for APMX**, but required in Python 3.12 for this example's Gherkin checks.
+[`checks/requirements.txt`](checks/requirements.txt) pins it and its
+dependencies with hashes: `python3 -m pip install --require-hashes -r
+checks/requirements.txt` in a fresh virtual environment. In CI, pass the same
+file to `run.yml` as `checks-requirements`.
 
 On macOS or Linux, check the selected tools before copying anything:
 

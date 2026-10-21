@@ -287,6 +287,7 @@ jobs:
     uses: danielmeppiel/apmx/.github/workflows/run.yml@<sha>
     with:
       factory: path/to/factory
+      checks-requirements: checks/requirements.txt   # optional, inside the factory
     permissions: { contents: read, id-token: write, attestations: write }
     secrets:
       agent-token: ${{ secrets.COPILOT_TOKEN }}   # seen only by the produce job
@@ -302,6 +303,14 @@ model. It must have the producer's factory definition digest; otherwise it is
 withdrawn and the command exits 1. A self-consistent forged producer receipt
 whose outputs fail the checks is REJECTED there. `check` is a reserved word,
 like `audit`.
+
+Checks run with `python3` from `PATH`. A factory whose checks need Python
+packages names its own approved requirements file in `checks-requirements`
+(a path inside the factory). `run.yml` installs it into a fresh virtual
+environment and puts that environment's `python3` first on `PATH`, in the
+produce and check jobs only; the attest job runs no factory code. When the
+file contains any `--hash`, pip runs with `--require-hashes`. The file is part
+of the factory directory, so changing it is a change to the factory you review.
 
 `run.yml` uploads `apmx-receipt` (the receipt of record) and `apmx-delivery`
 (the outputs at their paths plus the receipt under `FACTORY/.apm/`), ready to
