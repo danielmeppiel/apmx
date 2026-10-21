@@ -6,8 +6,8 @@
 
 - Run factories from one platform repository against many repositories.
   `run.yml` takes `target-repository` (plus `target-ref`, `target-branch`,
-  `deliver`: `pull-request`, `branch` or `bundle`) and a GitHub App (`target-app-client-id`,
-  `target-app-private-key`) or a `target-token`. A new `target` job fetches
+  `deliver`: `pull-request`, `branch` or `bundle`) and a GitHub App
+  (`target-app-client-id`, `target-app-private-key`) or a `target-token`. A new `target` job fetches
   the target at its base commit and hands the tree to produce and check as an
   artifact, so the agent's job never receives a target credential. A new
   `deliver` job, with no agent and no candidate code, pushes the delivered

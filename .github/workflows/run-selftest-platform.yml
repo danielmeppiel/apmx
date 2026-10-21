@@ -126,6 +126,7 @@ jobs:
             require_signed: true
             signers:
               - workflow: ${GITHUB_REPOSITORY}/.github/workflows/run.yml
+                workflow_sha: ${GITHUB_SHA}   # the run.yml this run called, as a platform pins it
                 repo: ${GITHUB_REPOSITORY}
           EOF
           printf '{"pull_request": {"base": {"sha": "%s"}, "head": {"sha": "%s"}}}\n' \
@@ -134,7 +135,7 @@ jobs:
           GITHUB_EVENT_NAME=pull_request GITHUB_EVENT_PATH="$RUNNER_TEMP/gate/event.json" \
             apmx audit --policy "$RUNNER_TEMP/gate/apm-policy.yml" | tee "$RUNNER_TEMP/gate/audit.txt"
           grep -q "^\[+\] Outputs       PR: " "$RUNNER_TEMP/gate/audit.txt"
-          grep -q "^\[+\] Identity      signed by ${GITHUB_REPOSITORY}/.github/workflows/run.yml@" "$RUNNER_TEMP/gate/audit.txt"
+          grep -q "^\[+\] Identity      signed by ${GITHUB_REPOSITORY}/.github/workflows/run.yml@.* at ${GITHUB_SHA:0:12}" "$RUNNER_TEMP/gate/audit.txt"
           grep -q "^\[+\] VALID   (authenticated: " "$RUNNER_TEMP/gate/audit.txt"
       - name: An edit on top of the delivery fails the gate
         env:
