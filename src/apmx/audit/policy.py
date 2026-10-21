@@ -18,6 +18,12 @@ unknown top-level key; that is expected and harmless. It also reports a policy
 whose only section is ``factories`` as ``empty``, so ``empty`` never means
 "no policy" here when a ``factories`` section exists.
 
+``factories.harnesses`` and ``factories.models`` name the agent CLIs (with an
+optional semver range) and the models that may work in factories. They are
+enforced twice: before a run (``apmx FACTORY`` refuses to start, no model
+call) and at the gate (the Factory row checks every stage the receipt
+records). A model name is what the harness reports; apmx cannot verify it.
+
 ``factories`` rules are gate rules: a violation is exit 1 unless
 ``factories.enforcement: warn`` stages a rollout. APM's top-level
 ``enforcement: warn`` does not soften them; only ``enforcement: off`` disables
@@ -33,8 +39,9 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 POLICY_FILE = "apm-policy.yml"
@@ -47,7 +54,24 @@ _WORKFLOW = re.compile(
     r"[A-Za-z0-9_.-]+\.ya?ml)(?:@(?P<ref>[^\s@]+))?"
 )
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-_FACTORY_KEYS = {"allow", "require_signed", "signers", "revoked", "enforcement"}
+_FACTORY_KEYS = {
+    "allow",
+    "require_signed",
+    "signers",
+    "revoked",
+    "enforcement",
+    "harnesses",
+    "models",
+    "require_observed_model",
+}
+_HARNESS = re.compile(r"(?P<name>[A-Za-z][A-Za-z0-9_-]*)(?:\s*(?P<range>[\^~<>=0-9].*))?")
+_VERSION = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?")
+_COMPARATOR = re.compile(
+    r"(?:\^|~|>=|>|<=|<|=)?\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"|\d+\.\d+\.[xX*]"
+)
+_MODEL = re.compile(r"[A-Za-z0-9._:/@+*?-]{1,256}")
+REPLAY = "replay"
 _LOADED = {"found", "empty"}
 _ABSENT = {"absent", "no_git_remote"}
 _RAW_BYTES = 1024 * 1024
@@ -80,6 +104,27 @@ class Revoked:
 
 
 @dataclass(frozen=True)
+class HarnessRule:
+    """One ``factories.harnesses`` entry: an agent CLI name and an optional semver range."""
+
+    name: str
+    range: str | None = None
+
+    def __str__(self) -> str:
+        return self.name + (self.range or "")
+
+    def allows(self, name: str, version: str | None) -> bool:
+        if name.lower() != self.name.lower():
+            return False
+        if self.range is None:
+            return True
+        from apmx.marketplace.semver import parse_semver, satisfies_range
+
+        parsed = parse_semver(version) if version else None
+        return parsed is not None and satisfies_range(parsed, self.range)
+
+
+@dataclass(frozen=True)
 class FactoryPolicy:
     """The merged ``factories`` section of one resolved policy chain."""
 
@@ -91,10 +136,27 @@ class FactoryPolicy:
     signers: tuple[Signer, ...] | None = None
     revoked: tuple[Revoked, ...] = ()
     present: bool = False
+    # One tuple per policy level that sets the key: a value must be allowed by every level.
+    harnesses: tuple[tuple[HarnessRule, ...], ...] | None = None
+    models: tuple[tuple[str, ...], ...] | None = None
+    require_observed_model: bool = False
 
     @property
     def rules(self) -> bool:
-        return bool(self.allow is not None or self.require_signed or self.signers or self.revoked)
+        return bool(
+            self.allow is not None
+            or self.require_signed
+            or self.signers
+            or self.revoked
+            or self.harnesses is not None
+            or self.models is not None
+            or self.require_observed_model
+        )
+
+    @property
+    def runs(self) -> bool:
+        """Whether this policy restricts which harnesses or models may run."""
+        return self.harnesses is not None or self.models is not None
 
 
 @dataclass
@@ -169,7 +231,8 @@ def factories_section(value: object, label: str) -> dict:
     if unknown:
         raise PolicyError(
             f"{label}: unknown key factories.{unknown[0]} "
-            "(expected allow, require_signed, signers, revoked, enforcement)"
+            "(expected allow, require_signed, signers, revoked, enforcement, harnesses, models, "
+            "require_observed_model)"
         )
     result: dict[str, object] = {"present": True}
     enforcement = value.get("enforcement")
@@ -192,10 +255,11 @@ def factories_section(value: object, label: str) -> dict:
                 entries.append((match.group("name"), match.group("digest")))
         result["allow"] = tuple(entries)
         result["unpinned"] = tuple(unpinned)
-    if "require_signed" in value:
-        if not isinstance(value["require_signed"], bool):
-            raise PolicyError(f"{label}: factories.require_signed must be true or false")
-        result["require_signed"] = value["require_signed"]
+    for key in ("require_signed", "require_observed_model"):
+        if key in value:
+            if not isinstance(value[key], bool):
+                raise PolicyError(f"{label}: factories.{key} must be true or false")
+            result[key] = value[key]
     if value.get("signers") is not None:
         if not isinstance(value["signers"], list):
             raise PolicyError(f"{label}: factories.signers must be a list")
@@ -234,13 +298,41 @@ def factories_section(value: object, label: str) -> dict:
                 raise PolicyError(f"{where}.bodySha256 must be 64 lowercase hex characters")
             revoked.append(Revoked(purl, body))
         result["revoked"] = tuple(revoked)
+    if value.get("harnesses") is not None:
+        rules = []
+        for item in _strings(value["harnesses"], f"{label}: factories.harnesses"):
+            rules.append(harness_rule(item, f"{label}: factories.harnesses entry {item!r}"))
+        result["harnesses"] = tuple(rules)
+    if value.get("models") is not None:
+        for item in _strings(value["models"], f"{label}: factories.models"):
+            if not _MODEL.fullmatch(item):
+                raise PolicyError(
+                    f"{label}: factories.models entry {item!r} must be a model name or glob "
+                    "(letters, digits, . _ : / @ + - and the wildcards * ?)"
+                )
+        result["models"] = tuple(value["models"])
     return result
+
+
+def harness_rule(text: str, where: str) -> HarnessRule:
+    """Parse ``copilot``, ``copilot>=1.0.95`` or ``opencode >=1.2.24 <2.0.0``."""
+    match = _HARNESS.fullmatch(text.strip())
+    spec = match.group("range") if match else None
+    if match is None or (
+        spec is not None and not all(_COMPARATOR.fullmatch(part) for part in spec.split())
+    ):
+        raise PolicyError(
+            f"{where} must be <harness>[<semver range>], for example copilot>=1.0.95"
+        )
+    return HarnessRule(match.group("name").lower(), " ".join(spec.split()) if spec else None)
 
 
 def merge(documents: Iterable[dict], *, source: str) -> FactoryPolicy:
     """Merge one ``extends`` chain tighten-only; order-independent.
 
-    ``allow`` and ``signers`` intersect across the levels that set them,
+    ``allow``, ``signers``, ``harnesses`` and ``models`` intersect across the
+    levels that set them (a harness or model must be allowed by every level),
+    ``require_observed_model`` ORs,
     ``require_signed`` ORs, ``revoked`` unions, and ``factories.enforcement``
     is ``block`` unless every level that sets it says ``warn``. Top-level
     ``enforcement: off`` (APM's switch) disables the rules only when no level
@@ -250,7 +342,10 @@ def merge(documents: Iterable[dict], *, source: str) -> FactoryPolicy:
     unpinned: list[str] = []
     signers: set[Signer] | None = None
     revoked: list[Revoked] = []
-    require_signed = present = False
+    harnesses: list[tuple[HarnessRule, ...]] = []
+    models: list[tuple[str, ...]] = []
+    sets_harnesses = sets_models = False
+    require_signed = require_observed = present = False
     levels: list[str] = []
     top: list[str] = []
     for document in documents:
@@ -270,7 +365,16 @@ def merge(documents: Iterable[dict], *, source: str) -> FactoryPolicy:
         if "signers" in document:
             listed = set(document["signers"])
             signers = listed if signers is None else signers & listed
+        if "harnesses" in document:
+            sets_harnesses = True
+            if tuple(document["harnesses"]) not in harnesses:
+                harnesses.append(tuple(document["harnesses"]))
+        if "models" in document:
+            sets_models = True
+            if tuple(document["models"]) not in models:
+                models.append(tuple(document["models"]))
         require_signed = require_signed or bool(document.get("require_signed"))
+        require_observed = require_observed or bool(document.get("require_observed_model"))
         revoked += [r for r in document.get("revoked", ()) if r not in revoked]
     enforcement = "block" if not levels or "block" in levels else "warn"
     if top and max(top, key=_TOP_ENFORCEMENT.index) == "off":
@@ -286,6 +390,9 @@ def merge(documents: Iterable[dict], *, source: str) -> FactoryPolicy:
         else tuple(sorted(signers, key=lambda s: (s.workflow, s.ref or "", s.repo or ""))),
         revoked=tuple(revoked),
         present=present,
+        harnesses=tuple(harnesses) if sets_harnesses else None,
+        models=tuple(models) if sets_models else None,
+        require_observed_model=require_observed,
     )
 
 
@@ -646,3 +753,207 @@ def evaluate_unsigned(
     if not policy.require_signed:
         return None
     return _violation(policy, detail)
+
+
+# --------------------------------------------------------------------------- harnesses and models
+
+
+def _listed(levels: tuple[tuple[object, ...], ...]) -> str:
+    texts = [", ".join(map(str, level)) or "none" for level in levels]
+    return texts[0] if len(texts) == 1 else " and ".join(f"[{text}]" for text in texts)
+
+
+def harnesses_text(policy: FactoryPolicy) -> str:
+    return _listed(policy.harnesses or ())
+
+
+def models_text(policy: FactoryPolicy) -> str:
+    return _listed(policy.models or ())
+
+
+def harness_allowed(policy: FactoryPolicy, name: str, version: str | None) -> bool:
+    return policy.harnesses is None or all(
+        any(rule.allows(name, version) for rule in level) for level in policy.harnesses
+    )
+
+
+def harness_named(policy: FactoryPolicy, name: str) -> bool:
+    """Whether every level names this harness at all, whatever its version range."""
+    return policy.harnesses is None or all(
+        any(rule.name == name.lower() for rule in level) for level in policy.harnesses
+    )
+
+
+def harness_needs_version(policy: FactoryPolicy, name: str) -> bool:
+    return any(
+        rule.name == name.lower() and rule.range is not None
+        for level in policy.harnesses or ()
+        for rule in level
+    )
+
+
+def model_allowed(policy: FactoryPolicy, model: str) -> bool:
+    return policy.models is None or all(
+        any(fnmatchcase(model.casefold(), pattern.casefold()) for pattern in level)
+        for level in policy.models
+    )
+
+
+def example_model(policy: FactoryPolicy) -> str | None:
+    """A literal model name every level allows, to suggest as ``--model``."""
+    for level in policy.models or ():
+        for pattern in level:
+            if not set(pattern) & {"*", "?"} and model_allowed(policy, pattern):
+                return pattern
+    return None
+
+
+def observed_version(text: str) -> str | None:
+    """The first semver in ``<harness> --version`` output (``GitHub Copilot CLI 1.0.99-2.``)."""
+    match = _VERSION.search(text)
+    return match.group(0) if match else None
+
+
+def _harness_label(name: str, version: str | None) -> str:
+    return f"{name} {version}" if version else name
+
+
+def preflight(
+    policy: FactoryPolicy,
+    harness: str,
+    model: str | None,
+    version: str | None,
+    *,
+    version_probed: bool,
+) -> Verdict:
+    """May this run start? ``model`` is the explicit ``--model``; ``None`` is unknown.
+
+    apmx cannot determine a harness's default model (it lives in private harness
+    configuration, and Copilot may pick per request), so a run without
+    ``--model`` under a ``models`` list is refused with the flag to pass.
+    ``version_probed`` is false for ``--plan``, which never launches the harness:
+    a version range is then reported as checked at run start.
+    """
+    notes: list[str] = []
+    problems: list[str] = []
+    if harness == REPLAY:
+        return Verdict("info", "replay producer (apmx check): no harness or model runs here")
+    if policy.harnesses is not None:
+        allowed = harnesses_text(policy)
+        if not harness_named(policy, harness):
+            problems.append(f"harness {harness} is not in factories.harnesses ({allowed})")
+        elif harness_needs_version(policy, harness) and version is None:
+            if version_probed:
+                problems.append(
+                    f"the {harness} version could not be determined; "
+                    f"factories.harnesses requires {allowed}"
+                )
+            else:
+                notes.append(f"{harness} version is checked at run start ({allowed})")
+        elif not harness_allowed(policy, harness, version):
+            problems.append(
+                f"harness {_harness_label(harness, version)} is not in factories.harnesses "
+                f"({allowed})"
+            )
+    if policy.models is not None:
+        allowed = models_text(policy)
+        example = example_model(policy)
+        action = f"pass --model {example}" if example else "pass --model <an allowed model>"
+        if model is None:
+            problems.append(
+                f"no --model given, so the {harness} default model is unknown; "
+                f"factories.models allows only {allowed}: {action}"
+            )
+        elif not model_allowed(policy, model):
+            problems.append(f"model {model} is not in factories.models ({allowed}): {action}")
+    if problems:
+        return _violation(policy, "; ".join(problems), tuple(notes))
+    parts = []
+    if policy.harnesses is not None:
+        parts.append(f"harness {_harness_label(harness, version)}")
+    if policy.models is not None:
+        parts.append(f"model {model}")
+    return Verdict("pass", " and ".join(parts) + " allowed by factories", tuple(notes))
+
+
+def _pinned_by_flag(harness: str) -> bool:
+    from apmx.runtime.registry import get_runtime_descriptor
+
+    try:
+        return get_runtime_descriptor(harness).model_pinned_by_flag
+    except ValueError:
+        return False
+
+
+def evaluate_stages(policy: FactoryPolicy, stages: Iterable[Mapping]) -> Verdict | None:
+    """Every stage's harness, version and models must be allowed (if the policy says).
+
+    A model is what the harness reported (``observedModels``). A harness that
+    reports none (OpenCode) falls back to the model apmx explicitly requested
+    with a flag that pins it, as a warning, unless
+    ``factories.require_observed_model`` is set. No model at all fails.
+    """
+    if not policy.runs:
+        return None
+    stages = list(stages)
+    failures: list[str] = []
+    warnings: list[str] = []
+    for stage in stages:
+        name = str(stage.get("contract") or "?")
+        harness = str(stage.get("harness") or "unknown")
+        version = stage.get("harnessVersion") or None
+        if harness == REPLAY:
+            failures.append(
+                f"stage {name} was replayed by apmx check; its producer harness and model "
+                "are not in this receipt"
+            )
+            continue
+        if not harness_allowed(policy, harness, version):
+            label = _harness_label(harness, version)
+            if version is None and harness_needs_version(policy, harness):
+                label += " (version not recorded)"
+            failures.append(f"stage {name} ran on {label}, not in factories.harnesses")
+        if policy.models is None:
+            continue
+        observed = [str(model) for model in stage.get("observedModels") or ()]
+        requested = stage.get("requestedModel") or None
+        for model in observed:
+            if not model_allowed(policy, model):
+                failures.append(f"stage {name} used model {model}, not in factories.models")
+        if observed:
+            continue
+        if requested and _pinned_by_flag(harness) and not policy.require_observed_model:
+            if model_allowed(policy, requested):
+                warnings.append(
+                    f"stage {name}: model {requested} requested, not observed "
+                    f"({harness} does not report models)"
+                )
+            else:
+                failures.append(
+                    f"stage {name} requested model {requested}, not in factories.models"
+                )
+        elif requested and policy.require_observed_model:
+            failures.append(
+                f"stage {name}: model {requested} requested but not observed; "
+                "factories.require_observed_model is set"
+            )
+        else:
+            failures.append(
+                f"stage {name} reported no model; factories.models needs one "
+                f"({harness} did not report it and no --model was passed)"
+            )
+    if failures:
+        return _violation(policy, failures[0], tuple([*failures[1:], *warnings]))
+    if warnings:
+        return Verdict("warn", warnings[0], tuple(warnings[1:]))
+    count = len(stages)
+    allowed = []
+    if policy.harnesses is not None:
+        allowed.append("factories.harnesses")
+    if policy.models is not None:
+        allowed.append("factories.models")
+    return Verdict(
+        "pass",
+        f"{count} stage{'s' if count != 1 else ''}: harness and models on "
+        + " and ".join(allowed),
+    )

@@ -22,6 +22,7 @@ from . import identity as identities
 from . import patches, verifier
 from . import policy as policies
 from .ingredients import FAIL, PASS, UNAVAILABLE, WARN, audit_ingredients
+from .stages import factory_stages
 
 SCHEMA = "apmx-audit/1"
 ASSURANCE = "content-bound; not authenticated"
@@ -168,6 +169,7 @@ def run_audit(
         audit.verdict("Factory", verdict, [] if rules.allow is None else [base])
         if rules.allow is None:
             audit.rows["Factory"] = Row("Factory", "pass", base)
+        _stages(audit, rules, receipt)
     if structural and outputs is not None:
         try:
             matched, detail = _rehash_outputs(receipt, outputs)
@@ -236,6 +238,27 @@ def run_audit(
         audit.verdict("Revocation", policies.evaluate_revocation(rules, list(receipt.bindings)))
     _identity(audit, root, receipt, rules, structural=structural, offline=offline)
     return audit
+
+
+def _stages(audit: Audit, rules: policies.FactoryPolicy, receipt: verifier.Receipt) -> None:
+    """``factories.harnesses`` and ``factories.models`` against every recorded stage."""
+    stages = factory_stages(receipt)
+    verdict = policies.evaluate_stages(rules, stages)
+    if verdict is None:
+        return
+    audit.facts["stages"] = [
+        {key: stage[key] for key in ("contract", "harness", "harnessVersion", "observedModels")}
+        for stage in stages
+    ]
+    row = audit.rows["Factory"]
+    if row.status == "fail":
+        if verdict.status in ("fail", "warn"):
+            row.notes.extend(_ascii(text) for text in (verdict.detail, *verdict.notes))
+        return
+    if verdict.status == "pass":
+        row.notes.append(_ascii(verdict.detail))
+        return
+    audit.verdict("Factory", verdict, [row.detail, *row.notes])
 
 
 def _identity(

@@ -248,6 +248,7 @@ def preflight(
     imports_root: Path | None = None,
     apm_backend: Mapping[str, str] | None = None,
     allow_unproven_inputs: bool = False,
+    executable_version: str | None = None,
 ) -> ChainPlan:
     """Admit every selected leaf's known surface without making future-input files."""
     limits = limits or ContractLimits()
@@ -272,6 +273,7 @@ def preflight(
             apm_backend=apm_backend,
             deferred_inputs=graph.inputs(contract),
             chain_outputs=outputs,
+            executable_version=executable_version,
         )
         if plan.contract != contract:
             raise ContractError("Contract changed during graph admission.", code="plan_changed")

@@ -173,6 +173,7 @@ def _admit(plan: LeafPlan, allow_advisory: bool) -> None:
         chain_outputs=plan.chain_outputs,
         input_inventory=plan.input_inventory,
         project_snapshot=plan.project_snapshot,
+        executable_version=plan.executable_version,
     )
     if current_plan != plan:
         raise ContractError(

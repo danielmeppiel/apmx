@@ -52,6 +52,7 @@ def _current(node: Node) -> LeafPlan:
         deferred_inputs=plan.deferred_inputs,
         chain_outputs=plan.chain_outputs,
         project_snapshot=plan.project_snapshot,
+        executable_version=plan.executable_version,
     )
     if current != plan or workspace.inspect_workspace(current) != node.inventory:
         raise ContractError(

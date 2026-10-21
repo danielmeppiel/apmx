@@ -270,8 +270,12 @@ def plan_contract(
     chain_outputs: tuple[str, ...] = (),
     input_inventory: tuple[FileEntry, ...] | None = None,
     project_snapshot: ProjectSnapshot | None = None,
+    executable_version: str | None = None,
 ) -> LeafPlan:
-    """Resolve a bounded leaf using local reads only; no version/inference probe."""
+    """Resolve a bounded leaf using local reads only; no version/inference probe.
+
+    ``executable_version`` is the harness version the caller observed at run start.
+    """
     from ..runtime.registry import get_runtime_descriptor
     from ..runtime.utils import find_runtime_binary
     from .imports import read_lock, read_project_manifest, resolve_installed_skills
@@ -413,6 +417,7 @@ def plan_contract(
         executable=executable,
         harness=harness,
         model=model,
+        executable_version=executable_version,
         limits=limits,
         imported_skills=skills,
         manifest_digest=manifest_digest,
