@@ -1,4 +1,4 @@
-"""`apmx audit` with no flags: receipt selection, PR change binding and discovered policy."""
+"""`apmx audit` with no flags: receipt selection, the PR gate and discovered policy."""
 
 import json
 import shutil
@@ -48,18 +48,21 @@ def _git(root: Path, *args: str) -> str:
 
 
 def _definition(receipt: Path) -> str:
-    return json.loads((receipt / "index.json").read_bytes())["definition"]["digest"]["sha256"]
+    from apmx.audit import verifier
 
-
-def _attempt(receipt: Path) -> Path:
-    (attempt,) = list((receipt / "attempts").iterdir())
-    return attempt
+    parsed, failure = verifier.inspect(receipt)
+    assert failure is None, failure
+    return parsed.definition_sha256
 
 
 def _copy_receipt(receipt: Path, root: Path, run_id: str) -> Path:
-    target = root / ".apm/runs" / run_id / "receipt"
-    shutil.copytree(receipt, target)
-    return target
+    """Copy a run's receipt (bundle, outputs and evidence) to another run directory."""
+    target = root / ".apm/runs" / run_id
+    target.mkdir(parents=True)
+    shutil.copyfile(receipt, target / "receipt.intoto.jsonl")
+    for name in ("outputs", "evidence"):
+        shutil.copytree(receipt.parent / name, target / name)
+    return target / "receipt.intoto.jsonl"
 
 
 def _fake_apm(monkeypatch, enforcement: str = "block") -> list:
@@ -76,26 +79,22 @@ def _fake_apm(monkeypatch, enforcement: str = "block") -> list:
 
 @pytest.fixture
 def pull(tmp_path, plain_receipt, monkeypatch):
-    """A repository whose PR adds the factory's output and its receipt."""
+    """A repository whose PR delivers the factory's output: code only, no receipt."""
 
-    def build(
-        *, policy_base=None, policy_head=None, extra=None, output=None, receipts=1, directory="repo"
-    ):
+    def build(*, policy_base=None, policy_head=None, extra=None, output=None, directory="repo"):
         repo = tmp_path / directory
         repo.mkdir()
         _git(repo, "init", "-q", "-b", "main")
         _git(repo, "config", "core.autocrlf", "false")
-        shutil.copytree(_attempt(plain_receipt) / "baseline", repo, dirs_exist_ok=True)
+        (repo / "README.md").write_text("app\n")
         if policy_base is not None:
             (repo / "apm-policy.yml").write_text(policy_base)
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "base")
         base = _git(repo, "rev-parse", "HEAD")
         _git(repo, "switch", "-qc", "factory")
-        artifact = _attempt(plain_receipt) / "artifacts/result.txt"
+        artifact = plain_receipt.parent / "outputs/result.txt"
         (repo / "result.txt").write_bytes(output if output is not None else artifact.read_bytes())
-        for index in range(receipts):
-            _copy_receipt(plain_receipt, repo, NEW[:-1] + str(index))
         for name, text in (extra or {}).items():
             (repo / name).write_text(text)
         if policy_head is not None:
@@ -130,7 +129,10 @@ def test_no_arguments_audits_the_newest_complete_run(plain_receipt, tmp_path, mo
     result = _audit()
     assert result.exit_code == 0, result.output
     first = result.output.splitlines()[0]
-    assert first.startswith(f"Receipt   .apm/runs/{NEW}/receipt   (newest of 2 COMPLETE runs)")
+    assert first.startswith(
+        f"Receipt   .apm/runs/{NEW}/receipt.intoto.jsonl   (newest of 2 COMPLETE runs)"
+    )
+    assert "1/1 delivered files match receipt subjects (re-hashed)" in result.output
     rows = _rows(result.output)
     assert rows["Policy"] == "[i] Policy        none found"
     assert rows["Revocation"].startswith("[i] Revocation    no policy")
@@ -249,7 +251,11 @@ def test_the_bundled_apm_resolves_the_policy_file(plain_receipt, tmp_path, monke
 
 @needs_backend
 def test_revoked_capability_body_is_rejected_offline(deps_receipt, tmp_path) -> None:
-    (binding,) = json.loads((deps_receipt / "capability-bindings.json").read_bytes())
+    from apmx.audit import verifier
+
+    parsed, failure = verifier.inspect(deps_receipt)
+    assert failure is None, failure
+    (binding,) = parsed.bindings
     policy = tmp_path / "revoked.yml"
     policy.write_text(
         "factories:\n  revoked:\n"
@@ -281,40 +287,63 @@ def test_sarif_reports_failing_and_warning_rows(plain_receipt, tmp_path, monkeyp
 
 # ------------------------------------------------------------------ pull requests
 
+SIGNERS = (
+    "factories:\n  signers:\n"
+    "    - workflow: acme/platform/.github/workflows/run.yml\n      repo: acme/platform\n"
+)
 
-def test_pull_request_binds_its_change_to_the_receipt_it_adds(pull) -> None:
-    pull()
+
+def _store(monkeypatch, receipt: Path):
+    from test_audit_gate import _store as store_of
+
+    from apmx.audit import identity
+
+    store = store_of(receipt)
+    monkeypatch.setattr(identity, "_gh", store)
+    return store
+
+
+def test_pull_request_is_gated_from_the_attestation_store(pull, plain_receipt, monkeypatch) -> None:
+    pull(policy_base=SIGNERS)
+    _fake_apm(monkeypatch)
+    _store(monkeypatch, plain_receipt)
     result = _audit()
     assert result.exit_code == 0, result.output
-    assert "   (added by PR #7)" in result.output.splitlines()[0]
+    first = result.output.splitlines()[0]
+    assert first.startswith("Receipt   attestations for PR #7   (looked up by file digest)")
+    assert first.endswith("   signed")
     row = _rows(result.output)["Outputs"]
-    assert row.startswith("[+] Outputs       PR #7: 1/1 outputs match at head")
-    assert "1 changed file bound" in row
+    assert row.startswith("[+] Outputs       PR #7: 1 changed file = delivered files at head")
     report = json.loads(_audit("--format", "json").output)
     assert report["facts"]["change"]["bound"] is True
 
 
-def test_pull_request_change_the_receipt_does_not_bind_is_invalid(pull) -> None:
+def test_pull_request_without_signers_is_incomplete(pull) -> None:
+    pull()
+    result = _audit()
+    assert result.exit_code == 2, result.output
+    assert "carries code only" in result.output and "factories.signers" in result.output
+
+
+def test_pull_request_with_an_explicit_bundle_binds_its_change(pull, plain_receipt) -> None:
+    pull()
+    result = _audit(plain_receipt, "--offline")
+    assert result.exit_code == 0, result.output
+    assert _rows(result.output)["Outputs"].startswith("[+] Outputs       PR #7: 1 changed file")
+
+
+def test_pull_request_change_the_delivery_does_not_bind_is_invalid(pull, plain_receipt) -> None:
     pull(extra={"backdoor.py": "import os\n"})
-    result = _audit()
+    result = _audit(plain_receipt, "--offline")
     assert result.exit_code == 1, result.output
-    assert "PR #7 changes backdoor.py, which the receipt does not bind" in result.output
+    assert "PR #7 changes backdoor.py, which is not a delivered file" in result.output
 
 
-def test_pull_request_output_edited_after_the_run_is_invalid(pull) -> None:
+def test_pull_request_output_edited_after_the_run_is_invalid(pull, plain_receipt) -> None:
     pull(output=b"edited after the run\n")
-    result = _audit()
+    result = _audit(plain_receipt, "--offline")
     assert result.exit_code == 1, result.output
-    assert "result.txt at head differs from its receipt subject" in result.output
-
-
-def test_pull_request_without_a_receipt_or_with_several_is_exit_2(pull, tmp_path) -> None:
-    pull(receipts=0)
-    result = _audit()
-    assert result.exit_code == 2 and "PR #7 adds no receipt" in result.output
-    pull(receipts=2, directory="several")
-    result = _audit()
-    assert result.exit_code == 2 and "adds 2 receipts" in result.output
+    assert "result.txt, whose bytes differ from the delivered file" in result.output
 
 
 def test_pull_request_commits_missing_from_a_shallow_checkout_is_exit_2(pull, tmp_path) -> None:
@@ -327,20 +356,34 @@ def test_pull_request_commits_missing_from_a_shallow_checkout_is_exit_2(pull, tm
 
 
 def test_pull_request_cannot_loosen_its_own_policy(pull, plain_receipt, monkeypatch) -> None:
-    strict = f"enforcement: block\nfactories:\n  allow: ['sha256:{'0' * 64}']\n"
-    loose = f"enforcement: block\nfactories:\n  allow: ['sha256:{_definition(plain_receipt)}']\n"
+    strict = SIGNERS + f"  allow: ['sha256:{'0' * 64}']\n"
+    loose = SIGNERS + f"  allow: ['sha256:{_definition(plain_receipt)}']\n"
     _, base, _ = pull(policy_base=strict, policy_head=loose)
     _fake_apm(monkeypatch)
+    _store(monkeypatch, plain_receipt)
     result = _audit()
     assert result.exit_code == 1, result.output
     rows = _rows(result.output)
     assert f"apm-policy.yml (repository, PR base {base[:12]})" in rows["Policy"]
+    assert rows["Identity"].startswith("[x] Identity") and (
+        "(apm-policy.yml is not a delivered file)" in rows["Identity"]
+    )
+
+
+def test_a_pull_request_from_the_store_is_checked_against_the_base_policy(
+    pull, plain_receipt, monkeypatch
+) -> None:
+    pull(policy_base=SIGNERS + f"  allow: ['sha256:{'0' * 64}']\n")
+    _fake_apm(monkeypatch)
+    _store(monkeypatch, plain_receipt)
+    result = _audit()
+    assert result.exit_code == 1, result.output
+    rows = _rows(result.output)
     assert rows["Factory"].startswith("[x] Factory") and "not on factories.allow" in rows["Factory"]
-    assert "changes apm-policy.yml, which the receipt does not bind" in rows["Outputs"]
 
 
-def test_explicit_outputs_overrides_the_pull_request_binding(pull, tmp_path) -> None:
+def test_explicit_outputs_overrides_the_pull_request_binding(pull, plain_receipt) -> None:
     repo, _, _ = pull(extra={"unrelated.md": "x\n"})
-    result = _audit("--outputs", repo)
+    result = _audit(plain_receipt, "--outputs", repo, "--offline")
     assert result.exit_code == 0, result.output
     assert "1/1 delivered files match receipt subjects (re-hashed)" in result.output

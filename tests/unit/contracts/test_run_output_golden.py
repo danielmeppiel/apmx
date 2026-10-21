@@ -203,15 +203,20 @@ def _attempt(
 
 
 def _receipt(directory: Path, checks: int) -> Path:
-    receipt = directory / "receipt"
-    (receipt / "checks").mkdir(parents=True)
-    statement = {"predicateType": "https://slsa.dev/provenance/v1"}
-    (receipt / "provenance.intoto.json").write_text(json.dumps(statement))
-    for index in range(checks):
-        (receipt / "checks" / f"run-{index + 1}.intoto.json").write_text("{}")
-    (receipt / "abom.cdx.json").write_text(json.dumps({"specVersion": "1.5", "components": []}))
-    (receipt / "summary.md").write_text("# Receipt\n")
-    return receipt
+    from apmx.audit import verifier
+
+    directory.mkdir(parents=True, exist_ok=True)
+    subjects = [{"name": "result.txt", "digest": {"sha256": "0" * 64}}]
+    statements = [
+        verifier.statement(subjects, verifier.PROVENANCE, {}),
+        *(verifier.statement(subjects, verifier.TEST_RESULT, {}) for _ in range(checks)),
+        verifier.statement(subjects, verifier.CYCLONEDX, {"specVersion": "1.5", "components": []}),
+    ]
+    bundle = directory / "receipt.intoto.jsonl"
+    bundle.write_bytes(verifier.bundle_bytes(statements))
+    (directory / "outputs").mkdir(exist_ok=True)
+    (directory / "outputs/result.txt").write_text("result\n")
+    return bundle
 
 
 def _factory_pass(logger, root: Path, clock: _Clock) -> None:
@@ -426,7 +431,7 @@ def test_default_story_names_the_five_ideas(tmp_path, monkeypatch):
         "[+] COMPLETE   2/2 contracts   2/2 checks   9.0s",
         "Outputs   factory/.apm/chains/chain-1/artifacts/",
         "          provenance  in-toto + SLSA v1",
-        "Next      apmx audit factory/.apm/chains/chain-1/receipt",
+        "Next      apmx audit factory/.apm/chains/chain-1/receipt.intoto.jsonl",
     ):
         assert fact in text
     for retired in ("Evidence", "Record", "Directory", "Found input", "Working copy", "Running"):
@@ -466,7 +471,7 @@ def test_verbose_keeps_todays_detail_behind_the_flag(tmp_path, monkeypatch):
         "Check identity > Independent fixture check: pass",
         "[+] PASS identity",
         "Record: factory/.apm/chains/chain-1/record.json",
-        "Summary: factory/.apm/chains/chain-1/receipt/summary.md",
+        "Receipt bundle (in-toto JSON Lines): factory/.apm/chains/chain-1/receipt.intoto.jsonl",
     ):
         assert detail in verbose
         assert detail not in default
@@ -512,7 +517,7 @@ def test_missing_receipt_degrades_without_noise(tmp_path, monkeypatch):
         logger = ContractLogger()
         logger.evidence_package(_receipt(tmp_path / "later", checks=1))
         assert "apmx audit" not in terminal.text
-        assert "Next      read " in terminal.text
+        assert "Next" not in terminal.text
 
 
 def test_rerun_hint_keeps_the_users_selection_and_drops_factory_consent(tmp_path):
@@ -565,7 +570,7 @@ def test_real_no_dependency_receipt_renders_and_its_next_command_verifies(tmp_pa
     monkeypatch.chdir(tmp_path)
     run = CliRunner().invoke(main, ["job.contract.md", "--on", "copilot", "--allow-host-access"])
     assert run.exit_code == 0, run.output
-    (receipt,) = tmp_path.glob(".apm/runs/*/receipt")
+    (receipt,) = tmp_path.glob(".apm/runs/*/receipt.intoto.jsonl")
     tail = run.output[run.output.index("[+] COMPLETE") :]
     tail = re.sub(r"\d{8}T\d{6}Z-[0-9a-f]{12}", "<run>", tail)
     tail = re.sub(r"   [0-9.]+s\n", "   <t>\n", tail, count=1)

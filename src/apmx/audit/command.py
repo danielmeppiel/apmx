@@ -1,8 +1,9 @@
-"""``apmx audit``: verify a receipt row by row and say exactly what it proves.
+"""``apmx audit``: verify a factory delivery row by row and say exactly what it proves.
 
-With no arguments it audits the receipt this context implies: the newest
-COMPLETE run under ``./.apm/`` locally, or the receipt a GitHub pull request
-adds, with that PR's change bound to it. The policy is discovered like
+With no arguments it audits what this context implies: the newest COMPLETE
+run's ``receipt.intoto.jsonl`` under ``./.apm/`` locally, or, in a GitHub pull
+request (which carries code only), the signed attestations its changed files
+are subjects of, looked up by digest. The policy is discovered like
 ``apm audit`` (see :mod:`apmx.audit.policy`). Every flag is an override.
 """
 
@@ -12,15 +13,17 @@ import json
 import os
 import stat
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import click
 
 from . import change as changes
+from . import explain as explanation
 from . import identity as identities
-from . import patches, verifier
 from . import policy as policies
+from . import stages, verifier
 from .ingredients import FAIL, PASS, UNAVAILABLE, WARN, audit_ingredients
 
 SCHEMA = "apmx-audit/1"
@@ -97,11 +100,9 @@ def _rehash_outputs(receipt: verifier.Receipt, directory: Path) -> tuple[bool, s
     expected = verifier.delivered_outputs(receipt)
     root = directory.absolute()
     for relative, digest in sorted(expected.items()):
-        path = root
-        for part in PurePosixPath(relative).parts:
-            path = path / part
-            if path.is_symlink():
-                return False, f"{relative} is a symlink in --outputs; refused"
+        path = _local(root, relative)
+        if path is None:
+            return False, f"{relative} is a symlink in --outputs; refused"
         try:
             info = path.stat()
         except FileNotFoundError:
@@ -112,6 +113,15 @@ def _rehash_outputs(receipt: verifier.Receipt, directory: Path) -> tuple[bool, s
             return False, f"{relative} differs from its receipt subject (SHA-256)"
     count = len(expected)
     return True, f"{count}/{count} delivered files match receipt subjects (re-hashed)"
+
+
+def _local(root: Path, relative: str) -> Path | None:
+    path = root
+    for part in PurePosixPath(relative).parts:
+        path = path / part
+        if path.is_symlink():
+            return None
+    return path
 
 
 def _policy_row(audit: Audit, resolution: policies.Resolution) -> None:
@@ -128,30 +138,7 @@ def _policy_row(audit: Audit, resolution: policies.Resolution) -> None:
     audit.facts.update(resolution.facts)
 
 
-def run_audit(
-    receipt_path: Path,
-    *,
-    outputs: Path | None = None,
-    policy: policies.Resolution | None = None,
-    offline: bool = False,
-    display: str | None = None,
-    change: changes.Change | None = None,
-    prefix: str = "",
-    selection: str | None = None,
-) -> Audit:
-    root = receipt_path.absolute()
-    if not root.is_dir() or not (root / "index.json").is_file():
-        raise ReceiptMissing(
-            f"No receipt at {_ascii(display or receipt_path)}: expected a receipt directory "
-            "containing index.json (for example .apm/chains/<id>/receipt)."
-        )
-    if outputs is not None and not outputs.is_dir():
-        raise ReceiptMissing(f"--outputs {_ascii(outputs)} is not a directory.")
-    resolution = policy or policies.Resolution("none", "none found", facts={"policy": None})
-    rules = resolution.policy if resolution.applies else None
-    audit = Audit(display or str(receipt_path), selection=selection)
-    _policy_row(audit, resolution)
-    receipt, failure = verifier.inspect(root)
+def _structural(audit: Audit, receipt: verifier.Receipt, failure: verifier.Failure | None) -> None:
     failed_at = failure.row if failure else None
     for name in verifier.ROWS:
         if failure is not None and name == failed_at:
@@ -161,43 +148,26 @@ def run_audit(
         else:
             audit.rows[name] = Row(name, "pass", _ascii(receipt.details[name]))
     audit.facts.update(receipt.facts)
-    structural = failure is None
+    if failure is None:
+        audit.facts["stages"] = stages.factory_stages(receipt)
+
+
+def _policy_rows(
+    audit: Audit,
+    receipt: verifier.Receipt,
+    resolution: policies.Resolution,
+    *,
+    structural: bool,
+    offline: bool,
+) -> None:
+    """Factory allow-list, Ingredients and Revocation: the same in every route."""
+    rules = resolution.policy if resolution.applies else None
     if structural and rules is not None:
         base = audit.rows["Factory"].detail
-        verdict = policies.evaluate_factory(rules, receipt.facts["definitionSha256"], base)
+        verdict = policies.evaluate_factory(rules, receipt.definition_sha256, base)
         audit.verdict("Factory", verdict, [] if rules.allow is None else [base])
         if rules.allow is None:
             audit.rows["Factory"] = Row("Factory", "pass", base)
-    if structural and outputs is not None:
-        try:
-            matched, detail = _rehash_outputs(receipt, outputs)
-        except (OSError, ValueError) as exc:
-            matched, detail = False, f"--outputs could not be read ({_ascii(exc)})"
-        audit.facts["outputsRehashed"] = matched
-        if matched:
-            audit.rows["Outputs"].notes.append(audit.rows["Outputs"].detail)
-            audit.rows["Outputs"].detail = _ascii(detail)
-        else:
-            audit.fail("Outputs", _ascii(detail))
-    elif structural and change is not None:
-        try:
-            matched, detail, notes, facts = changes.bind(
-                change,
-                prefix,
-                verifier.delivered_outputs(receipt),
-                changes.receipt_inputs(receipt.index),
-                patches.receipt_patches(receipt),
-            )
-        except (changes.ChangeUnavailable, OSError, ValueError) as exc:
-            audit.incomplete("Outputs", f"the PR change could not be read ({_ascii(exc)})")
-        else:
-            audit.facts["change"] = {**facts, "bound": matched}
-            if matched:
-                audit.rows["Outputs"] = Row(
-                    "Outputs", "pass", _ascii(detail), [*notes, audit.rows["Outputs"].detail]
-                )
-            else:
-                audit.fail("Outputs", _ascii(detail), notes)
     if audit.result == "invalid":
         audit.rows["Ingredients"] = Row(
             "Ingredients", "skipped", "not evaluated (receipt invalid; APM not launched)"
@@ -234,28 +204,134 @@ def run_audit(
         audit.rows["Revocation"] = Row("Revocation", "info", "policy has no factories section")
     else:
         audit.verdict("Revocation", policies.evaluate_revocation(rules, list(receipt.bindings)))
-    _identity(audit, root, receipt, rules, structural=structural, offline=offline)
+
+
+def _bundle_binding(receipt: verifier.Receipt) -> identities.Accept:
+    """A summary must bind exactly this bundle's statements, files and definition."""
+    lines = sorted(receipt.facts["lineDigests"])
+
+    def accept(summary: dict) -> str | None:
+        predicate = summary.get("predicate") or {}
+        try:
+            named = sorted(
+                item["digest"]["sha256"] for item in predicate.get("inputAttestations") or []
+            )
+            verifier.vsa_prefix(summary, receipt.subjects)
+        except (KeyError, TypeError, ValueError):
+            return "summary does not name this delivery's files"
+        if named != lines:
+            return "summary binds different statements than this receipt"
+        if ((predicate.get("policy") or {}).get("digest") or {}).get(
+            "sha256"
+        ) != receipt.definition_sha256:
+            return "summary names a different factory definition"
+        return None
+
+    return accept
+
+
+def run_audit(
+    receipt_path: Path,
+    *,
+    outputs: Path | None = None,
+    policy: policies.Resolution | None = None,
+    offline: bool = False,
+    display: str | None = None,
+    change: changes.Change | None = None,
+    prefix: str = "",
+    selection: str | None = None,
+    run: identities.Runner | None = None,
+) -> Audit:
+    """Audit an explicit bundle (the offline route), optionally binding a PR change."""
+    path = receipt_path.absolute()
+    if path.is_dir():
+        path = path / verifier.BUNDLE
+    if not path.is_file():
+        raise ReceiptMissing(
+            f"No receipt at {_ascii(display or receipt_path)}: expected {verifier.BUNDLE} "
+            "(for example .apm/chains/<id>/receipt.intoto.jsonl)."
+        )
+    if outputs is not None and not outputs.is_dir():
+        raise ReceiptMissing(f"--outputs {_ascii(outputs)} is not a directory.")
+    resolution = policy or policies.Resolution("none", "none found", facts={"policy": None})
+    rules = resolution.policy if resolution.applies else None
+    audit = Audit(display or str(receipt_path), selection=selection)
+    _policy_row(audit, resolution)
+    receipt, failure = verifier.inspect(path)
+    _structural(audit, receipt, failure)
+    structural = failure is None
+    if structural and outputs is not None:
+        try:
+            matched, detail = _rehash_outputs(receipt, outputs)
+        except (OSError, ValueError) as exc:
+            matched, detail = False, f"--outputs could not be read ({_ascii(exc)})"
+        audit.facts["outputsRehashed"] = matched
+        if matched:
+            audit.rows["Outputs"].notes.append(audit.rows["Outputs"].detail)
+            audit.rows["Outputs"].detail = _ascii(detail)
+        else:
+            audit.fail("Outputs", _ascii(detail))
+    elif structural and change is not None:
+        try:
+            matched, detail, notes, facts = changes.bind(change, prefix, receipt)
+        except (changes.ChangeUnavailable, OSError, ValueError) as exc:
+            audit.incomplete("Outputs", f"the PR change could not be read ({_ascii(exc)})")
+        else:
+            audit.facts["change"] = {**facts, "bound": matched}
+            if matched:
+                audit.rows["Outputs"] = Row(
+                    "Outputs", "pass", _ascii(detail), [*notes, audit.rows["Outputs"].detail]
+                )
+            else:
+                audit.fail("Outputs", _ascii(detail), notes)
+    _policy_rows(audit, receipt, resolution, structural=structural, offline=offline)
+    artifact = None
+    if structural:
+        for root in (outputs, path.parent / verifier.OUTPUTS):
+            if root is None or not root.is_dir():
+                continue
+            for name, digest in sorted(receipt.subjects.items()):
+                candidate = _local(root.absolute(), name)
+                if (
+                    candidate is not None
+                    and candidate.is_file()
+                    and verifier.sha256(candidate.read_bytes()) == digest
+                ):
+                    artifact = candidate
+                    break
+            if artifact is not None:
+                break
+    _identity(
+        audit,
+        rules,
+        structural=structural,
+        offline=offline,
+        artifact=artifact,
+        accept=_bundle_binding(receipt) if structural else None,
+        run=run,
+    )
     return audit
 
 
 def _identity(
     audit: Audit,
-    root: Path,
-    receipt: verifier.Receipt,
     rules: policies.FactoryPolicy | None,
     *,
     structural: bool,
     offline: bool,
-) -> None:
-    """Verify a signature only against the workflows the policy trusts."""
+    artifact: Path | None,
+    accept: identities.Accept | None,
+    run: identities.Runner | None = None,
+) -> identities.Identity | None:
+    """Verify a signed summary only against the workflows the policy trusts."""
     if rules is None:
         audit.rows["Identity"] = Row(
             "Identity", "warn", "unsigned: proves content binding, not who ran it"
         )
-        return
+        return None
     if not structural:
         audit.rows["Identity"] = Row("Identity", "skipped", "not evaluated (earlier failure)")
-        return
+        return None
     if not rules.signers:
         detail = "not authenticated: policy names no factories.signers"
         verdict = policies.evaluate_unsigned(
@@ -265,16 +341,26 @@ def _identity(
             audit.rows["Identity"] = Row("Identity", "warn", detail)
         else:
             audit.verdict("Identity", verdict)
-        return
+        return None
     if offline:
         result = identities.Identity("unavailable", "signature not checked (offline)")
+    elif artifact is None or accept is None:
+        result = identities.Identity(
+            "unavailable", "signature not checked: no delivered file to look it up by (--outputs)"
+        )
     else:
         result = identities.verify(
-            root / "index.json",
-            str(receipt.facts["definitionSha256"]),
+            artifact,
+            accept,
             rules.signers,
             default_repository=identities.repository(policies.repository_root(Path.cwd())),
+            run=run,
         )
+    _identity_row(audit, rules, result)
+    return result
+
+
+def _identity_row(audit: Audit, rules: policies.FactoryPolicy, result: identities.Identity) -> None:
     audit.facts["identity"] = {"status": result.status, **result.facts}
     notes = [_ascii(note) for note in result.notes]
     if result.status == "signed":
@@ -292,6 +378,148 @@ def _identity(
         audit.incomplete("Identity", _ascii(result.detail), notes)
     else:
         audit.rows["Identity"] = Row("Identity", "warn", _ascii(result.detail), notes)
+
+
+def _not_evaluated(audit: Audit, reason: str) -> None:
+    for name in DISPLAY:
+        if name not in audit.rows:
+            audit.rows[name] = Row(name, "skipped", reason)
+
+
+def run_gate(
+    change: changes.Change,
+    *,
+    policy: policies.Resolution,
+    offline: bool = False,
+    run: identities.Runner | None = None,
+) -> Audit:
+    """Audit a code-only PR from the attestation store, by its files' digests."""
+    audit = Audit(f"attestations for {change.pull.label}", selection="looked up by file digest")
+    _policy_row(audit, policy)
+    rules = policy.policy if policy.applies else None
+    if policy.status == "unloadable":
+        _not_evaluated(audit, "not evaluated (policy could not be loaded)")
+        return audit
+    if rules is None or not rules.signers:
+        audit.incomplete(
+            "Identity",
+            "a PR carries code only: its delivery is looked up from signed attestations, "
+            "and the policy names no factories.signers",
+        )
+        _not_evaluated(audit, "not evaluated (no signer to look attestations up from)")
+        return audit
+    present = sorted(path for path, status in change.changed.items() if status != "D")
+    if not present:
+        audit.fail("Outputs", f"{change.pull.label} adds or modifies no file to look up")
+        _not_evaluated(audit, "not evaluated (nothing to look up)")
+        return audit
+    head = change.files(change.pull.head, present)
+    wanted = {path: verifier.sha256(raw) for path, (_, raw) in head.items() if raw is not None}
+    if set(wanted) != set(present):
+        missing = min(set(present) - set(wanted))
+        audit.fail("Outputs", f"{change.pull.label} changes {missing} into a non-regular file")
+        _not_evaluated(audit, "not evaluated (earlier failure)")
+        return audit
+
+    def covers(summary: dict) -> str | None:
+        subjects = {
+            item.get("name"): (item.get("digest") or {}).get("sha256")
+            for item in summary.get("subject") or []
+            if isinstance(item, dict)
+        }
+        missing = [path for path, digest in wanted.items() if subjects.get(path) != digest]
+        return f"summary does not cover {missing[0]}" if missing else None
+
+    with tempfile.TemporaryDirectory(prefix="apmx-gate-") as temporary:
+        artifact = Path(temporary) / "artifact"
+        result = identities.Identity("unavailable", "signature not checked (offline)")
+        # A summary is looked up by a changed file's digest; files the delivery does not
+        # name have none, so try a few before concluding that nothing covers the PR.
+        for first in present[:10]:
+            artifact.write_bytes(head[first][1])
+            if offline:
+                break
+            result = identities.verify(
+                artifact,
+                covers,
+                rules.signers,
+                default_repository=identities.repository(change.root),
+                run=run,
+            )
+            if result.status != "unsigned" or result.notes:
+                break
+        if result.status != "signed":
+            if result.status == "unsigned":
+                uncovered = [note for note in result.notes if "does not cover" in note]
+                result.detail = (
+                    f"no PASSED verification summary from factories.signers covers every "
+                    f"changed file ({uncovered[0].rsplit('does not cover ', 1)[1].rstrip(')')} "
+                    f"is not a delivered file)"
+                    if uncovered
+                    else "no PASSED verification summary from factories.signers covers the "
+                    "changed files"
+                )
+                audit.facts["identity"] = {"status": result.status, **result.facts}
+                audit.fail("Identity", _ascii(result.detail), [_ascii(n) for n in result.notes])
+            else:
+                _identity_row(audit, rules, result)
+                if audit.result == "valid":
+                    # Nothing in a code-only PR is bound until a signed summary is found.
+                    audit.incomplete(
+                        "Identity", _ascii(result.detail), audit.rows["Identity"].notes
+                    )
+            _not_evaluated(audit, "not evaluated (no signed delivery covers this PR)")
+            return audit
+        try:
+            carriers = identities.statements(artifact, result, (verifier.BUNDLE_TYPE,), run=run)
+        except (OSError, ValueError) as exc:
+            _identity_row(audit, rules, result)
+            audit.incomplete("Integrity", f"statements could not be fetched ({_ascii(exc)})")
+            _not_evaluated(audit, "not evaluated (statements unavailable)")
+            return audit
+    _identity_row(audit, rules, result)
+    by_digest = {}
+    for carrier in carriers:
+        lines = (carrier.get("predicate") or {}).get("lines")
+        for item in lines if isinstance(lines, list) else []:
+            try:
+                normalized = verifier.normalized(item)
+            except (KeyError, TypeError, ValueError):
+                continue
+            by_digest[verifier.line_digest(normalized)] = normalized
+    summary = verifier.normalized(result.summary)
+    statements = []
+    for entry in summary["predicate"].get("inputAttestations") or []:
+        digest = (entry.get("digest") or {}).get("sha256")
+        if digest not in by_digest:
+            audit.fail(
+                "Integrity",
+                f"input attestation {_ascii(entry.get('uri') or digest)} is not in the "
+                "signer's attestation store",
+            )
+            _not_evaluated(audit, "not evaluated (earlier failure)")
+            return audit
+        statements.append(by_digest[digest])
+    receipt, failure = verifier.inspect_statements([*statements, summary])
+    _structural(audit, receipt, failure)
+    structural = failure is None
+    if structural:
+        try:
+            matched, detail, notes, facts = changes.bind(
+                change, str(receipt.facts["subjectPrefix"]), receipt
+            )
+        except (changes.ChangeUnavailable, OSError, ValueError) as exc:
+            audit.incomplete("Outputs", f"the PR change could not be read ({_ascii(exc)})")
+        else:
+            audit.facts["change"] = {**facts, "bound": matched}
+            if matched:
+                audit.rows["Outputs"] = Row(
+                    "Outputs", "pass", _ascii(detail), [*notes, audit.rows["Outputs"].detail]
+                )
+            else:
+                audit.fail("Outputs", _ascii(detail), notes)
+    _policy_rows(audit, receipt, policy, structural=structural, offline=offline)
+    return audit
 
 
 def to_json(audit: Audit) -> str:
@@ -322,9 +550,7 @@ def to_sarif(audit: Audit) -> str:
     from apmx.version import get_version
 
     location = {
-        "physicalLocation": {
-            "artifactLocation": {"uri": f"{PurePosixPath(audit.receipt).as_posix()}/index.json"}
-        }
+        "physicalLocation": {"artifactLocation": {"uri": PurePosixPath(audit.receipt).as_posix()}}
     }
     results = [
         {
@@ -415,29 +641,36 @@ def to_text(audit: Audit, *, color: bool = False) -> str:
 
 
 AUDIT_HELP = (
-    "Verify a receipt: integrity (SHA-256 index), standards (in-toto Statement v1, "
-    "SLSA Provenance v1, CycloneDX 1.5), factory definition, checks, ingredients, "
-    "revocation, outputs and identity.\n\n"
-    "With no arguments it picks the receipt and policy for you. Locally: the newest "
-    "COMPLETE run under ./.apm/. In a GitHub pull request: the receipt the PR adds, "
-    "with the PR's change (merge-base..head) bound to its outputs. The policy is "
-    "discovered like `apm audit`: --policy, else the repository's apm-policy.yml "
-    "(the PR base copy in a PR), else the org policy from the git remote. Its "
-    "`factories` section (apmx's own) adds the Factory, Revocation and Identity "
+    "Verify a factory delivery: integrity, standards (in-toto Statement v1, SLSA "
+    "Provenance v1, in-toto Test Result, CycloneDX 1.5, SLSA VSA v1), factory "
+    "definition, checks, ingredients, revocation, outputs and identity.\n\n"
+    "With no arguments it picks what to audit for you. Locally: the newest COMPLETE "
+    "run's receipt.intoto.jsonl under ./.apm/, with its outputs/ re-hashed. In a GitHub "
+    "pull request, which carries code only: the PR's changed files (merge-base..head) are "
+    "looked up by SHA-256 in the attestation store of the policy's factories.signers; "
+    "every changed file must be a subject of one PASSED verification summary from an "
+    "allowed signer, which binds the receipt statements by digest; files the PR touches "
+    "must match the recorded before-images at the PR base. RECEIPT is the offline route: "
+    "a receipt.intoto.jsonl (or its run directory), with --outputs DIR.\n\n"
+    "The policy is discovered like `apm audit`: --policy, else the repository's "
+    "apm-policy.yml (the PR base copy in a PR), else the org policy from the git remote. "
+    "Its `factories` section (apmx's own) adds the Factory, Revocation and Identity "
     "rules; APM's keys are enforced by APM. No policy is reported, never assumed.\n\n"
-    "Ingredients are audited by the bundled pinned APM: the receipt's apm.yml and "
+    "Ingredients are audited by the bundled pinned APM: the receipt's inline apm.yml and "
     "apm.lock.yaml are reinstalled with `apm install --frozen` in a temporary project "
     "and checked with `apm audit --ci`.\n\n"
+    "--explain [factory|stages|checks|ingredients|outputs] prints what a receipt records; "
+    "--export abom writes its CycloneDX 1.5 inventory as a standalone file.\n\n"
     "Exit codes: 0 valid; 1 invalid or policy failure; 2 usage error, missing or "
-    "ambiguous receipt, unloadable policy, or ingredients that could not be audited "
-    "(network/auth); use --offline to skip them."
+    "ambiguous receipt, unloadable policy, or ingredients or signatures that could not be "
+    "checked (network/auth); use --offline to skip them."
 )
 
 
 def _select(
     receipt: Path | None, cwd: Path, pull: changes.PullRequest | None
-) -> tuple[Path, str, str | None, changes.Change | None, str]:
-    """Return (receipt, display, selection note, PR change, outputs prefix)."""
+) -> tuple[Path | None, str, str | None, changes.Change | None, str]:
+    """Return (bundle or None for the PR gate, display, selection note, PR change, prefix)."""
     change = None
     root = policies.repository_root(cwd)
     if pull is not None:
@@ -446,32 +679,40 @@ def _select(
         except changes.ChangeUnavailable as exc:
             raise ReceiptMissing(f"{pull.label} change unavailable: {_ascii(exc)}") from exc
     if receipt is not None:
-        prefix = changes.workspace_prefix(receipt, root) if change else None
-        return receipt, str(receipt), None, change, prefix or ""
+        bundle = receipt / verifier.BUNDLE if receipt.is_dir() else receipt
+        prefix = changes.workspace_prefix(bundle, root) if change else None
+        return bundle, str(receipt), None, change, prefix or ""
     if change is not None:
-        found = change.receipts()
-        if not found:
-            raise ReceiptMissing(
-                f"{pull.label} adds no receipt (.apm/<runs|chains|controllers>/<id>/receipt). "
-                "Commit the factory's receipt with its outputs, or pass RECEIPT_DIR."
-            )
-        if len(found) > 1:
-            raise ReceiptMissing(
-                f"{pull.label} adds {len(found)} receipts ({', '.join(found[:3])}); "
-                "pass the one to audit as RECEIPT_DIR."
-            )
-        path = root / found[0]
-        prefix = changes.workspace_prefix(path, root) or ""
-        return path, changes.relative_display(path, cwd), f"added by {pull.label}", change, prefix
+        return None, f"attestations for {pull.label}", None, change, ""
     latest = changes.latest_local(cwd)
     if latest is None:
         raise ReceiptMissing(
-            "No receipt under ./.apm/: run a factory first (every COMPLETE run delivers one), "
-            "or pass RECEIPT_DIR."
+            f"No receipt under ./.apm/: run a factory first (every COMPLETE run writes "
+            f"{verifier.BUNDLE}), or pass RECEIPT."
         )
     path, count = latest
     note = "newest COMPLETE run" if count == 1 else f"newest of {count} COMPLETE runs"
     return path, changes.relative_display(path, cwd), note, None, ""
+
+
+def _read_only(bundle: Path, explain: str | None, export: str | None, output: Path | None) -> int:
+    """--explain / --export: only for a bundle that verifies structurally."""
+    receipt, failure = verifier.inspect(bundle)
+    if failure is not None:
+        click.echo(f"[x] {failure.row}: {_ascii(failure)}", err=True)
+        return EXIT_INVALID
+    if export is not None:
+        raw = explanation.export_abom(receipt)
+        if output is None:
+            click.echo(raw.decode("ascii"), nl=False)
+        else:
+            if output.exists() or output.is_symlink():
+                raise click.UsageError(f"{output} exists; refusing to overwrite it.")
+            output.write_bytes(raw)
+            click.echo(f"[+] CycloneDX 1.5 inventory written to {_ascii(output)}")
+        return EXIT_VALID
+    click.echo(explanation.explain(receipt, explain or "all"))
+    return EXIT_VALID
 
 
 @click.command(
@@ -479,12 +720,12 @@ def _select(
     help=AUDIT_HELP,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
-@click.argument("receipt", required=False, type=click.Path(path_type=Path), metavar="[RECEIPT_DIR]")
+@click.argument("receipt", required=False, type=click.Path(path_type=Path), metavar="[RECEIPT]")
 @click.option(
     "--outputs",
     type=click.Path(path_type=Path),
     metavar="DIR",
-    help="Override: re-hash delivered files in DIR instead of binding the PR change.",
+    help="Re-hash the delivered files in DIR against the receipt (offline route).",
 )
 @click.option(
     "--policy",
@@ -495,8 +736,8 @@ def _select(
     "--offline",
     is_flag=True,
     help=(
-        "Do not launch APM or use the network: ingredients and org policy are reported "
-        "as not checked (a warning). Only a local policy file is read."
+        "Do not launch APM or use the network: ingredients, signatures and org policy are "
+        "reported as not checked. Only a local policy file is read."
     ),
 )
 @click.option(
@@ -507,6 +748,28 @@ def _select(
     show_default=True,
     help="Output format; json and sarif are for CI.",
 )
+@click.option(
+    "--explain",
+    type=click.Choice([*explanation.TOPICS, "all"]),
+    is_flag=False,
+    flag_value="all",
+    default=None,
+    help="Print what the receipt records (default: all topics) instead of auditing it.",
+)
+@click.option(
+    "--export",
+    type=click.Choice(["abom"]),
+    default=None,
+    help="Write the receipt's CycloneDX 1.5 inventory (stdout, or -o FILE).",
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    metavar="FILE",
+    help="With --export: the file to write.",
+)
 @click.pass_context
 def audit_command(
     ctx: click.Context,
@@ -515,6 +778,9 @@ def audit_command(
     policy: str | None,
     offline: bool,
     output_format: str,
+    explain: str | None,
+    export: str | None,
+    output: Path | None,
 ) -> None:
     cwd = Path.cwd()
     if offline and policy:
@@ -524,6 +790,19 @@ def audit_command(
                 "--offline can only read a local --policy file; org, owner/repo and URLs need "
                 "the network."
             )
+    if output is not None and export is None:
+        raise click.UsageError("-o/--output is only used with --export.")
+    if explain is not None or export is not None:
+        if receipt is None:
+            latest = changes.latest_local(cwd)
+            if latest is None:
+                raise ReceiptMissing("No receipt under ./.apm/: pass RECEIPT.")
+            bundle = latest[0]
+        else:
+            bundle = receipt / verifier.BUNDLE if receipt.is_dir() else receipt
+        if not bundle.is_file():
+            raise ReceiptMissing(f"No receipt at {_ascii(bundle)}.")
+        ctx.exit(_read_only(bundle, explain, export, output))
     pull = changes.pull_request()
     resolution = None
     try:
@@ -534,16 +813,21 @@ def audit_command(
             offline=offline,
             base=change.pull.base if change is not None else None,
         )
-        result = run_audit(
-            path,
-            outputs=outputs,
-            policy=resolution,
-            offline=offline,
-            display=display,
-            change=None if outputs is not None else change,
-            prefix=prefix,
-            selection=selection,
-        )
+        if path is None:
+            result = run_gate(change, policy=resolution, offline=offline)
+        else:
+            local = selection is not None and outputs is None
+            sibling = path.parent / verifier.OUTPUTS
+            result = run_audit(
+                path,
+                outputs=sibling if local and sibling.is_dir() else outputs,
+                policy=resolution,
+                offline=offline,
+                display=display,
+                change=None if outputs is not None else change,
+                prefix=prefix,
+                selection=selection,
+            )
     except ReceiptMissing as exc:
         if output_format == "json":
             click.echo(

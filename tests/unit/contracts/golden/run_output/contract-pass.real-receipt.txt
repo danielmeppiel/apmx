@@ -2,10 +2,11 @@
 
 Outputs   .apm/runs/<run>/artifacts/
           result.txt
-Receipt   .apm/runs/<run>/receipt/
+Receipt   .apm/runs/<run>/receipt.intoto.jsonl
           provenance  in-toto + SLSA v1
           checks      in-toto test-result (1)
           inventory   CycloneDX 1.5 (0 components)
+          outputs     1 delivered file in outputs/
           unsigned: binds content, not identity; review before sharing
 
-Next      apmx audit .apm/runs/<run>/receipt
+Next      apmx audit .apm/runs/<run>/receipt.intoto.jsonl

@@ -1,134 +1,156 @@
 # Receipts: portable execution evidence
 
-Every COMPLETE contract, factory or repair controller exports a standards-based
-**receipt**, with or without APM dependencies. *Outputs* are the delivered
-files; the *receipt* is the standards bundle that binds them to the factory,
-its ingredients and its checks. When APM dependencies were installed, APM
-provides the dependency inventory; APMX projects recorded production and
-checker observations. The export neither runs a model nor reruns checks.
+Every COMPLETE contract, factory or repair controller writes a **receipt** next
+to its record (`.apm/runs/<id>/`, `.apm/chains/<id>/` or
+`.apm/controllers/<id>/`). It has three parts, each with one job:
+
+| Part | What it is | Who needs it |
+| --- | --- | --- |
+| `receipt.intoto.jsonl` | One standard in-toto bundle: one DSSE envelope per line, each an in-toto Statement v1 | everyone; `apmx audit` |
+| `outputs/` | The delivered files, at their project paths | the user, the PR |
+| `evidence/sha256/<hex>` | Content-addressed, deduplicated material the statements name by digest | forensics, `apmx check` replay; optional for verification |
+
 REJECTED and HALTED runs get no receipt: a receipt attests a COMPLETE result
 only. Their saved attempt outputs and check logs stay under `.apm/runs/<id>/`.
+The export neither runs a model nor reruns checks. Measured on the real
+five-stage checkout factory (v0.6.0, Copilot): v1 wrote 232 files (1.3 MB);
+v2 writes 1 bundle (37 KB, 11 lines), 4 delivered files and 31 evidence blobs
+(188 KB).
 
-```mermaid
-flowchart LR
-  APM["APM manifest + lock"] --> BOM["CycloneDX inventory"]
-  RUN["APMX finalized records"] --> PROD["in-toto + SLSA production"]
-  RUN --> TEST["in-toto Test Results"]
-  BOM --> PACK["Portable files + index"]
-  PROD --> PACK
-  TEST --> PACK
+## What is inside `receipt.intoto.jsonl`
+
+Locally each envelope has `"payloadType": "application/vnd.in-toto+json"` and
+`"signatures": []`, which is honest about being unsigned. In CI the bundle and
+a verification summary that binds every line are signed with Sigstore and
+stored in GitHub's attestation store (see
+[signed deliveries](audit.md#signed-deliveries)). **Every statement names
+the same subjects: the delivered files.** For a factory that produces patches
+(`git diff --full-index`, as the `export_changes` tool writes), those are the
+files the patches produce, applied in stage order to the files the attempt
+started from, not the `.diff` itself; otherwise the declared outputs.
+
+| Line | Predicate type | Says |
+| --- | --- | --- |
+| 1 | `https://slsa.dev/provenance/v1` | built by this factory, from these inputs, by this harness and model |
+| 2..n | `https://in-toto.io/attestation/test-result/v0.1`, one per check of the final candidate | check X ran: PASSED |
+| last | `https://cyclonedx.org/bom` (CycloneDX 1.5, inline) | the APM packages and skills the agents were given |
+| (CI) | `https://slsa.dev/verification_summary/v1` | the verifier checked every other line: PASSED |
+
+Real lines from the v0.6.0 checkout run, shortened:
+
+```json
+{"_type": "https://in-toto.io/Statement/v1",
+ "subject": [{"name": "src/pricing.py", "digest": {"sha256": "e6981e53e1ed..."}}, "..."],
+ "predicateType": "https://slsa.dev/provenance/v1",
+ "predicate": {
+  "buildDefinition": {
+   "buildType": "https://github.com/danielmeppiel/apmx/build/factory/v2",
+   "externalParameters": {"factory": {"package": "danielmeppiel/apmx-demo-factory#v1.0.0",
+     "commit": "e8e9c5a7b1f1...", "definition": {"sha256": "0bec0549b9af..."}}},
+   "internalParameters": {"stages": [
+     {"contract": "build", "contractSha256": "8989452b4474...", "harness": "copilot",
+      "harnessVersion": null, "requestedModel": null, "observedModels": ["gpt-6.1-sol"],
+      "attempts": 1, "budget": {"max_attempts": 3, "max_seconds": 600},
+      "checks": [{"name": "shipping-examples", "command": "python3 -I -B checks/acceptance.py changes.diff"}, "..."],
+      "outputs": [{"name": "changes.diff", "digest": {"sha256": "d72aafd228f1..."}}, "..."]}, "..."]},
+   "resolvedDependencies": [
+     {"name": "base", "digest": {"gitTree": "dabee76cced9..."},
+      "annotations": {"apmx.role": "base", "created": ["tests/test_free_shipping.py"], "deleted": []}},
+     {"name": "src/pricing.py", "digest": {"sha256": "b11e523c3a2b..."}, "annotations": {"apmx.role": "before-image"}},
+     {"name": "request.md", "digest": {"sha256": "1808ed8ffe32..."}, "annotations": {"apmx.role": "input", "evidence": "evidence/sha256/1808ed8ffe32..."}},
+     {"name": "python-testing-patterns", "uri": "pkg:generic/agents@46891e7e...", "digest": {"sha256": "<SKILL.md>"}, "annotations": {"apmx.role": "capability", "bomRef": "..."}},
+     {"name": "apm.lock.yaml", "digest": {"sha256": "2aa9ff56bb6d..."}, "content": "<base64>", "annotations": {"apmx.role": "apm-lock"}}]},
+  "runDetails": {
+   "builder": {"id": "https://github.com/danielmeppiel/apmx", "version": {"apmx": "0.7.0", "apm": "0.33.0"}},
+   "metadata": {"invocationId": "20261021T184925Z-67361d3ba1d4", "startedOn": "...", "finishedOn": "..."},
+   "byproducts": [
+     {"name": "definition.json", "digest": {"sha256": "0bec0549b9af..."}, "annotations": {"apmx.role": "definition", "evidence": "evidence/sha256/0bec0549b9af..."}},
+     {"name": "transcripts/<run>.log", "digest": {"sha256": "..."}, "annotations": {"apmx.role": "transcript", "evidence": "..."}},
+     {"name": "attempts/<run>.json", "digest": {"sha256": "..."}, "annotations": {"apmx.role": "rejected-attempt", "evidence": "..."}}]}}}
 ```
 
-## What to inspect
+```json
+{"_type": "https://in-toto.io/Statement/v1",
+ "subject": [{"name": "src/pricing.py", "digest": {"sha256": "e6981e53e1ed..."}}, "..."],
+ "predicateType": "https://in-toto.io/attestation/test-result/v0.1",
+ "predicate": {"result": "PASSED",
+  "passedTests": ["Free delivery at 5000 cents", "below", "above", "..."],
+  "configuration": [{"name": "checks/acceptance.py", "digest": {"sha256": "8a94940e06d8..."},
+    "annotations": {"check": "shipping-examples", "stage": "build",
+      "command": "python3 -I -B checks/acceptance.py changes.diff",
+      "factoryDefinition": "sha256:0bec0549b9af...",
+      "scope": "Observed checks over the reconstructed candidate files; not a correctness guarantee."}}],
+  "url": "evidence/sha256/2ddc3521743e..."}}
+```
 
-| File | Question it answers |
-| --- | --- |
-| `summary.md` | Which attempts completed or were rejected? Where are the standard files? |
-| `definition.json` | Which contracts, checks, resources, capabilities and budgets defined this invocation? |
-| `abom.cdx.json` | Which packages did the recorded official APM lock inventory? Zero components when no APM dependencies were installed. |
-| `provenance.intoto.json` | Which selected output files did this completed invocation produce? |
-| `provenance/*.intoto.json` | Which individual attempt produced each artifact, including separate code and documentation patches? |
-| `checks/*.intoto.json` | What did each actual checker invocation report, against which exact files? |
-| `attempts/`, `candidates/` | What retained inputs, outputs and reconstructed tested files bind those claims? |
-| `index.json` | What files and hashes belong to this package? |
+Where each fact lives, and why:
 
-A COMPLETE run ends with a `Receipt` block naming the receipt directory and the
-standards documents it contains, then `Next      apmx audit <receipt-dir>`;
-`--verbose` also lists each file, including `summary.md`. Receipts live next to the completed
-root record: `.apm/runs/<id>/receipt`, `.apm/controllers/<id>/receipt`, or
-`.apm/chains/<id>/receipt`. A completed repair includes its earlier rejected
-attempts, not just the selected output. A stopped root is not eligible.
+- **Factory definition.** `externalParameters.factory.definition` is the
+  SHA-256 of the canonical definition (sorted, compact ASCII JSON with a final
+  LF), exactly as in v1, so `factories.allow` pins keep working. The definition
+  itself is a byproduct in `evidence/` (`apmx audit --explain factory`). It
+  covers exact contract bytes, declared checks, checker resources, selected
+  capability content and pins, limits, repair budgets and resolved APM
+  dependencies; not harness, model, clocks or paths.
+- **Stages.** `internalParameters.stages[]` (SLSA's slot for settings the
+  platform chose) records each contract's harness, the version it reported
+  (`<harness> --version` at run start; `null` when unknown), the requested
+  model, every model it reported across all attempts, the attempt count and
+  budget, its declared checks and its outputs by digest. In a receipt of record
+  written by `apmx check`, harness and models are the producer's, labelled
+  `"reportedBy": "producer"` and `"checkedBy": "apmx check (replay)"`.
+- **Base, before-images and deletions** are `resolvedDependencies`: a `base`
+  descriptor (the git tree of the files the run started from; in CI also
+  `gitCommit` and `uri git+https://github.com/<repo>@<commit>`, from
+  `APMX_BASE_REPOSITORY`/`APMX_BASE_COMMIT`) whose annotations list the files
+  the delivery `created` and `deleted` (`[{path, beforeDigest}]`), plus one
+  `before-image` descriptor per touched file that existed. These are inputs the
+  factory read, so `resolvedDependencies` is their standard place; a gate
+  compares them with the PR base for freshness.
+- **Inputs and capabilities** are `resolvedDependencies` too: caller-provided
+  inputs by digest (bytes in `evidence/`), each selected capability by its
+  CycloneDX `purl` and `SKILL.md` digest, and the run's `apm.yml` and
+  `apm.lock.yaml` inline (`content`), so ingredients can be audited without
+  `evidence/`.
+- **Checks.** A Test Result's `configuration` is the list of checker files it
+  ran, by digest, with the check name, command, stage and definition in
+  `annotations`; no separate configuration file. `url` names the raw checker
+  report or log in `evidence/`. Generic checks are suite-level observations
+  without invented per-test names; the software-factory checker profiles are
+  validated against reconstructed candidate files at export.
+- **Rejected attempts** become provenance `byproducts`: a record of each, by
+  digest, with its outputs, check results and models in `evidence/`.
+- **Ingredients.** The official APM CycloneDX 1.5 export is the last line's
+  predicate. Without a retained APM lock it lists zero components and says so
+  in `metadata.properties` (`apmx:apm-dependencies` = `0`). `apmx audit
+  --export abom` writes it as a standalone file.
 
-Without a retained APM lock (no APM dependencies were installed or selected),
-`abom.cdx.json` is still a schema-valid CycloneDX 1.5 document. It lists zero
-components and says so explicitly in `metadata.properties`
-(`apmx:apm-dependencies` = `0`); `definition.json` has no resolved
-dependencies and `capability-bindings.json` is empty. A run that selected
+All digests are SHA-256 over actual bytes. Statements are serialized as
+sorted, compact ASCII JSON, and a line's digest (what a verification summary's
+`inputAttestations` name) is the SHA-256 of its canonical unsigned line.
+
+## Export failures
+
+With a retained lock, missing or inconsistent inventory, ambiguous capability
+bindings, unavailable checked subjects or patches that do not combine are
+explicit delivery failures, not a silent downgrade. A run that selected
 capabilities without a retained lock refuses export rather than claiming zero
-dependencies. With a retained lock, missing/inconsistent inventory, ambiguous
-capability bindings or unavailable checked subjects are explicit delivery
-failures, not a silent downgrade. The command exits **23** while its canonical
-execution record remains COMPLETE. Other execution exits are unchanged;
-`--plan` never exports. See [execution outcomes](results.md).
+dependencies. The command exits **23** while its canonical execution record
+remains COMPLETE; `--plan` never exports. See [execution outcomes](results.md).
 
-One observed APM limitation (0.30.0 through the pinned 0.33.0) is overlapping direct and transitive local
-references: the official export can contain duplicate components with the same
-`bom-ref`. CycloneDX rejects the duplicate inventory. APMX reports delivery
-failure rather than deduplicating the official bytes or relabeling execution.
-
-## Standards and their scope
-
-| Content | Published format |
-| --- | --- |
-| Official APM inventory | CycloneDX JSON 1.5 |
-| Every production/check statement | `https://in-toto.io/Statement/v1` |
-| Production predicate | `https://slsa.dev/provenance/v1` |
-| Check predicate | `https://in-toto.io/attestation/test-result/v0.1` |
-
-APMX's small `apmx-evidence-package/1` index and `apmx-definition/1` definition
-connect these standard files; they do not replace their formats. The index
-profile name predates the *receipt* vocabulary and is kept for compatibility.
-
-### Contract v1 build-type mapping
-
-The build-type identifier is
-`https://github.com/danielmeppiel/apmx/build/contract/v1`. This section defines
-its development mapping; that identifier is not a claim of a separately
-published service or registered standard.
-
-Each producer statement names its exact output bytes as subjects. Its
-`buildDefinition.externalParameters` binds the normalized definition and
-retained contract digest. `resolvedDependencies` names the actual retained
-source and baseline files. `runDetails` records the builder identifier
-`https://github.com/danielmeppiel/apmx`, harness and observed times. The ABOM and
-execution projection are **byproducts**, not inputs supposedly read by a model.
-An aggregate statement relates selected outputs to distinct producer statements.
-
-With dependencies, APM's export is retained verbatim, without installing or
-re-resolving dependencies.
-Its deterministic inventory timestamp is not an execution time. Its coarse
-package identifiers do not always identify a virtual skill. Therefore
-`capability-bindings.json` connects an unambiguous official component to the
-retained lock, selected skill body, resources and verified package hash.
-Unknown or ambiguous mappings refuse export rather than inventing components.
-
-The definition includes exact contract bytes, declared checks, checker resources,
-selected capability content/pins, limits, repair budget and normalized resolved
-dependencies. It excludes harness, requested/observed model, clocks, executable
-and temporary checkout locations. Changing those observations does not change
-the definition fingerprint; changing the goal, check resources or pins does.
-This is an exact definition identity, not semantic equivalence between prompts.
-
-All file identities are SHA-256 over actual bytes. Definition JSON is sorted,
-compact ASCII with a final LF. The example checker's candidate-tree digest is
-different: SHA-256 over its sorted compact ASCII inventory JSON **without LF**.
-It is not the hash of `changes.diff`, a workspace digest, or the ordinary
-LF-terminated inventory file.
-
-### Check statements
-
-Generic checks report the whole invocation over declared artifacts, without
-invented per-test names. The versioned software-factory checker profiles bind
-document checks to the specific document and behavior checks to the reconstructed
-candidate files. Combined-candidate checks include both code and documentation
-patches; their producers remain separate.
-
-Reports must come from the retained logger's exact checker/stdout attribution.
-LF and Windows CRLF line endings delimit reports identically; embedded control
-characters remain visibly escaped. This does not normalize source or artifact bytes.
-Producer text or similarly named checkers cannot supply them. Missing, truncated,
-duplicate or unsupported reports refuse export for known example checkers.
-Per-test observations are copied only when explicitly reported. Document gates
-establish their stated format/reference/example scope, not prose correctness.
+One observed APM limitation (0.30.0 through the pinned 0.33.0) is overlapping
+direct and transitive local references: the official export can contain
+duplicate components with the same `bom-ref`. CycloneDX rejects the duplicate
+inventory, and APMX reports delivery failure rather than deduplicating it.
 
 ## Export again without inference
 
 Use the development Python environment and, when the run had APM dependencies,
 the exact recorded official APM backend. Supply an original completed root
-record and a **new** destination:
+record and a directory without a receipt:
 
 ```sh
-.venv/bin/python - /absolute/path/to/record.json /absolute/path/to/new-receipt <<'PY'
+.venv/bin/python - /absolute/path/to/record.json /absolute/path/to/new-dir <<'PY'
 import sys
 from pathlib import Path
 from apmx.contracts.evidence import export_package
@@ -137,25 +159,19 @@ print(export_package(Path(sys.argv[1]), Path(sys.argv[2])))
 PY
 ```
 
-This validates canonical retained evidence and reconstructs checked candidates
-in owned temporary directories, without executing their code. It refuses
-existing/symlink destinations, checks all written bytes, revalidates the root,
-and publishes a completed directory by rename. It does not rewrite canonical
-records. The export has a 512 MiB byte bound. Raw records themselves still
-refer to original local evidence paths; relocate the **exported receipt**.
+This validates retained evidence, reconstructs checked candidates and applies
+patches in owned temporary directories without executing their code, verifies
+what it wrote, and publishes by rename. It refuses to overwrite an existing
+receipt and never rewrites canonical records. The export has a 512 MiB byte bound.
 
 ## Verify a receipt: `apmx audit`
 
 ```sh
-apmx audit .apm/chains/<id>/receipt
+apmx audit .apm/chains/<id>/receipt.intoto.jsonl --outputs .apm/chains/<id>/outputs
+apmx audit --explain stages
 ```
 
-[`apmx audit`](audit.md) is the primary verifier. It reports Integrity,
-Standards, Factory, Checks, Ingredients, Outputs and Identity rows, delegates
-dependency trust to the bundled APM (`apm install --frozen` + `apm audit --ci`)
-and ends with `VALID (content-bound; not authenticated)` or `INVALID` and the
-first reason. The pinned CycloneDX schemas ship inside apmx, so structural
-verification works offline.
+[`apmx audit`](audit.md) is the primary verifier, locally and as the PR gate.
 
 ## Independent, offline verification
 
@@ -167,36 +183,30 @@ file path**, so it does **not** import APMX. From the source checkout:
 ```sh
 python3 -m venv .venv-evidence
 .venv-evidence/bin/python -m pip install -r scripts/evidence-requirements.txt
-.venv-evidence/bin/python scripts/verify_evidence.py /path/to/receipt --require-capability
-.venv-evidence/bin/python scripts/check_evidence_controls.py /path/to/receipt \
+.venv-evidence/bin/python scripts/verify_evidence.py /path/to/run-dir --require-evidence
+.venv-evidence/bin/python scripts/check_evidence_controls.py /path/to/run-dir \
   --schemas src/apmx/audit/schemas
 ```
 
-Environment installation requires network access. Validation is offline and
-uses the hash-pinned schemas bundled in `src/apmx/audit/schemas/` unless you
-pass `--schemas DIR` (add `--fetch-schemas` to download the same pinned bytes
-into `DIR`). Schema hashes and source commit pins are checked; use `--help` for
-the complete interface.
-`--require-capability` is a demonstration gate for an actual selected capability,
-not a requirement for all possible inventories.
-
-Published syntax validation alone is insufficient: protobuf bindings accept
-some omitted fields and arbitrary result strings. The script additionally checks
-this documented profile's required fields, counts, actual subjects, resource
-digests, definition bindings and check observations. It rejects symlinks,
-unindexed files and unsupported predicates. The controls script verifies a
-relocated copy, then corrupts bytes, references, subjects, results, builder,
-predicate and check membership. Semantic controls refresh index hashes so they
-cannot pass by testing only stale checksums. Originals are unchanged.
+Validation is offline and uses the hash-pinned CycloneDX schemas bundled in
+`src/apmx/audit/schemas/` unless you pass `--schemas DIR` (add
+`--fetch-schemas` to download the same pinned bytes). `--require-capability`
+is a demonstration gate for an actual selected capability. The controls script
+verifies a relocated copy, then rejects copies with corrupted evidence, a
+non-canonical line, a wrong predicate, a moved subject, an invalid result, a
+missing builder, a changed stage or an omitted check, each re-encoded so it
+cannot pass by testing only a stale checksum. Originals are unchanged.
 
 ## What this does not guarantee
 
-These are **unsigned, same-user local observations**. They provide inspectability
-and content binding, not an authenticated signer, SLSA security level, sandbox,
-independent witness, general software correctness or permission to merge/deploy.
-A person who can rewrite every file and hash can forge a self-consistent package.
+Local receipts are **unsigned, same-user observations**. They provide
+inspectability and content binding, not an authenticated signer, an SLSA
+level, a sandbox, an independent witness, general software correctness or
+permission to merge or deploy. A person who can rewrite every file and hash can
+forge a self-consistent receipt; a summary signed in CI by an allowed workflow
+is what says who produced it.
 
-Raw transcripts, raw canonical records and repair diagnostic excerpts are omitted.
-Project baselines, capability resources, source manifests and locks are included
-verbatim and can contain private code, paths or secrets. **Review before sharing**;
-this is not a general redaction tool. The MVP does not add governed execution.
+`evidence/` includes transcripts, inputs, intermediate stage outputs and the
+files the run started from, and the bundle carries the APM manifest and lock.
+They can contain private code, paths or secrets. **Review before sharing**;
+`evidence/` never belongs in a pull request.

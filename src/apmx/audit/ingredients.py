@@ -1,7 +1,8 @@
 """Ingredients row: APM, the canonical owner of dependency trust, audits retained inputs.
 
-APMX does not reimplement dependency trust. The receipt retains the exact
-``apm.yml`` and ``apm.lock.yaml`` used by the run. They are staged into a fresh
+APMX does not reimplement dependency trust. The receipt's provenance carries
+the exact ``apm.yml`` and ``apm.lock.yaml`` used by the run inline, bound by
+digest. They are staged into a fresh
 temporary project, and the bundled pinned APM runs ``apm install --frozen``
 followed by ``apm audit --ci``. APMX then confirms that the reinstall did not
 change any recorded content hash, that selected skill bodies match the
@@ -59,14 +60,9 @@ class Ingredients:
     facts: dict[str, object] = field(default_factory=dict)
 
 
-def _selected_source(receipt: verifier.Receipt) -> str:
-    runs = [item["runId"] for item in receipt.index["attempts"] if item["selected"]]
-    return f"attempts/{runs[0]}/source"
-
-
 def _retained(receipt: verifier.Receipt, name: str) -> bytes | None:
-    path = f"{_selected_source(receipt)}/{name}"
-    return verifier.read(receipt.root, path) if path in receipt.index["files"] else None
+    """An APM file the provenance carries inline (bound by its digest)."""
+    return receipt.apm_files.get(name)
 
 
 def _plural(count: int, word: str) -> str:
@@ -218,10 +214,11 @@ def audit_ingredients(
     from apmx.install import apm_backend
 
     limits = limits or ContractLimits()
-    recorded = receipt.definition.get("resolvedDependencies", [])
+    definition = receipt.definition
+    recorded = definition.get("resolvedDependencies", []) if definition is not None else None
     lock_name = next((name for name in _LOCK_NAMES if _retained(receipt, name) is not None), None)
     if lock_name is None:
-        if recorded:
+        if recorded or (recorded is None and receipt.bom.get("components")):
             return Ingredients(
                 FAIL,
                 f"receipt lists {_dependencies(len(recorded))} but retains no APM lock",
@@ -241,9 +238,9 @@ def audit_ingredients(
         projected = lock_dependencies(lock)
     except (ValueError, TypeError, KeyError, UnicodeDecodeError):
         return Ingredients(FAIL, "the retained APM lock is malformed")
-    if projected != recorded:
+    if recorded is not None and projected != recorded:
         return Ingredients(FAIL, "the retained APM lock disagrees with the factory definition")
-    count = len(recorded)
+    count = len(projected)
     facts: dict[str, object] = {"apmDependencies": count}
     if count == 0:
         return Ingredients(PASS, "0 APM dependencies   nothing to audit", facts=facts)
@@ -326,9 +323,7 @@ def audit_ingredients(
             exported = apm_backend.export_cyclonedx(
                 inventory_manifest, lock_raw, expected_backend=identity, limits=limits
             )
-            if _components(exported) != _components(
-                verifier.descriptor(receipt.root, receipt.index["inventory"])
-            ):
+            if _components(exported) != _components(json.dumps(receipt.bom).encode("utf-8")):
                 return Ingredients(
                     FAIL,
                     f"{label}: CycloneDX components differ from what the pinned APM "

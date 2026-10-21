@@ -1,26 +1,51 @@
-"""Unsigned standards projections of canonical retained execution observations."""
+"""Receipt writer: one in-toto bundle per COMPLETE run, plus outputs and evidence.
 
+Every COMPLETE run, chain or repair controller gets, next to its record:
+
+- ``receipt.intoto.jsonl``: one unsigned DSSE envelope per line, each an
+  in-toto Statement v1: a SLSA Provenance v1 for the delivery, one in-toto
+  Test Result v0.1 per check of the final candidate and a CycloneDX 1.5 BOM.
+  Every statement has the same subjects: the delivered files at their project
+  paths (for patch outputs, the files the patches produce).
+- ``outputs/``: those delivered files.
+- ``evidence/sha256/<hex>``: content-addressed, deduplicated material the
+  statements name by digest (definition, inputs, stage outputs, transcripts,
+  rejected attempts, checker files and raw check reports).
+
+The export neither runs a model nor reruns checks. The format and its
+verification live in :mod:`apmx.audit.verifier`.
+"""
+
+import base64
 import hashlib
 import json
 import os
 import shlex
+import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import quote, urlparse
 
+from ..audit import verifier as bundle
 from ..deps.lockfile import LockedDependency, LockFile
 from ..install.apm_backend import export_cyclonedx
 from ..utils.path_security import has_symlink_component
-from . import check_subjects, records
+from . import check_subjects, patches, records
 from .frontend import parse_contract
 from .models import ChainResult, ContractError, ContractLimits, Outcome, RunResult, artifact_files
 from .workspace import _path, _read
 
-STATEMENT = "https://in-toto.io/Statement/v1"
-PROVENANCE = "https://slsa.dev/provenance/v1"
-TEST_RESULT = "https://in-toto.io/attestation/test-result/v0.1"
-BUILD_TYPE = "https://github.com/danielmeppiel/apmx/build/contract/v1"
 BUILDER = "https://github.com/danielmeppiel/apmx"
+ENV_PRODUCER = "APMX_REPLAY_PRODUCER"
+ENV_BASE_REPOSITORY = "APMX_BASE_REPOSITORY"
+ENV_BASE_COMMIT = "APMX_BASE_COMMIT"
+REPORTED_CHECKERS = {
+    "checks/documents.py",
+    "checks/acceptance.py",
+    "checks/regression.py",
+    "checks/documentation.py",
+    "checks/documented_checkout.py",
+}
 
 
 def _json(document: object) -> bytes:
@@ -244,132 +269,288 @@ def _definition(runs: tuple[RunResult, ...], dependencies: list[dict]) -> dict:
     return {"schema": "apmx-definition/1", "stages": stages, "resolvedDependencies": dependencies}
 
 
-class _Package:
-    """One bounded writer for digest-addressed, package-relative references."""
+class _Store:
+    """Bounded, deduplicated ``evidence/sha256/<hex>`` writer."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        self.files: dict[str, dict] = {}
+        self.blobs: dict[str, int] = {}
         self.total = 0
 
-    def write(self, name: str, raw: bytes) -> dict:
-        identity = {"sha256": _hash(raw), "size": len(raw)}
-        if name in self.files:
-            if self.files[name] != identity:
-                raise ContractError("Receipt output collision.", code="evidence_collision")
-        else:
+    def put(self, raw: bytes) -> str:
+        digest = _hash(raw)
+        if digest not in self.blobs:
             self.total += len(raw)
             if self.total > 4 * ContractLimits().baseline_bytes:
                 raise ContractError("Receipt export exceeds its byte limit.", code="evidence_limit")
-            path = _path(self.root, name)
+            path = self.root / "sha256" / digest
             path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("xb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            self.files[name] = identity
-        return {"name": name, "digest": {"sha256": identity["sha256"]}}
+            _write_new(path, raw)
+            self.blobs[digest] = len(raw)
+        return digest
 
-    def document(self, name: str, document: object) -> dict:
-        return self.write(name, _json(document))
-
-    def copy(self, root: Path, entry: dict, name: str) -> dict:
-        raw, actual = _read(root, entry["relative_path"], entry["size"])
-        if actual.sha256 != entry["sha256"] or actual.size != entry["size"]:
-            raise ContractError("Retained bytes changed during export.", code="record_changed")
-        return self.write(name, raw)
+    def descriptor(self, name: str, raw: bytes, role: str | None = None) -> dict:
+        digest = self.put(raw)
+        annotations = {"evidence": bundle.blob_path(digest)}
+        if role is not None:
+            annotations["apmx.role"] = role
+        return {"name": name, "digest": {"sha256": digest}, "annotations": annotations}
 
 
-def _statement(subjects: list[dict], predicate_type: str, predicate: dict) -> dict:
-    return {
-        "_type": STATEMENT,
-        "subject": subjects,
-        "predicateType": predicate_type,
-        "predicate": predicate,
-    }
+def _write_new(path: Path, raw: bytes, mode: int = 0o644) -> None:
+    with path.open("xb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    path.chmod(mode)
 
 
-def _copy_attempt(package: _Package, run: RunResult) -> tuple[dict, list[dict], list[dict]]:
-    data, digest = records._record_bytes(run.run_directory / "record.json", ContractLimits())
-    prefix = f"attempts/{run.run_id}"
-    materials = []
-    for family, entries in (
-        ("baseline", data["baseline"]["files"]),
-        ("source", data["source"]["retained_identities"]),
-    ):
-        for entry in entries:
-            materials.append(
-                package.copy(
-                    run.run_directory / family, entry, f"{prefix}/{family}/{entry['relative_path']}"
-                )
-            )
-    subjects = []
-    for item in artifact_files(run.artifact):
-        subjects.append(
-            package.copy(
-                run.run_directory / "artifacts",
-                {"relative_path": item.relative_path, "sha256": item.sha256, "size": item.size},
-                f"{prefix}/artifacts/{item.relative_path}",
-            )
-        )
-    observation = {
-        "schema": "apmx-execution-projection/1",
-        "originalRecordSha256": digest,
-        "runId": run.run_id,
-        "outcome": run.outcome.name,
-        "harness": data["harness"],
-        "requestedModel": run.requested_model,
-        "observedModels": list(run.observed_models),
-        "startedOn": data["created_at"],
-        "finishedOn": data["finished_at"],
-        "assurance": data["assurance"],
-        "consentSource": run.consent_source,
-        "handoffPolicy": run.handoff_policy,
-        "controllerSha256": run.controller.sha256 if run.controller else None,
-        "checks": [
-            {
-                "name": check.name,
-                "command": check.command,
-                "normalized": check.normalized,
-                "returncode": check.process.returncode,
-                "cleanupConfirmed": check.process.cleanup_confirmed,
-                "elapsedSeconds": check.process.elapsed_seconds,
+def _retained(root: Path, entry: dict) -> bytes:
+    raw, actual = _read(root, entry["relative_path"], entry["size"])
+    if actual.sha256 != entry["sha256"] or actual.size != entry["size"]:
+        raise ContractError("Retained bytes changed during export.", code="record_changed")
+    return raw
+
+
+def _git_mode(mode: int) -> str:
+    return "100755" if mode & 0o111 else "100644"
+
+
+def git_tree(files: dict[str, tuple[str, bytes]]) -> str:
+    """Git's tree object id for these (mode, bytes) files, as ``git write-tree`` gives."""
+    root: dict = {}
+    for name, (mode, raw) in files.items():
+        node = root
+        *parents, leaf = name.split("/")
+        for part in parents:
+            node = node.setdefault(part, {})
+        node[leaf] = (mode, patches.blob_id(raw))
+
+    def tree(node: dict) -> str:
+        entries = []
+        for name, value in node.items():
+            if isinstance(value, dict):
+                entries.append((name + "/", b"40000 " + name.encode() + b"\0", tree(value)))
+            else:
+                entries.append((name, f"{value[0]} {name}".encode() + b"\0", value[1]))
+        body = b"".join(head + bytes.fromhex(sha) for _, head, sha in sorted(entries))
+        return hashlib.sha1(b"tree %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
+
+    return tree(root)
+
+
+def _base_files(result: RunResult | ChainResult, first: RunResult) -> dict[str, tuple[str, bytes]]:
+    """The project files the invocation started from."""
+    if isinstance(result, ChainResult):
+        data, _ = records._record_bytes(result.record_path, ContractLimits())
+        capture = data.get("project_capture")
+        if isinstance(capture, dict) and isinstance(capture.get("files"), list):
+            root = result.record_path.parent / "project"
+            return {
+                entry["relative_path"]: (_git_mode(entry["mode"]), _retained(root, entry))
+                for entry in capture["files"]
             }
-            for check in run.checks
-        ],
-        "omitted": ["raw transcript", "baseline.repair.diagnostics", "absolute execution paths"],
+    data, _ = records._record_bytes(first.run_directory / "record.json", ContractLimits())
+    root = first.run_directory / "baseline"
+    return {
+        entry["relative_path"]: (_git_mode(entry["mode"]), _retained(root, entry))
+        for entry in data["baseline"]["files"]
     }
-    package.document(f"{prefix}/execution.json", observation)
-    return data, materials, subjects
 
 
-def _report_subjects(
-    package: _Package, run: RunResult, check_index: int, data: dict, subjects: list[dict]
-) -> tuple[list[dict], dict | None, str]:
+def _baseline(run: RunResult, data: dict) -> dict[str, tuple[str, bytes]]:
+    return {
+        entry["relative_path"]: (
+            _git_mode(entry["mode"]),
+            _retained(run.run_directory / "baseline", entry),
+        )
+        for entry in data["baseline"]["files"]
+    }
+
+
+def _artifacts(run: RunResult) -> dict[str, bytes]:
+    return {
+        item.relative_path: _retained(
+            run.run_directory / "artifacts",
+            {"relative_path": item.relative_path, "sha256": item.sha256, "size": item.size},
+        )
+        for item in artifact_files(run.artifact)
+    }
+
+
+def _patch(name: str, raw: bytes, baseline: dict[str, tuple[str, bytes]]) -> patches.Patch | None:
+    """A patch output: export format, with every pre-image exactly the attempt's baseline."""
+    sections = patches.parse(raw)
+    if not sections:
+        return None
+    for item in sections:
+        if patches.unsafe(item.path):
+            return None
+        before = baseline.get(item.path)
+        if item.old is None:
+            if before is not None:
+                return None
+        elif before is None or patches.blob_id(before[1]) != item.old or before[0] != item.mode:
+            return None
+    return patches.Patch(name, raw, sections)
+
+
+def _delivery(
+    selected: tuple[RunResult, ...],
+    documents: dict[str, dict],
+    base: dict[str, tuple[str, bytes]],
+) -> tuple[dict[str, tuple[str, bytes]], dict[str, str | None]]:
+    """Delivered files (mode, bytes) and the before-image digest of every touched path."""
+    found = []
+    for run in selected:
+        data = documents[run.run_id]
+        baseline = _baseline(run, data)
+        for name, raw in _artifacts(run).items():
+            patch = _patch(name, raw, baseline)
+            if patch is not None:
+                found.append((patch, baseline))
+    before: dict[str, str | None] = {}
+    if found:
+        state: dict[str, tuple[str, bytes] | None] = {}
+        for patch, baseline in found:
+            for path in patch.paths:
+                if path not in state:
+                    state[path] = baseline.get(path)
+                    before[path] = _hash(state[path][1]) if state[path] is not None else None
+            try:
+                state.update(patches.apply({path: state[path] for path in patch.paths}, patch))
+            except patches.Mismatch as exc:
+                raise ContractError(
+                    f"Patch outputs cannot be combined: {exc}", code="evidence_delivery_failed"
+                ) from exc
+        delivered = {path: value for path, value in state.items() if value is not None}
+        before = {
+            path: digest
+            for path, digest in before.items()
+            if path in delivered or digest is not None
+        }
+        return delivered, before
+    delivered: dict[str, tuple[str, bytes]] = {}
+    for run in selected:
+        for name, raw in _artifacts(run).items():
+            if not bundle.safe_path(name):
+                raise ContractError(
+                    f"Output {name} cannot be delivered at a project path.",
+                    code="evidence_delivery_failed",
+                )
+            if name in delivered and delivered[name][1] != raw:
+                raise ContractError(
+                    f"Two contracts deliver different bytes as {name}.",
+                    code="evidence_delivery_failed",
+                )
+            delivered[name] = ("100644", raw)
+            existing = base.get(name)
+            before[name] = _hash(existing[1]) if existing is not None else None
+    return delivered, before
+
+
+def _contract_name(run: RunResult, data: dict) -> str:
+    package = (data.get("source") or {}).get("package") or {}
+    relative = package.get("contract_relative_path") or Path(data["source"]["path"]).name
+    return Path(relative).name.removesuffix(".md").removesuffix(".contract")
+
+
+def _producer_stages() -> tuple[str | None, dict[str, dict]]:
+    """Per-contract producer observations an ``apmx check`` replay carries forward."""
+    location = os.environ.get(ENV_PRODUCER)
+    if not location:
+        return None, {}
+    try:
+        data = json.loads(Path(location).read_bytes())
+        stages = {
+            str(stage["contractSha256"]): {
+                "harness": str(stage["harness"]),
+                "harnessVersion": stage.get("harnessVersion"),
+                "requestedModel": stage.get("requestedModel"),
+                "observedModels": [str(model) for model in stage.get("observedModels", [])],
+            }
+            for stage in data["stages"]
+        }
+        return str(data["receiptSha256"]), stages
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ContractError(
+            "The replayed producer's stage record is unreadable.", code="evidence_delivery_failed"
+        ) from exc
+
+
+def _stages(
+    selected: tuple[RunResult, ...],
+    history: tuple[RunResult, ...],
+    documents: dict[str, dict],
+    store: _Store,
+) -> tuple[list[dict], dict[str, str], str | None]:
+    """Per-stage facts; with an ``apmx check`` replay, the producer's digest too."""
+    producer_digest, producer = _producer_stages()
+    stages, names, replayed = [], {}, False
+    for run in selected:
+        data = documents[run.run_id]
+        contract = parse_contract(run.run_directory / "source/contract.contract.md")
+        same = [
+            other
+            for other in history
+            if records._record_bytes(other.run_directory / "record.json", ContractLimits())[0][
+                "source"
+            ]["sha256"]
+            == contract.source_digest
+        ]
+        observed: list[str] = []
+        for other in same:
+            observed += [model for model in other.observed_models if model not in observed]
+        stage = {
+            "contract": _contract_name(run, data),
+            "contractSha256": contract.source_digest,
+            "harness": data["harness"],
+            "harnessVersion": data.get("executable_version"),
+            "requestedModel": run.requested_model,
+            "observedModels": observed,
+            "attempts": len(same),
+            "budget": records._json_value(contract.budget),
+            "checks": [{"name": check.name, "command": check.command} for check in contract.checks],
+            "outputs": [
+                {"name": name, "digest": {"sha256": store.put(raw)}}
+                for name, raw in sorted(_artifacts(run).items())
+            ],
+        }
+        if data["harness"] == "replay" and producer_digest is not None:
+            reported = producer.get(contract.source_digest)
+            if reported is None:
+                raise ContractError(
+                    "The replayed producer did not record this contract.",
+                    code="evidence_delivery_failed",
+                )
+            stage.update(reported, reportedBy="producer", checkedBy="apmx check (replay)")
+            replayed = True
+        names[run.run_id] = stage["contract"]
+        stages.append(stage)
+    return stages, names, producer_digest if replayed else None
+
+
+def _check_log(run: RunResult, name: str) -> bytes:
+    raw, _ = _read(run.run_directory, "transcript.log", ContractLimits().transcript_bytes)
+    prefix = f"  Check {name} "
+    lines = [
+        line for line in raw.decode("utf-8", "replace").splitlines() if line.startswith(prefix)
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
+
+
+def _report(run: RunResult, check_index: int, data: dict) -> tuple[dict | None, str]:
+    """The check's validated report (or None for a suite-level check) and its scope."""
     check = run.checks[check_index]
     raw, _ = _read(run.run_directory, "transcript.log", ContractLimits().transcript_bytes)
     report = check_subjects.read_report(raw.decode("utf-8"), check.name)
     if report is None:
-        if any(
-            word
-            in {
-                "checks/documents.py",
-                "checks/acceptance.py",
-                "checks/regression.py",
-                "checks/documentation.py",
-                "checks/documented_checkout.py",
-            }
-            for word in shlex.split(check.command)
-        ):
+        if any(word in REPORTED_CHECKERS for word in shlex.split(check.command)):
             raise ContractError(
                 "This check requires its actual subject report; it is missing or truncated.",
                 code="check_subject_unavailable",
             )
-        return (
-            subjects,
-            None,
-            "Suite-level invocation over the declared artifacts; no per-test claims.",
-        )
+        return None, "Suite-level invocation over the declared artifacts; no per-test claims."
     if report.get("status") != ("passed" if check.normalized == 0 else "failed"):
         raise ContractError(
             "Report status disagrees with the canonical check.", code="check_subject_unavailable"
@@ -382,44 +563,33 @@ def _report_subjects(
             ("artifacts", [records._json_value(item) for item in artifact_files(run.artifact)]),
         ):
             for entry in entries:
-                name = entry["relative_path"]
-                content, actual = _read(run.run_directory / family, name, entry["size"])
-                if actual.sha256 != entry["sha256"]:
-                    raise ContractError("Retained subject changed.", code="record_changed")
-                target = _path(source, name)
+                content = _retained(run.run_directory / family, entry)
+                target = _path(source, entry["relative_path"])
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
         if report["schema"] == "software-factory-document/2":
-            names = check_subjects.document_subject(
+            check_subjects.document_subject(
                 report, source, tuple(item.relative_path for item in artifact_files(run.artifact))
             )
-            matched = [
-                subject
-                for subject in subjects
-                if subject["name"] == f"attempts/{run.run_id}/artifacts/{names[0]}"
-            ]
-            scope = "Document format and reference consistency only; no semantic certification."
-        else:
-            reported = report["subject"]
-            resources = {
-                row["relative_path"]: {"sha256": row["sha256"], "size": row["size"]}
-                for row in data["baseline"]["files"]
-                if row["relative_path"].startswith("checks/")
-            }
-            if check_subjects.inventory_digest(resources) != reported["checks"]:
-                raise ContractError(
-                    "Report checker resources disagree.", code="check_subject_unavailable"
-                )
-            target = Path(temporary) / "candidate"
-            check_subjects.materialize_candidate(reported, source, target)
-            prefix = f"candidates/{reported['candidate']}"
-            matched = [
-                package.copy(target, {**identity, "relative_path": name}, f"{prefix}/{name}")
-                for name, identity in sorted(reported["candidate_files"].items())
-            ]
-            package.document(f"{prefix}/inventory.json", reported["candidate_files"])
-            scope = "Observed checks over the reconstructed candidate files; not a correctness guarantee."
-    return matched, report, scope
+            return (
+                report,
+                "Document format and reference consistency only; no semantic certification.",
+            )
+        reported = report["subject"]
+        resources = {
+            row["relative_path"]: {"sha256": row["sha256"], "size": row["size"]}
+            for row in data["baseline"]["files"]
+            if row["relative_path"].startswith("checks/")
+        }
+        if check_subjects.inventory_digest(resources) != reported["checks"]:
+            raise ContractError(
+                "Report checker resources disagree.", code="check_subject_unavailable"
+            )
+        check_subjects.materialize_candidate(reported, source, Path(temporary) / "candidate")
+    return (
+        report,
+        "Observed checks over the reconstructed candidate files; not a correctness guarantee.",
+    )
 
 
 def _test_results(report: dict | None) -> dict:
@@ -448,7 +618,176 @@ def _test_results(report: dict | None) -> dict:
     return result
 
 
-RECEIPT_DIRECTORY = "receipt"
+def _check_statement(
+    run: RunResult,
+    index: int,
+    data: dict,
+    stage: str,
+    definition: str,
+    subjects: list[dict],
+    store: _Store,
+) -> dict:
+    check = run.checks[index]
+    report, scope = _report(run, index, data)
+    annotations = {
+        "check": check.name,
+        "command": check.command,
+        "stage": stage,
+        "factoryDefinition": f"sha256:{definition}",
+        "scope": scope,
+    }
+    resources = {
+        row["relative_path"]: row
+        for row in data["baseline"]["files"]
+        if row["relative_path"].startswith("checks/")
+    }
+    named = [word for word in shlex.split(check.command) if word in resources]
+    configuration = []
+    for name in dict.fromkeys(named):
+        digest = store.put(_retained(run.run_directory / "baseline", resources[name]))
+        configuration.append(
+            {"name": name, "digest": {"sha256": digest}, "annotations": dict(annotations)}
+        )
+    if not configuration:
+        source = _retained(
+            run.run_directory / "source",
+            next(
+                row
+                for row in data["source"]["retained_identities"]
+                if row["relative_path"] == "contract.contract.md"
+            ),
+        )
+        configuration.append(
+            {
+                "name": "contract.contract.md",
+                "digest": {"sha256": store.put(source)},
+                "annotations": dict(annotations),
+            }
+        )
+    predicate = {
+        "result": "PASSED" if check.normalized == 0 else "FAILED",
+        "configuration": configuration,
+        **_test_results(report),
+    }
+    if predicate["result"] == "PASSED" and predicate.get("failedTests"):
+        raise ContractError("Passed report contains failures.", code="check_subject_unavailable")
+    log = (
+        _json({key: value for key, value in report.items() if key != "detail"})
+        if report is not None
+        else _check_log(run, check.name)
+    )
+    if log:
+        predicate["url"] = bundle.blob_path(store.put(log))
+    return bundle.statement(subjects, bundle.TEST_RESULT, predicate)
+
+
+def _attempt_record(run: RunResult, data: dict, store: _Store) -> bytes:
+    """A rejected (or otherwise unselected) attempt, by digest: outputs, checks, models."""
+    checks = []
+    for check in run.checks:
+        log = _check_log(run, check.name)
+        checks.append(
+            {
+                "name": check.name,
+                "command": check.command,
+                "result": "PASSED" if check.normalized == 0 else "FAILED",
+                "log": {"sha256": store.put(log)} if log else None,
+            }
+        )
+    return _json(
+        {
+            "schema": "apmx-attempt/2",
+            "runId": run.run_id,
+            "contractSha256": data["source"]["sha256"],
+            "outcome": run.outcome.name,
+            "harness": data["harness"],
+            "harnessVersion": data.get("executable_version"),
+            "requestedModel": run.requested_model,
+            "observedModels": list(run.observed_models),
+            "startedOn": data["created_at"],
+            "finishedOn": data["finished_at"],
+            "outputs": [
+                {"name": name, "digest": {"sha256": store.put(raw)}}
+                for name, raw in sorted(_artifacts(run).items())
+            ],
+            "checks": checks,
+        }
+    )
+
+
+def _factory(first: dict, definition: str) -> dict:
+    package = (first.get("source") or {}).get("package") or {}
+    return {
+        "package": package.get("package_ref"),
+        "commit": package.get("resolved_commit"),
+        "definition": {"sha256": definition},
+    }
+
+
+def _base_descriptor(
+    base: dict[str, tuple[str, bytes]], before: dict[str, str | None], deleted: dict[str, str]
+) -> dict:
+    digest = {"gitTree": git_tree(base)}
+    descriptor: dict = {"name": "base"}
+    repository = os.environ.get(ENV_BASE_REPOSITORY, "")
+    commit = os.environ.get(ENV_BASE_COMMIT, "").lower()
+    if (
+        bundle._GIT.fullmatch(commit)
+        and bundle.safe_path(repository)
+        and repository.count("/") == 1
+    ):
+        descriptor["uri"] = f"git+https://github.com/{repository}@{commit}"
+        digest["gitCommit"] = commit
+    descriptor["digest"] = digest
+    descriptor["annotations"] = {
+        "apmx.role": "base",
+        "created": sorted(path for path, value in before.items() if value is None),
+        "deleted": [{"path": path, "beforeDigest": deleted[path]} for path in sorted(deleted)],
+    }
+    return descriptor
+
+
+def _apm_inputs(run: RunResult, data: dict) -> list[dict]:
+    roles = {
+        "apm.yml": "apm-manifest",
+        "apm.lock.yaml": "apm-lock",
+        "apm.lock": "apm-lock",
+        "imports-apm.yml": "apm-imports-manifest",
+    }
+    found = []
+    for entry in data["source"]["retained_identities"]:
+        name = entry["relative_path"]
+        if name in roles:
+            raw = _retained(run.run_directory / "source", entry)
+            found.append(
+                {
+                    "name": name,
+                    "digest": {"sha256": _hash(raw)},
+                    "content": base64.b64encode(raw).decode("ascii"),
+                    "annotations": {"apmx.role": roles[name]},
+                }
+            )
+    return found
+
+
+def _request_inputs(
+    selected: tuple[RunResult, ...], documents: dict[str, dict], store: _Store
+) -> list[dict]:
+    """Caller-provided inputs: what a stage needs that no selected stage produces."""
+    produced = {name for run in selected for name in _artifacts(run)}
+    found: dict[str, dict] = {}
+    for run in selected:
+        contract = parse_contract(run.run_directory / "source/contract.contract.md")
+        entries = {row["relative_path"]: row for row in documents[run.run_id]["baseline"]["files"]}
+        for name in contract.needs:
+            if name in produced or name in found or name not in entries:
+                continue
+            raw = _retained(run.run_directory / "baseline", entries[name])
+            found[name] = store.descriptor(name, raw, "input")
+    return [found[name] for name in sorted(found)]
+
+
+RECEIPT_FILE = bundle.BUNDLE
 
 
 def export_completed(result: RunResult | ChainResult) -> Path | None:
@@ -462,13 +801,20 @@ def export_completed(result: RunResult | ChainResult) -> Path | None:
         if result.controller
         else result.run_directory / "record.json"
     )
-    return export_package(record, record.parent / RECEIPT_DIRECTORY)
+    return export_package(record, record.parent)
 
 
 def export_package(record_path: Path, destination: Path) -> Path:
-    """Publish one new portable package atomically; never modify the canonical outcome."""
+    """Publish ``receipt.intoto.jsonl``, ``outputs/`` and ``evidence/`` into ``destination``.
+
+    Never modifies the canonical outcome; refuses to overwrite an earlier export.
+    Returns the bundle path.
+    """
     destination = destination.absolute()
-    if destination.exists() or has_symlink_component(Path(destination.anchor), destination):
+    targets = [destination / name for name in (bundle.BUNDLE, bundle.OUTPUTS, bundle.EVIDENCE)]
+    if any(path.exists() or path.is_symlink() for path in targets) or has_symlink_component(
+        Path(destination.anchor), destination
+    ):
         raise ContractError(
             "Receipt destination exists or contains a symlink.", code="evidence_destination"
         )
@@ -478,184 +824,191 @@ def export_package(record_path: Path, destination: Path) -> Path:
     boundary = records.CompletionBoundary()
     boundary.capture(result)
     try:
-        bom, dependencies, capability_bindings = _inventory(selected)
-        definition = _definition(selected, dependencies)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix=".apmx-evidence-", dir=destination.parent) as temporary:
-            staging = Path(temporary) / "package"
-            staging.mkdir(mode=0o700)
-            package = _Package(staging)
-            definition_ref = package.document("definition.json", definition)
-            bom_ref = package.write("abom.cdx.json", bom)
-            package.document("capability-bindings.json", capability_bindings)
-            all_outputs = []
-            production_refs = []
-            check_refs = []
-            rows = []
-            for run in history:
-                data, materials, subjects = _copy_attempt(package, run)
-                if run in selected:
-                    all_outputs.extend(subjects)
-                production = _statement(
-                    subjects,
-                    PROVENANCE,
-                    {
-                        "buildDefinition": {
-                            "buildType": BUILD_TYPE,
-                            "externalParameters": {
-                                "definition": definition_ref,
-                                "contractSha256": data["source"]["sha256"],
-                            },
-                            "resolvedDependencies": materials,
-                        },
-                        "runDetails": {
-                            "builder": {"id": BUILDER, "version": {"harness": data["harness"]}},
-                            "metadata": {
-                                "invocationId": run.run_id,
-                                "startedOn": data["created_at"],
-                                "finishedOn": data["finished_at"],
-                            },
-                            "byproducts": [
-                                bom_ref,
-                                {
-                                    "name": f"attempts/{run.run_id}/execution.json",
-                                    "digest": {
-                                        "sha256": package.files[
-                                            f"attempts/{run.run_id}/execution.json"
-                                        ]["sha256"]
-                                    },
-                                },
-                            ],
-                        },
-                    },
-                )
-                production_refs.append(
-                    package.document(f"provenance/{run.run_id}.intoto.json", production)
-                )
-                for ci, check in enumerate(run.checks):
-                    assessed, report, scope = _report_subjects(package, run, ci, data, subjects)
-                    configuration = package.document(
-                        f"checks/{run.run_id}-{ci + 1}.configuration.json",
-                        {
-                            "name": check.name,
-                            "command": check.command,
-                            "scope": scope,
-                            "definition": definition_ref,
-                            "materials": materials,
-                        },
-                    )
-                    predicate = {
-                        "result": "PASSED" if check.normalized == 0 else "FAILED",
-                        "configuration": [configuration],
-                        **_test_results(report),
-                    }
-                    if predicate["result"] == "PASSED" and predicate.get("failedTests"):
-                        raise ContractError(
-                            "Passed report contains failures.", code="check_subject_unavailable"
-                        )
-                    if report is not None:
-                        package.document(
-                            f"checks/{run.run_id}-{ci + 1}.report.json",
-                            {key: value for key, value in report.items() if key != "detail"},
-                        )
-                    check_refs.append(
-                        package.document(
-                            f"checks/{run.run_id}-{ci + 1}.intoto.json",
-                            _statement(assessed, TEST_RESULT, predicate),
-                        )
-                    )
-                rows.append(
-                    f"| {run.run_id} | {run.outcome.name} | {data['harness']} | {len(run.checks)} |"
-                )
-            if len(history) == 1:
-                primary = production
-            else:
-                primary = _statement(
-                    all_outputs,
-                    PROVENANCE,
-                    {
-                        "buildDefinition": {
-                            "buildType": BUILD_TYPE,
-                            "externalParameters": {"definition": definition_ref},
-                            "resolvedDependencies": production_refs,
-                        },
-                        "runDetails": {
-                            "builder": {"id": BUILDER},
-                            "metadata": {
-                                "invocationId": result.chain_id
-                                if isinstance(result, ChainResult)
-                                else result.controller.path.parent.name
-                            },
-                            "byproducts": [bom_ref],
-                        },
-                    },
-                )
-            package.document("provenance.intoto.json", primary)
-            summary = (
-                "# APMX receipt\n\n"
-                "Unsigned local observations, not authenticated attestation or a sandbox. "
-                "Verify it with `apmx audit <this-directory>`.\n\n"
-                f"Definition SHA-256: `{definition_ref['digest']['sha256']}`\n\n"
-                f"APM dependencies: {len(dependencies)}"
-                + (" (CycloneDX inventory lists zero components)" if not dependencies else "")
-                + "\n\n"
-                "[Definition](definition.json) | [CycloneDX inventory](abom.cdx.json) | "
-                "[Production provenance](provenance.intoto.json) | [File index](index.json)\n\n"
-                "| Attempt | Recorded outcome | Harness | Checks |\n| --- | --- | --- | --- |\n"
-                + "\n".join(rows)
-                + "\n\n"
-                "Artifacts retain separate producer statements, including code and documentation patches. "
-                "Check statements bind assessed documents or reconstructed candidate files. "
-                "Generic checks are suite-level observations without fabricated cases.\n\n"
-                "Raw transcripts, repair diagnostic excerpts and raw canonical record copies are omitted. "
-                "Execution projections retain original-record digests, not signatures. "
-                "Source, baseline, manifest and lock files are included verbatim and may contain private "
-                "project information or paths: review before sharing.\n"
+        documents = {
+            run.run_id: records._record_bytes(run.run_directory / "record.json", ContractLimits())[
+                0
+            ]
+            for run in history
+        }
+        bom_raw, dependencies, capability_bindings = _inventory(selected)
+        definition_raw = _json(_definition(selected, dependencies))
+        definition = _hash(definition_raw)
+        base = _base_files(result, selected[0])
+        delivered, before = _delivery(selected, documents, base)
+        if not delivered:
+            raise ContractError(
+                "The completed run delivered no files.", code="evidence_delivery_failed"
             )
-            package.write("summary.md", summary.encode("ascii"))
-            index = {
-                "schema": "apmx-evidence-package/1",
-                "definition": definition_ref,
-                "inventory": bom_ref,
-                "production": production_refs,
-                "checks": check_refs,
-                "attempts": [
+        deleted = {
+            path: digest for path, digest in before.items() if path not in delivered and digest
+        }
+        subjects = [
+            {"name": path, "digest": {"sha256": _hash(raw)}}
+            for path, (_, raw) in sorted(delivered.items())
+        ]
+        destination.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix=".apmx-receipt-", dir=destination) as temporary:
+            staging = Path(temporary)
+            store = _Store(staging / bundle.EVIDENCE)
+            definition_ref = store.descriptor("definition.json", definition_raw, "definition")
+            stages, names, producer = _stages(selected, history, documents, store)
+            dependencies_out = [_base_descriptor(base, before, deleted)]
+            for path in sorted(before):
+                if before[path] is None:
+                    continue
+                raw = (
+                    base[path][1] if path in base and _hash(base[path][1]) == before[path] else None
+                )
+                if raw is None:
+                    for run in selected:
+                        entry = next(
+                            (
+                                row
+                                for row in documents[run.run_id]["baseline"]["files"]
+                                if row["relative_path"] == path and row["sha256"] == before[path]
+                            ),
+                            None,
+                        )
+                        if entry is not None:
+                            raw = _retained(run.run_directory / "baseline", entry)
+                            break
+                if raw is not None:
+                    store.put(raw)
+                dependencies_out.append(
                     {
-                        "runId": run.run_id,
-                        "selected": run in selected,
-                        "outcome": run.outcome.name,
+                        "name": path,
+                        "digest": {"sha256": before[path]},
+                        "annotations": {"apmx.role": "before-image"},
                     }
-                    for run in history
-                ],
-                "files": package.files,
-                "omissions": [
-                    "raw transcripts",
-                    "baseline.repair.diagnostics",
-                    "raw canonical records",
-                ],
-                "assurance": "unsigned same-user local observations",
-            }
-            for name, identity in package.files.items():
-                raw, _ = _read(staging, name, identity["size"])
-                if _hash(raw) != identity["sha256"]:
-                    raise ContractError(
-                        "Exported receipt changed before publication.",
-                        code="evidence_delivery_failed",
+                )
+            dependencies_out += _request_inputs(selected, documents, store)
+            for binding in capability_bindings:
+                dependencies_out.append(
+                    {
+                        "name": binding["capability"],
+                        "uri": binding["purl"],
+                        "digest": {"sha256": binding["bodySha256"]},
+                        "annotations": {
+                            "apmx.role": "capability",
+                            "lockIdentity": binding["lockIdentity"],
+                            "commit": binding["commit"],
+                            "registryHash": binding["registryHash"],
+                            "packageHash": binding["packageHash"],
+                            "bomRef": binding["bomRef"],
+                            "resources": binding["resources"],
+                        },
+                    }
+                )
+            dependencies_out += _apm_inputs(selected[0], documents[selected[0].run_id])
+            if producer is not None:
+                dependencies_out.append(
+                    {
+                        "name": f"producer {bundle.BUNDLE}",
+                        "digest": {"sha256": producer},
+                        "annotations": {"apmx.role": "producer-receipt"},
+                    }
+                )
+            byproducts = [definition_ref]
+            for run in history:
+                transcript, _ = _read(
+                    run.run_directory, "transcript.log", ContractLimits().transcript_bytes
+                )
+                byproducts.append(
+                    store.descriptor(f"transcripts/{run.run_id}.log", transcript, "transcript")
+                )
+                if run not in selected:
+                    byproducts.append(
+                        store.descriptor(
+                            f"attempts/{run.run_id}.json",
+                            _attempt_record(run, documents[run.run_id], store),
+                            "rejected-attempt",
+                        )
                     )
-            with (staging / "index.json").open("xb") as stream:
-                stream.write(_json(index))
-                stream.flush()
-                os.fsync(stream.fileno())
+            first, last = documents[selected[0].run_id], documents[selected[-1].run_id]
+            backend = first.get("apm_backend") or {}
+            from apmx.version import get_version
+
+            version = {"apmx": get_version()}
+            if isinstance(backend, dict) and backend.get("version"):
+                version["apm"] = str(backend["version"])
+            invocation = (
+                result.chain_id
+                if isinstance(result, ChainResult)
+                else result.controller.path.parent.name
+                if result.controller
+                else result.run_id
+            )
+            provenance = bundle.statement(
+                subjects,
+                bundle.PROVENANCE,
+                {
+                    "buildDefinition": {
+                        "buildType": bundle.BUILD_TYPE,
+                        "externalParameters": {"factory": _factory(first, definition)},
+                        "internalParameters": {"stages": stages},
+                        "resolvedDependencies": dependencies_out,
+                    },
+                    "runDetails": {
+                        "builder": {"id": BUILDER, "version": version},
+                        "metadata": {
+                            "invocationId": invocation,
+                            "startedOn": first["created_at"],
+                            "finishedOn": last["finished_at"],
+                        },
+                        "byproducts": byproducts,
+                    },
+                },
+            )
+            statements = [provenance]
+            for run in selected:
+                for index in range(len(run.checks)):
+                    statements.append(
+                        _check_statement(
+                            run,
+                            index,
+                            documents[run.run_id],
+                            names[run.run_id],
+                            definition,
+                            subjects,
+                            store,
+                        )
+                    )
+            statements.append(bundle.statement(subjects, bundle.CYCLONEDX, json.loads(bom_raw)))
+            outputs = staging / bundle.OUTPUTS
+            for path, (mode, raw) in delivered.items():
+                target = _path(outputs, path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _write_new(target, raw, 0o755 if mode == "100755" else 0o644)
+            _write_new(staging / bundle.BUNDLE, bundle.bundle_bytes(statements))
+            parsed, failure = bundle.inspect(staging / bundle.BUNDLE)
+            if failure is not None:
+                raise ContractError(
+                    f"The exported receipt does not verify ({failure.row}: {failure}).",
+                    code="evidence_delivery_failed",
+                )
+            if parsed.facts["evidence"] != "complete":
+                raise ContractError(
+                    "Exported evidence is incomplete.", code="evidence_delivery_failed"
+                )
             boundary.validate(result)
-            if destination.exists():
+            if any(path.exists() or path.is_symlink() for path in targets):
                 raise ContractError(
                     "Receipt destination appeared during export.", code="evidence_destination"
                 )
-            os.rename(staging, destination)
-        return destination
+            for name in (bundle.OUTPUTS, bundle.EVIDENCE, bundle.BUNDLE):
+                os.rename(staging / name, destination / name)
+        return destination / bundle.BUNDLE
     except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
         if isinstance(exc, ContractError):
             raise
+        for name in (bundle.OUTPUTS, bundle.EVIDENCE):
+            path = destination / name
+            if (
+                path.is_dir()
+                and not path.is_symlink()
+                and not (destination / bundle.BUNDLE).exists()
+            ):
+                shutil.rmtree(path, ignore_errors=True)
         raise ContractError(
             "Receipt delivery failed; the canonical execution outcome was not changed.",
             code="evidence_delivery_failed",

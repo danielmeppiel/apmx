@@ -56,19 +56,22 @@ projecting, because native metadata can be sensitive.
 Run the printed `Next` command:
 
 ```sh
-apmx audit .apm/chains/<run-id>/receipt
+apmx audit .apm/chains/<run-id>/receipt.intoto.jsonl
 ```
 
-Walk the rows: **Integrity** (every file hashed in `index.json`),
-**Standards** (in-toto, SLSA v1, CycloneDX 1.5, schema-valid), **Factory**
-(the definition digest of these contracts, checks and package commit),
+Walk the rows: **Integrity** (one in-toto bundle, its evidence blobs
+verified by digest), **Standards** (in-toto, SLSA v1, CycloneDX 1.5,
+schema-valid), **Factory** (the definition digest of these contracts, checks
+and package commit),
 **Checks**, **Ingredients** (APM reinstalls the pinned capability and runs
 `apm audit`), **Outputs**, and **Identity**: `[!] unsigned`. A laptop receipt
-proves content binding, not who ran it. Act 3 adds the signature. See
+proves content binding, not who ran it. Act 3 adds the signature. `apmx audit
+--explain stages` shows the harness and models each stage reported. See
 [audit](audit.md).
 
-For a deeper look, `demo proof` prints the factory-definition SHA-256, the SLSA
-binding, the output subjects and the ABOM. `demo verify` and
+For a deeper look, `demo proof` prints the factory-definition SHA-256, the
+factory package, the delivered files (the patched `src/pricing.py`, not the
+patch) and the inline CycloneDX inventory. `demo verify` and
 `demo verify --controls` check the same evidence with an independent consumer
 that does not import APMX, and test corruptions on disposable copies. From the
 kit root, use `./demo proof copilot` or `./demo verify copilot`. `--run ID`
@@ -80,7 +83,7 @@ the active application.
 ```sh
 ./demo opencode
 apmx --from danielmeppiel/apmx-demo-factory#v1.0.0 --on opencode --model github-copilot/gpt-5.6-sol
-apmx audit .apm/chains/<run-id>/receipt
+apmx audit .apm/chains/<run-id>/receipt.intoto.jsonl
 ```
 
 The definition digest matches the Copilot run: same contracts, checks,

@@ -69,16 +69,14 @@ Factory  factory   2 contracts   copilot / fixture-model
 Outputs   factory/.apm/chains/chain-1/artifacts/
           first.json  second.json  final.json
     Record: factory/.apm/chains/chain-1/record.json
-Receipt   factory/.apm/chains/chain-1/receipt/
+Receipt   factory/.apm/chains/chain-1/receipt.intoto.jsonl
           provenance  in-toto + SLSA v1
           checks      in-toto test-result (2)
           inventory   CycloneDX 1.5 (0 components)
+          outputs     1 delivered file in outputs/
           unsigned: binds content, not identity; review before sharing
 
-Next      apmx audit factory/.apm/chains/chain-1/receipt
-    Summary: factory/.apm/chains/chain-1/receipt/summary.md
-    Factory definition: factory/.apm/chains/chain-1/receipt/definition.json
-    Production (in-toto / SLSA v1): factory/.apm/chains/chain-1/receipt/provenance.intoto.json
-    Dependency ABOM (CycloneDX 1.5): factory/.apm/chains/chain-1/receipt/abom.cdx.json
-    Check results (in-toto): factory/.apm/chains/chain-1/receipt/checks
-    SHA-256 file index: factory/.apm/chains/chain-1/receipt/index.json
+Next      apmx audit factory/.apm/chains/chain-1/receipt.intoto.jsonl
+    Receipt bundle (in-toto JSON Lines): factory/.apm/chains/chain-1/receipt.intoto.jsonl
+    Delivered files: factory/.apm/chains/chain-1/outputs
+    Content-addressed blobs: factory/.apm/chains/chain-1/evidence

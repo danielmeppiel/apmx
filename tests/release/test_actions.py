@@ -8,6 +8,7 @@ import re
 import sys
 import tarfile
 import zipfile
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -163,6 +164,7 @@ def test_actions_pin_third_party_steps_and_keep_privilege_out_of_setup() -> None
                 assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", step["uses"]), step["uses"]
     attest = (ACTIONS / "attest/action.yml").read_text()
     assert "apmx audit --offline" in attest and "predicate.py" in attest
+    assert "subject-checksums" in attest
     setup = (ACTIONS / "setup/action.yml").read_text()
     assert "id-token" not in setup and "install.py" in setup
 
@@ -195,9 +197,7 @@ def test_run_workflow_keeps_the_agent_away_from_checks_and_signing() -> None:
         if str(step.get("uses", "")).startswith("actions/checkout@"):
             assert step["with"]["repository"] == "danielmeppiel/apmx"
     assert any(
-        step.get("uses") == "./apmx/.github/actions/attest"
-        and step["with"]["checks"] == "separate-job"
-        for step in jobs["attest"]["steps"]
+        step.get("uses") == "./apmx/.github/actions/attest" for step in jobs["attest"]["steps"]
     )
 
 
@@ -357,3 +357,71 @@ def test_published_action_refs_and_defaults_name_this_release() -> None:
             )
         )
     assert refs and refs <= {f"v{version}", f"refs/tags/v{version}"}
+
+
+def _predicate():
+    spec = importlib.util.spec_from_file_location("apmx_predicate", ACTIONS / "attest/predicate.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+GOLDEN = ROOT / "tests/unit/contracts/golden/receipt-v2/receipt.intoto.jsonl"
+
+
+def test_the_bundle_attestation_carries_every_line_in_order() -> None:
+    from apmx.audit import verifier
+
+    predicate = _predicate()
+    receipt, _ = verifier.inspect(GOLDEN)
+    carried = predicate.bundle_predicate(GOLDEN)["lines"]
+    assert [verifier.line_digest(verifier.normalized(item)) for item in carried] == (
+        receipt.facts["lineDigests"]
+    )
+    assert predicate.BUNDLE_TYPE == verifier.BUNDLE_TYPE
+    attest = (ACTIONS / "attest/action.yml").read_text()
+    assert attest.count("actions/attest@") == 2 and verifier.BUNDLE_TYPE in attest
+
+
+def test_summary_is_a_slsa_vsa_binding_every_line(tmp_path) -> None:
+    from datetime import datetime
+
+    from apmx.audit import verifier
+
+    predicate = _predicate()
+    receipt, failure = verifier.inspect(GOLDEN)
+    assert failure is None
+    report = {"facts": receipt.facts}
+    claims = {
+        "job_workflow_ref": "acme/platform/.github/workflows/run.yml@refs/tags/v1",
+        "job_workflow_sha": "c" * 40,
+    }
+    document = predicate.summary(
+        GOLDEN,
+        prefix=predicate.prefix_of("app"),
+        verifier=predicate.verifier_id(claims),
+        resource=predicate.resource_uri({"GITHUB_REPOSITORY": "acme/shop", "GITHUB_SHA": "a" * 40}),
+        report=report,
+        now=datetime(2026, 10, 21, tzinfo=UTC),
+    )
+    body = document["predicate"]
+    assert document["predicateType"] == "https://slsa.dev/verification_summary/v1"
+    assert body["verifier"]["id"] == (
+        "https://github.com/acme/platform/.github/workflows/run.yml@" + "c" * 40
+    )
+    assert body["verificationResult"] == "PASSED" and body["verifiedLevels"] == []
+    assert body["policy"]["digest"]["sha256"] == receipt.definition_sha256
+    assert [item["digest"]["sha256"] for item in body["inputAttestations"]] == (
+        receipt.facts["lineDigests"]
+    )
+    assert document["subject"][0]["name"] == "app/docs/checkout.md"
+    combined = verifier.bundle_bytes([*receipt.statements, verifier.normalized(document)])
+    bundle = tmp_path / "receipt.intoto.jsonl"
+    bundle.write_bytes(combined)
+    parsed, failure = verifier.inspect(bundle)
+    assert failure is None, failure
+    assert parsed.facts["subjectPrefix"] == "app/"
+    with pytest.raises(ValueError, match="unsafe"):
+        predicate.prefix_of("../x")
+    with pytest.raises(ValueError, match="no job workflow"):
+        predicate.verifier_id({"job_workflow_ref": "x", "job_workflow_sha": "y"})

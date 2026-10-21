@@ -1,14 +1,15 @@
-"""Patch outputs a pull request applies instead of committing.
+"""Post-apply files of patch outputs: an internal step of the receipt writer.
 
-A receipt output is a *patch output* when its receipt-indexed bytes (never the
-PR's copy) are a ``git diff --full-index --no-renames`` text patch, the format
+A selected output is a *patch output* when its bytes are a
+``git diff --full-index --no-renames`` text patch, the format
 ``export_changes`` writes, and every file it modifies or deletes has, as its
 pre-image, the exact bytes the producing attempt captured in its baseline.
-Anything else is an ordinary output, bound by SHA-256 as before.
+The receipt's subjects are then the files the patches produce, at their
+project paths, rather than the patch itself.
 
-An applied patch is replayed with ``git apply`` (no fuzz, no 3-way) onto the
-merge-base content of the files it touches, in a temporary directory outside
-the checkout. The result must equal head for every touched file.
+Patches are replayed with ``git apply`` (no fuzz, no 3-way) in a temporary
+directory outside any checkout; the result must reproduce every post-image
+the patch header records.
 """
 
 from __future__ import annotations
@@ -21,8 +22,6 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-
-from . import verifier
 
 ZERO = "0" * 40
 EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
@@ -178,39 +177,6 @@ def unsafe(path: str) -> bool:
     )
 
 
-def receipt_patches(receipt: verifier.Receipt) -> dict[str, Patch]:
-    """Patch outputs of the selected attempts, in attempt order, from the receipt's bytes."""
-    index, files = receipt.index, receipt.index["files"]
-    owners: dict[str, list[str]] = {}
-    for attempt in index["attempts"]:
-        if attempt["selected"]:
-            prefix = f"attempts/{attempt['runId']}/artifacts/"
-            for name in files:
-                if name.startswith(prefix):
-                    owners.setdefault(name[len(prefix) :], []).append(attempt["runId"])
-    found: dict[str, Patch] = {}
-    for name, runs in owners.items():
-        if len(runs) != 1:
-            continue
-        run_id = runs[0]
-        raw = verifier.read(receipt.root, f"attempts/{run_id}/artifacts/{name}")
-        if verifier.sha256(raw) != files[f"attempts/{run_id}/artifacts/{name}"]["sha256"]:
-            continue
-        sections = parse(raw)
-        if sections and all(_matches_baseline(receipt, run_id, item) for item in sections):
-            found[name] = Patch(name, raw, sections)
-    return found
-
-
-def _matches_baseline(receipt: verifier.Receipt, run_id: str, item: FilePatch) -> bool:
-    key = f"attempts/{run_id}/baseline/{item.path}"
-    if item.old is None:
-        return key not in receipt.index["files"]
-    if key not in receipt.index["files"] or unsafe(item.path):
-        return False
-    return blob_id(verifier.read(receipt.root, key)) == item.old
-
-
 def _environment(ceiling: str) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     env.update(
@@ -273,74 +239,52 @@ def _walk(work: Path) -> set[str]:
     return found
 
 
-def apply(
-    entries: dict[str, tuple[str, str, int]],
-    contents: dict[str, bytes],
-    prefix: str,
-    patches: list[Patch],
-    base: str,
-) -> dict[str, tuple[str, bytes] | None]:
-    """Replay ``patches`` in order onto the base files; return each touched path's result.
+def apply(state: dict[str, tuple[str, bytes]], patch: Patch) -> dict[str, tuple[str, bytes] | None]:
+    """Replay one patch onto ``state`` (the current (mode, bytes) of the files it touches).
 
-    ``entries`` maps repository paths at the merge-base to (mode, object id,
-    size); ``contents`` maps those object ids to bytes. Results are keyed by
-    workspace-relative path: (mode, bytes), or None when the patches delete it.
+    Returns each touched path's result: (mode, bytes), or None when deleted.
     """
-    state: dict[str, tuple[str, bytes]] = {}
-    touched = {path for patch in patches for path in patch.paths}
-    for path in touched:
-        entry = entries.get(prefix + path)
-        if entry is None:
-            continue
-        mode, sha, _ = entry
-        if mode not in REGULAR:
-            raise Mismatch(f"{prefix}{path} at merge-base {base[:12]} is not a regular file")
-        state[path] = (mode, contents[sha])
-    with tempfile.TemporaryDirectory(prefix="apmx-audit-") as temporary:
+    for item in patch.files:
+        current = state.get(item.path)
+        if unsafe(item.path):
+            raise Mismatch(f"{patch.name} touches {item.path}, which is never applied")
+        if item.old is None and current is not None:
+            raise Mismatch(f"{patch.name} adds {item.path}, which already exists")
+        if item.old is not None and (
+            current is None or current[0] != item.mode or blob_id(current[1]) != item.old
+        ):
+            raise Mismatch(f"{patch.name}: {item.path} differs from the patch pre-image")
+    with tempfile.TemporaryDirectory(prefix="apmx-patch-") as temporary:
         root = Path(temporary).resolve()
         work = root / "work"
         work.mkdir()
         env = _environment(str(root))
-        for path, (mode, raw) in state.items():
-            target = _target(work, path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(raw)
-            target.chmod(0o755 if mode == "100755" else 0o644)
-        for patch in patches:
-            for item in patch.files:
-                current = state.get(item.path)
-                if item.old is None and current is not None:
-                    raise Mismatch(
-                        f"{patch.name} does not apply to base {base[:12]}: it adds "
-                        f"{prefix}{item.path}, which already exists"
-                    )
-                if item.old is not None and (
-                    current is None or current[0] != item.mode or blob_id(current[1]) != item.old
-                ):
-                    raise Mismatch(
-                        f"{patch.name} does not apply to base {base[:12]}: "
-                        f"{prefix}{item.path} differs from the patch pre-image"
-                    )
-            failure = _git_apply(work, patch.raw, env)
-            if failure is not None:
-                raise Mismatch(f"{patch.name} does not apply to base {base[:12]}: {failure}")
-            for item in patch.files:
-                target = _target(work, item.path)
-                if item.new is None:
-                    if os.path.lexists(target):
-                        raise Mismatch(f"{patch.name} applied to base keeps {item.path}")
-                    state.pop(item.path, None)
-                    continue
-                info = target.lstat()
-                if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
-                    raise Mismatch(f"{patch.name} applied to base gives no regular {item.path}")
-                raw = target.read_bytes()
-                if blob_id(raw) != item.new:
-                    raise Mismatch(
-                        f"{patch.name} applied to base does not give its recorded "
-                        f"post-image of {item.path}"
-                    )
-                state[item.path] = (item.mode, raw)
-        if _walk(work) != set(state):
-            raise Mismatch("applying the patches touched files their headers do not name")
-    return {path: state.get(path) for path in touched}
+        present = {path: value for path, value in state.items() if value is not None}
+        for path in patch.paths:
+            if path in present:
+                mode, raw = present[path]
+                target = _target(work, path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw)
+                target.chmod(0o755 if mode == "100755" else 0o644)
+        failure = _git_apply(work, patch.raw, env)
+        if failure is not None:
+            raise Mismatch(f"{patch.name} does not apply: {failure}")
+        result: dict[str, tuple[str, bytes] | None] = {}
+        for item in patch.files:
+            target = _target(work, item.path)
+            if item.new is None:
+                if os.path.lexists(target):
+                    raise Mismatch(f"{patch.name} keeps {item.path}, which it deletes")
+                result[item.path] = None
+                continue
+            info = target.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
+                raise Mismatch(f"{patch.name} gives no regular {item.path}")
+            raw = target.read_bytes()
+            if blob_id(raw) != item.new:
+                raise Mismatch(f"{patch.name} does not give its recorded post-image of {item.path}")
+            result[item.path] = (item.mode, raw)
+        if _walk(work) != {path for path, value in result.items() if value is not None}:
+            raise Mismatch(f"{patch.name} touched files its headers do not name")
+    return result

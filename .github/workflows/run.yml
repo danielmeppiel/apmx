@@ -11,10 +11,15 @@ name: apmx run
 #            Its own checks are only a fast fail; its receipt is untrusted.
 #   check    a fresh runner, no agent: `apmx check` replays only the output
 #            bytes into this commit's factory, reruns its checks and writes the
-#            receipt of record (harness "replay").
+#            receipt of record (receipt.intoto.jsonl; harness and models are
+#            recorded as reported by the producer). It uploads the receipt
+#            (apmx-receipt) and a code-only delivery (apmx-delivery): the
+#            delivered files at their repository paths plus .apmx-deleted.
 #   attest   id-token + attestations: write, no caller checkout, no candidate
-#            code: `apmx audit --offline`, then a GitHub artifact attestation
-#            over the receipt's index.json.
+#            code: `apmx audit --offline`, then GitHub artifact attestations
+#            over the delivered files: a SLSA VSA v1 binding every receipt
+#            statement by digest, and the receipt bundle. A PR then carries
+#            code only: `apmx audit` finds both by a changed file's SHA-256.
 #   deliver  only with target-repository; no agent, no candidate code: pushes
 #            the delivered files onto the base commit as a branch of the
 #            target repository and opens or updates its pull request, using
@@ -154,10 +159,10 @@ on:
         description: Factory definition digest of the receipt of record.
         value: ${{ jobs.check.outputs.definition }}
       receipt-sha256:
-        description: SHA-256 of the signed receipt index.json.
-        value: ${{ jobs.attest.outputs.receipt }}
+        description: SHA-256 of the receipt of record (receipt.intoto.jsonl).
+        value: ${{ jobs.check.outputs.receipt }}
       attestation-url:
-        description: URL of the receipt attestation.
+        description: URL of the signed verification summary (empty when attest is off).
         value: ${{ jobs.attest.outputs.url }}
       base-commit:
         description: Commit of the base repository the factory ran against.
@@ -338,11 +343,14 @@ jobs:
           python3 - <<'PY'
           import os, shutil
           from pathlib import Path
-          found = sorted(Path(os.environ["APMX_RUN_ROOT"], ".apm").glob("*/*/receipt/index.json"),
-                         key=lambda p: p.parent.parent.name)
+          found = sorted(Path(os.environ["APMX_RUN_ROOT"], ".apm").glob("*/*/receipt.intoto.jsonl"),
+                         key=lambda p: p.parent.name)
           if not found:
               raise SystemExit("The factory run delivered no receipt")
-          shutil.copytree(found[-1].parent, Path(os.environ["RUNNER_TEMP"]) / "producer-receipt")
+          target = Path(os.environ["RUNNER_TEMP"]) / "producer-receipt"
+          target.mkdir()
+          shutil.copyfile(found[-1], target / "receipt.intoto.jsonl")
+          shutil.copytree(found[-1].parent / "evidence", target / "evidence")
           PY
       - name: Self-test, the agent saw no credential besides the model token
         if: inputs.hermetic-actor
@@ -366,6 +374,8 @@ jobs:
       contents: read
     outputs:
       definition: ${{ steps.record.outputs.definition }}
+      receipt: ${{ steps.record.outputs.receipt }}
+      prefix: ${{ steps.record.outputs.prefix }}
     defaults:
       run:
         shell: bash
@@ -444,33 +454,11 @@ jobs:
         env:
           REQUIREMENTS: ${{ inputs.checks-requirements }}
         run: |
-          receipt=$(ls -d "$APMX_RUN_ROOT"/.apm/*/*/receipt)
+          receipt=$(ls "$APMX_RUN_ROOT"/.apm/*/*/receipt.intoto.jsonl)
           python3 apmx/scripts/run_stage.py verify --receipt "$receipt" --file "$REQUIREMENTS"
       - id: record
-        name: Package the receipt of record and a delivery overlay
-        run: |
-          python3 - <<'PY'
-          import json, os, shutil
-          from pathlib import Path, PurePosixPath
-          temp = Path(os.environ["RUNNER_TEMP"])
-          factory = Path(os.environ["APMX_RUN_ROOT"])
-          (index,) = [p for p in factory.glob(".apm/*/*/receipt/index.json")]
-          receipt = index.parent
-          shutil.copytree(receipt, temp / "receipt")
-          data = json.loads(index.read_bytes())
-          root = temp / "delivery" / PurePosixPath(os.environ["APMX_DELIVERY"])
-          shutil.copytree(receipt, root / receipt.relative_to(factory))
-          for attempt in data["attempts"]:
-              if attempt["selected"]:
-                  prefix = f"attempts/{attempt['runId']}/artifacts/"
-                  for name in data["files"]:
-                      if name.startswith(prefix):
-                          target = root / name[len(prefix):]
-                          target.parent.mkdir(parents=True, exist_ok=True)
-                          shutil.copyfile(receipt / name, target)
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"definition={data['definition']['digest']['sha256']}\n")
-          PY
+        name: Package the receipt of record and a code-only delivery
+        run: python3 apmx/scripts/run_stage.py package --output "$RUNNER_TEMP"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: apmx-receipt
@@ -493,7 +481,6 @@ jobs:
       id-token: write
       attestations: write
     outputs:
-      receipt: ${{ steps.attest.outputs.receipt-sha256 }}
       url: ${{ steps.attest.outputs.attestation-url }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -517,8 +504,8 @@ jobs:
       - id: attest
         uses: ./apmx/.github/actions/attest
         with:
-          receipt: ${{ runner.temp }}/receipt
-          checks: separate-job
+          receipt: ${{ runner.temp }}/receipt/receipt.intoto.jsonl
+          prefix: ${{ needs.check.outputs.prefix }}
 
   deliver:
     needs: [target, check, attest]
@@ -575,7 +562,7 @@ jobs:
           FACTORY: ${{ inputs.factory }}
           DEFINITION: ${{ needs.check.outputs.definition }}
           ATTESTATION_URL: ${{ needs.attest.outputs.url }}
-          RECEIPT_SHA256: ${{ needs.attest.outputs.receipt }}
+          RECEIPT_SHA256: ${{ needs.check.outputs.receipt }}
         run: |
           python3 apmx/scripts/run_deliver.py deliver --delivery "$RUNNER_TEMP/delivery" \
             --bundle "$RUNNER_TEMP/delivered/delivered.bundle"

@@ -1,12 +1,14 @@
 """Which receipt, and which change: ``apmx audit`` defaults.
 
-Locally, the receipt is the newest COMPLETE run under ``./.apm/``. In a
-GitHub pull request, it is the receipt the PR adds, and the PR's own change
-(merge-base..head) is bound to that receipt automatically: every file the PR
-changes must be a receipt output (or an unchanged recorded input) with the
-same SHA-256 at head, or a file a patch output touches, whose head bytes must
-equal that patch applied to the merge-base (see :mod:`apmx.audit.patches`).
-Nothing is guessed: ambiguity is exit 2, a mismatch is exit 1.
+Locally, the receipt is the newest COMPLETE run's ``receipt.intoto.jsonl``
+under ``./.apm/``. In a GitHub pull request the PR carries code only: its own
+change (merge-base..head) is bound to the delivery a signed verification
+summary names. Every file the PR adds or modifies must be a delivered file
+with the same SHA-256 at head; every file it deletes must be a recorded
+deletion. Freshness: each file the PR touches must have, at the PR base, the
+before-image the factory started from, and a recorded base commit must be in
+the PR base's history. Nothing is guessed: ambiguity is exit 2, a mismatch is
+exit 1.
 """
 
 from __future__ import annotations
@@ -19,11 +21,13 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from . import patches as patching
+from . import verifier
 
 KINDS = ("runs", "chains", "controllers")
+REGULAR = ("100644", "100755")
+MAX_BYTES = 16 * 1024 * 1024
 _RECEIPT = re.compile(
-    r"^(?P<root>(?:.+/)?)\.apm/(?:runs|chains|controllers)/[^/]+/receipt/index\.json$"
+    r"^(?P<root>(?:.+/)?)\.apm/(?:runs|chains|controllers)/[^/]+/receipt\.intoto\.jsonl$"
 )
 _EVENTS = ("pull_request", "pull_request_target")
 _SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
@@ -74,9 +78,9 @@ def latest_local(cwd: Path) -> tuple[Path, int] | None:
         directory = cwd / ".apm" / kind
         if directory.is_dir() and not directory.is_symlink():
             found += [
-                path.parent
-                for path in directory.glob("*/receipt/index.json")
-                if path.is_file() and not path.parent.is_symlink()
+                path
+                for path in directory.glob(f"*/{verifier.BUNDLE}")
+                if path.is_file() and not path.is_symlink() and not path.parent.is_symlink()
             ]
     if not found:
         return None
@@ -122,14 +126,6 @@ class Change:
         changed = {parts[i + 1]: parts[i] for i in range(0, len(parts) - 1, 2) if parts[i]}
         return cls(pull, root, merge_base, changed)
 
-    def receipts(self) -> list[str]:
-        """Receipt directories (repository-relative) the PR adds or changes."""
-        return sorted(
-            path.removesuffix("/index.json")
-            for path, status in self.changed.items()
-            if status != "D" and _RECEIPT.match(path)
-        )
-
     def entries(self, revision: str, paths: list[str]) -> dict[str, tuple[str, str, int]]:
         """(mode, object id, size) of each exact path at ``revision``; absent paths are omitted."""
         wanted, found = set(paths), {}
@@ -166,23 +162,44 @@ class Change:
             offset = start + int(size) + 1
         return found
 
-    def head_digests(self, paths: list[str]) -> dict[str, str]:
-        """SHA-256 of each path at head; absent paths are omitted."""
+    def files(self, revision: str, paths: list[str]) -> dict[str, tuple[str, bytes | None]]:
+        """(mode, bytes) of each path at ``revision``; bytes are None for non-regular entries."""
         if not paths:
             return {}
-        blobs = {
-            path: sha
-            for path, (mode, sha, _) in self.entries(self.pull.head, paths).items()
-            if mode in patching.REGULAR
+        entries = self.entries(revision, paths)
+        regular = {path: entry for path, entry in entries.items() if entry[0] in REGULAR}
+        if any(not 0 <= size <= MAX_BYTES for _, _, size in regular.values()):
+            raise ChangeUnavailable("a changed file is larger than 16 MiB")
+        contents = self.blobs({sha for _, sha, _ in regular.values()})
+        return {
+            path: (mode, contents[sha] if path in regular else None)
+            for path, (mode, sha, _) in entries.items()
         }
-        contents = self.blobs(set(blobs.values()))
-        return {path: hashlib.sha256(contents[sha]).hexdigest() for path, sha in blobs.items()}
+
+    def digests(self, revision: str, paths: list[str]) -> dict[str, str | None]:
+        """SHA-256 of each path at ``revision`` (None: not a regular file); absent omitted."""
+        return {
+            path: None if raw is None else hashlib.sha256(raw).hexdigest()
+            for path, (_, raw) in self.files(revision, paths).items()
+        }
+
+    def is_ancestor(self, commit: str) -> bool | None:
+        """Is ``commit`` in the PR base's history? None when it is not in this checkout."""
+        try:
+            _git(self.root, "cat-file", "-e", f"{commit}^{{commit}}")
+        except ChangeUnavailable:
+            return None
+        try:
+            _git(self.root, "merge-base", "--is-ancestor", commit, self.pull.base)
+        except ChangeUnavailable:
+            return False
+        return True
 
 
 def workspace_prefix(receipt: Path, root: Path) -> str | None:
     """Repository-relative directory a receipt's outputs are relative to (``X/`` for ``X/.apm/...``)."""
     try:
-        relative = receipt.resolve().relative_to(root.resolve()).as_posix() + "/index.json"
+        relative = receipt.resolve().relative_to(root.resolve()).as_posix()
     except (ValueError, OSError):
         return None
     match = _RECEIPT.match(relative)
@@ -193,200 +210,103 @@ def _plural(count: int, word: str) -> str:
     return f"{count} {word}{'s' if count != 1 else ''}"
 
 
-def _apply(
-    change: Change,
-    prefix: str,
-    outputs: dict[str, str],
-    applied: list[patching.Patch],
-    touched: dict[str, str],
-) -> str | None:
-    """Replay the applied patches on the merge-base; the first mismatch with head, or None."""
-    for patch in applied:
-        for path in patch.paths:
-            if patching.unsafe(path):
-                return (
-                    f"{patch.name} touches {path}, which audit never applies "
-                    "(absolute, '..', .git, .gitmodules or .apm path)"
-                )
-            if path in outputs:
-                return f"{patch.name} touches {prefix}{path}, which is also a receipt output"
-            touched[prefix + path] = patch.name
-    if len(touched) > patching.MAX_FILES:
-        raise ChangeUnavailable(f"the patches touch more than {patching.MAX_FILES} files")
-    if len({path.casefold() for path in touched}) != len(touched):
-        return "the applied patches touch paths that differ only by case"
-    paths = sorted(touched)
-    base = change.entries(change.merge_base, paths)
-    now = change.entries(change.pull.head, paths)
-    regular = [entry for entry in (*base.values(), *now.values()) if entry[0] in patching.REGULAR]
-    if any(not 0 <= size <= patching.MAX_BYTES for _, _, size in regular):
-        raise ChangeUnavailable("a file the patches touch is larger than 16 MiB")
-    contents = change.blobs({sha for _, sha, _ in regular})
-    try:
-        result = patching.apply(base, contents, prefix, applied, change.merge_base)
-    except patching.Mismatch as exc:
-        return str(exc)
-    for path in paths:
-        name, expected = touched[path], result[path[len(prefix) :]]
-        actual, before = now.get(path), base.get(path)
-        if actual is not None and actual[0] not in patching.REGULAR:
-            return f"{path} at head is not a regular file (symlink, directory or submodule)"
-        if expected is None:
-            if actual is not None:
-                return f"{name} deletes {path}, but it is still at head"
-            continue
-        if actual is None:
-            return f"{path} is missing at head; {name} applied to base produces it"
-        if contents[actual[1]] != expected[1]:
-            if before is not None and before[1] == actual[1]:
-                return f"{change.pull.label} does not apply {name} to {path} (unchanged from base)"
-            return f"{path} at head differs from {name} applied to base"
-        if actual[0] != expected[0]:
-            return (
-                f"{path} at head has mode {actual[0]}; {name} applied to base gives {expected[0]}"
-            )
-    return None
-
-
 def bind(
-    change: Change,
-    prefix: str,
-    outputs: dict[str, str],
-    inputs: dict[str, set[str]],
-    patches: dict[str, patching.Patch] | None = None,
+    change: Change, prefix: str, receipt: verifier.Receipt
 ) -> tuple[bool, str, list[str], dict[str, object]]:
-    """Bind the PR change to the receipt: outputs match at head; nothing else changed.
+    """Bind the PR change to a delivery: subjects at head, recorded deletions, fresh base.
 
-    ``outputs`` and ``inputs`` are receipt-relative paths (relative to
-    ``prefix``) with their SHA-256. The receipt's own ``.apm/`` state under
-    ``prefix`` is excluded from the change.
-
-    A patch output (``patches``) the PR does not commit must be applied
-    instead: it is committed when the PR adds or modifies ``<prefix><name>``
-    or head already has it with the receipt's digest; otherwise the files it
-    touches must equal it applied to the merge-base. Once any patch is
-    applied, the other outputs are optional, but any the PR changes must
-    match. With no applied patch every output must be at head, as before.
+    ``prefix`` is the repository directory the delivered files sit under.
     """
-    state = f"{prefix}.apm/"
-    relevant = {
-        path: status for path, status in change.changed.items() if not path.startswith(state)
-    }
-    names = sorted({prefix + name for name in outputs} | set(relevant))
-    head = change.head_digests(names)
+    subjects = {prefix + name: digest for name, digest in receipt.subjects.items()}
+    deleted = {prefix + name: digest for name, digest in receipt.deleted.items()}
+    before = {prefix + name: digest for name, digest in receipt.before.items()}
+    changed = dict(change.changed)
     facts: dict[str, object] = {
         "pullRequest": change.pull.number,
         "base": change.pull.base,
         "head": change.pull.head,
         "mergeBase": change.merge_base,
+        "changedFiles": len(changed),
+        "subjectPrefix": prefix,
     }
-    candidates = {name: patch for name, patch in (patches or {}).items() if name in outputs}
-    applied = [
-        patch
-        for name, patch in candidates.items()
-        if relevant.get(prefix + name, "D") == "D" and head.get(prefix + name) != outputs[name]
-    ]
-    applied_names = {patch.name for patch in applied}
-    if candidates:
-        facts["patches"] = [
-            {
-                "name": name,
-                "delivery": "applied" if name in applied_names else "committed",
-                "files": [prefix + path for path in patch.paths],
-            }
-            for name, patch in candidates.items()
-        ]
-    touched: dict[str, str] = {}
-    if applied:
-        failure = _apply(change, prefix, outputs, applied, touched)
-        facts["appliedFiles"] = sorted(touched)
-        if failure is not None:
-            return False, failure, [], facts
-    committed, omitted = 0, []
-    for name, digest in sorted(outputs.items()):
-        if name in applied_names:
+    if not changed:
+        return False, f"{change.pull.label} changes no files", [], facts
+    if len(changed) > 10_000:
+        raise ChangeUnavailable("the PR changes more than 10000 files")
+    present = sorted(path for path, status in changed.items() if status != "D")
+    head = change.digests(change.pull.head, present)
+    unbound = []
+    for path, status in sorted(changed.items()):
+        if status == "D":
+            if path not in deleted:
+                unbound.append(f"deletes {path}, which the delivery does not delete")
             continue
-        actual = head.get(prefix + name)
-        if applied and relevant.get(prefix + name, "D") == "D":
-            if actual == digest:
-                committed += 1
-            else:
-                omitted.append(name)
-            continue
-        if actual is None:
-            return False, f"{prefix}{name} is a receipt output but is missing at head", [], facts
-        if actual != digest:
-            return (
-                False,
-                f"{prefix}{name} at head differs from its receipt subject (SHA-256)",
-                [],
-                facts,
-            )
-        committed += 1
-    hints = {prefix + path: name for name, patch in candidates.items() for path in patch.paths}
-    unbound, notes = [], []
-    bound_inputs = 0
-    for path, status in sorted(relevant.items()):
-        relative = path[len(prefix) :] if path.startswith(prefix) else None
-        if path in touched:
-            continue
-        if relative in outputs and relative not in applied_names and status != "D":
-            continue
-        if (
-            relative is not None
-            and status != "D"
-            and head.get(path) is not None
-            and head[path] in inputs.get(relative, set())
-        ):
-            bound_inputs += 1
-            continue
-        unbound.append(("deletes " if status == "D" else "changes ") + path)
-        if path in hints and len(notes) < 5:
-            notes.append(f"{path} is in {hints[path]}, which this PR commits rather than applies")
-    facts["changedFiles"] = len(relevant)
+        if path not in head:
+            unbound.append(f"changes {path}, which is missing at head")
+        elif head[path] is None:
+            unbound.append(f"changes {path} into a symlink, directory or submodule")
+        elif path not in subjects:
+            unbound.append(f"changes {path}, which is not a delivered file")
+        elif head[path] != subjects[path]:
+            unbound.append(f"changes {path}, whose bytes differ from the delivered file (SHA-256)")
     if unbound:
         return (
             False,
-            f"{change.pull.label} {unbound[0]}, which the receipt does not bind"
+            f"{change.pull.label} {unbound[0]}"
             + (f" (+{len(unbound) - 1} more)" if len(unbound) > 1 else ""),
-            notes + [_ascii(item) for item in unbound[1:6]],
+            [_ascii(item) for item in unbound[1:6]],
             facts,
         )
-    if applied:
-        facts["committedOutputs"] = committed
-        detail = (
-            f"{change.pull.label}: {' + '.join(patch.name for patch in applied)} applied to base "
-            f"reproduce{'s' if len(applied) == 1 else ''} head ({_plural(len(touched), 'file')})"
-        )
-        if committed:
-            detail += f"; {committed} other output{'s' if committed != 1 else ''} match"
-        if omitted:
-            notes.append(
-                f"{_plural(len(omitted), 'output')} not in the PR (kept in the receipt): "
-                + " ".join(omitted[:5])
-                + (" ..." if len(omitted) > 5 else "")
+    touched = sorted(changed)
+    at_base = change.digests(change.pull.base, touched)
+    stale = []
+    for path in touched:
+        if path not in before:
+            stale.append(f"{path} has no recorded before-image")
+        elif before[path] is None:
+            if path in at_base:
+                stale.append(f"{path} already exists at base {change.pull.base[:12]}")
+        elif at_base.get(path) != before[path]:
+            state = "absent" if path not in at_base else "different"
+            stale.append(f"{path} is {state} at base {change.pull.base[:12]}")
+    notes: list[str] = []
+    commit = receipt.base.get("gitCommit")
+    if commit:
+        ancestor = change.is_ancestor(commit)
+        facts["builtOn"] = commit
+        if ancestor is None:
+            raise ChangeUnavailable(
+                f"the recorded base commit {commit[:12]} is not in this checkout; "
+                "use actions/checkout with fetch-depth: 0"
             )
-    else:
-        detail = (
-            f"{change.pull.label}: {len(outputs)}/{len(outputs)} outputs match at head "
-            f"{change.pull.head[:12]}; {_plural(len(relevant), 'changed file')} bound"
+        if not ancestor:
+            stale.insert(0, f"it was built on {commit[:12]}, which is not in the PR base's history")
+    if stale:
+        facts["stale"] = stale
+        return (
+            False,
+            f"built on a stale base: {stale[0]}; rerun the factory",
+            [_ascii(item) for item in stale[1:6]],
+            facts,
         )
-    if bound_inputs:
-        notes.append(f"{bound_inputs} changed file(s) are unmodified recorded inputs")
+    omitted = sorted((set(subjects) | set(deleted)) - set(changed))
+    if omitted:
+        notes.append(
+            f"{_plural(len(omitted), 'delivered change')} not in the PR: "
+            + " ".join(omitted[:5])
+            + (" ..." if len(omitted) > 5 else "")
+        )
+    if commit:
+        notes.append(f"built on {commit[:12]}, in the PR base's history")
+    removed = sum(1 for status in changed.values() if status == "D")
+    detail = (
+        f"{change.pull.label}: {_plural(len(changed), 'changed file')} = delivered files at head "
+        f"{change.pull.head[:12]}"
+        + (f" ({removed} recorded deletion{'s' if removed != 1 else ''})" if removed else "")
+        + f"; before-images match base {change.pull.base[:12]}"
+    )
+    facts["bound"] = len(changed)
     return True, detail, notes, facts
-
-
-def receipt_inputs(index: dict) -> dict[str, set[str]]:
-    """Baseline files the selected attempts read, by receipt-relative path."""
-    inputs: dict[str, set[str]] = {}
-    for attempt in index.get("attempts", []):
-        if not attempt.get("selected"):
-            continue
-        prefix = f"attempts/{attempt['runId']}/baseline/"
-        for name, identity in index["files"].items():
-            if name.startswith(prefix):
-                inputs.setdefault(name[len(prefix) :], set()).add(identity["sha256"])
-    return inputs
 
 
 def _ascii(text: str) -> str:

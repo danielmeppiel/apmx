@@ -36,16 +36,14 @@ Outputs   .apm/runs/run-1/artifacts/
         Observed execution model: not reported by Copilot
         Logs: .apm/runs/run-1/transcript.log
         Logs may contain sensitive data. Review before sharing.
-Receipt   .apm/runs/run-1/receipt/
+Receipt   .apm/runs/run-1/receipt.intoto.jsonl
           provenance  in-toto + SLSA v1
           checks      in-toto test-result (1)
           inventory   CycloneDX 1.5 (0 components)
+          outputs     1 delivered file in outputs/
           unsigned: binds content, not identity; review before sharing
 
-Next      apmx audit .apm/runs/run-1/receipt
-        Summary: .apm/runs/run-1/receipt/summary.md
-        Factory definition: .apm/runs/run-1/receipt/definition.json
-        Production (in-toto / SLSA v1): .apm/runs/run-1/receipt/provenance.intoto.json
-        Dependency ABOM (CycloneDX 1.5): .apm/runs/run-1/receipt/abom.cdx.json
-        Check results (in-toto): .apm/runs/run-1/receipt/checks
-        SHA-256 file index: .apm/runs/run-1/receipt/index.json
+Next      apmx audit .apm/runs/run-1/receipt.intoto.jsonl
+        Receipt bundle (in-toto JSON Lines): .apm/runs/run-1/receipt.intoto.jsonl
+        Delivered files: .apm/runs/run-1/outputs
+        Content-addressed blobs: .apm/runs/run-1/evidence

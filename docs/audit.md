@@ -1,94 +1,88 @@
-# Auditing a receipt: `apmx audit`
+# Auditing a delivery: `apmx audit`
 
-`apmx audit` answers one question. Someone handed you outputs and a receipt:
-can you trust that this factory, with these ingredients, produced these files,
-and that its checks passed? It needs no flags:
+`apmx audit` answers one question. Someone handed you files a factory
+produced: can you trust that this factory, with these ingredients, produced
+them, and that its checks passed? It needs no flags:
 
 ```text
 $ apmx audit
-Receipt   .apm/chains/20261009T090958Z-7a55db0b0bb0/receipt   (newest COMPLETE run)   2 contracts   unsigned
+Receipt   .apm/chains/20261021T184925Z-67361d3ba1d4/receipt.intoto.jsonl   (newest COMPLETE run)   5 contracts   unsigned
 
 [i] Policy        none found
-[+] Integrity     all 26 files match index.json (SHA-256)
-[+] Standards     in-toto Statement v1, SLSA Provenance v1, CycloneDX 1.5: schema-valid
-[+] Factory       definition sha256:0311c27f3d7b..  2 contracts, 2 checks
-[+] Checks        2/2 passed (in-toto test-result)
-[+] Ingredients   0 APM dependencies   nothing to audit
+[+] Integrity     11 statements; line digests computed; evidence 31/31 blobs verified
+[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Factory       definition sha256:0bec0549b9af..  danielmeppiel/apmx-demo-factory#v1.0.0  5 contracts, 9 checks
+[+] Checks        9/9 passed (in-toto test-result)
+[+] Ingredients   2 APM dependencies   apm audit --ci: clean (content, lock, drift)
 [i] Revocation    no policy: nothing revoked to check
-[+] Outputs       3 files bound: final.json first.json second.json
+[+] Outputs       4/4 delivered files match receipt subjects (re-hashed)
+                  4 files bound: docs/checkout.md src/checkout.py src/pricing.py tests/test_free_shipping.py
 [!] Identity      unsigned: proves content binding, not who ran it
 
 [+] VALID   (content-bound; not authenticated)
 ```
 
-Every COMPLETE run delivers a [receipt](evidence.md) next to its record:
-`.apm/runs/<id>/receipt`, `.apm/chains/<id>/receipt` or
-`.apm/controllers/<id>/receipt`. REJECTED and HALTED runs have no receipt.
-Each run's `Next` line prints the exact audit command for its receipt.
+Every COMPLETE run writes a [receipt](evidence.md) next to its record:
+`receipt.intoto.jsonl`, `outputs/` and `evidence/` in `.apm/runs/<id>/`,
+`.apm/chains/<id>/` or `.apm/controllers/<id>/`. REJECTED and HALTED runs have
+no receipt. Each run's `Next` line prints the exact audit command.
 
 ## What it audits, without flags
 
-| Where | Receipt | Outputs | Policy |
+| Where | What | Outputs | Policy |
 | --- | --- | --- | --- |
-| Your machine | The newest COMPLETE run under `./.apm/` (run ids start with a UTC timestamp). | Checked inside the receipt. | Discovered (below). |
-| A GitHub pull request (`pull_request` or `pull_request_target`) | The one receipt the PR adds under `.apm/<runs\|chains\|controllers>/<id>/receipt`. | The PR's own change is bound to the receipt (below). | Discovered; the repository file is read from the PR **base**. |
+| Your machine | The newest COMPLETE run's `receipt.intoto.jsonl` under `./.apm/` (run ids start with a UTC timestamp). | Its `outputs/` are re-hashed. | Discovered (below). |
+| A GitHub pull request (`pull_request` or `pull_request_target`) | The PR carries **code only**. Its changed files are looked up by SHA-256 in the attestation store of `factories.signers` (below). | The PR's own change is bound to the signed delivery. | Discovered; the repository file is read from the PR **base**. |
 
-Ambiguity is never guessed. No receipt, or a PR that adds several, is exit 2
-with a message saying what to pass.
+Ambiguity is never guessed: no receipt is exit 2 with a message saying what to pass.
 
-### Pull requests: the change is the claim
+### Pull requests: the gate
 
-In a PR, apmx reads the event's base and head commits and diffs
-`merge-base..head`. The audit passes only when:
+A factory PR (opened from `run.yml`'s `apmx-delivery`) contains only the
+delivered files, no receipt folder. In a PR, apmx reads the event's base and
+head commits, diffs `merge-base..head`, and:
 
-- every receipt output exists at head with exactly the receipt's SHA-256, or
-  is a patch output the PR applies (below), and
-- every file the PR changes is a receipt output, a file an applied patch
-  touches, or a recorded input with unchanged bytes. The receipt's own
-  `.apm/` directory is excluded.
+1. hashes every added or modified file at head;
+2. asks GitHub for the attestations stored for those digests, like npm
+   provenance (`gh api repos/<signer repo>/attestations/sha256:<digest>`),
+   and verifies them with `gh attestation verify <file> --bundle <bundles>
+   --repo <signer repo> --signer-workflow <workflow> --predicate-type
+   https://slsa.dev/verification_summary/v1 --cert-oidc-issuer
+   https://token.actions.githubusercontent.com --deny-self-hosted-runners`,
+   for each `factories.signers` entry (Sigstore signature, transparency log,
+   certificate). The list is fetched unfiltered because GitHub's list API
+   refuses the VSA predicate type as a filter;
+3. requires **one** PASSED SLSA VSA from an allowed signer, at its
+   `workflow_sha` when pinned, whose `verifier.id` names that workflow at the
+   signing commit, and whose subjects include **every** changed file at its
+   repository path with the same SHA-256;
+4. fetches the receipt bundle the same signer attested over the same files
+   and keeps exactly the statements the VSA's `inputAttestations` name by
+   digest, then runs every structural and policy row on them;
+5. **freshness:** every file the PR touches must have, at the PR base, the
+   before-image the factory started from (or be absent, for a file it
+   created). A recorded base `gitCommit` must be in the PR base's history.
+   Otherwise: `built on a stale base: src/pricing.py is different at base
+   1a2b3c4d5e6f; rerun the factory`;
+6. **deletions:** a file the PR deletes must be in the provenance's recorded
+   deletions, with its before-image at base.
 
-A PR that also edits `backdoor.py`, `apm-policy.yml` or a check script fails
-the Outputs row with exit 1: `PR #7 changes backdoor.py, which the receipt
-does not bind`. Use `actions/checkout` with `fetch-depth: 0` so both commits
-are present; a missing commit is exit 2.
+A PR that also edits `backdoor.py`, `apm-policy.yml` or a check script has no
+summary covering it: `[x] Identity  no PASSED verification summary from
+factories.signers covers every changed file (backdoor.py is not a delivered
+file)`, exit 1. Delivered files the PR leaves out are noted, not required.
+Use `actions/checkout` with `fetch-depth: 0` so both commits are present; a
+missing commit is exit 2. Nothing from the PR is executed.
 
-**Applied patches.** A factory that delivers code as a patch (the
-`export_changes` tool, for example `changes.diff`) should open a PR with the
-patch applied, not the `.diff` file. An output is a *patch output* when the
-receipt's own indexed bytes (never the PR's copy) are a `git diff
---full-index` text patch and every file it modifies or deletes has, as its
-pre-image, the exact bytes the producing attempt captured in its baseline.
-Patch paths are relative to the receipt's workspace, the directory that holds
-`.apm/`. Each patch output is delivered one of two ways:
-
-- **committed**: the PR adds or modifies `<workspace>/<name>`, or head already
-  has it with the receipt's digest. It is an ordinary output, bound by SHA-256,
-  and the files it touches must not change.
-- **applied**: otherwise. apmx copies the merge-base bytes of the touched
-  files into a temporary directory outside the checkout, checks each against
-  the patch's recorded pre-image, runs `git apply` (no fuzz, no 3-way) and
-  requires head to equal the result for every touched file: bytes, mode,
-  additions and deletions. Patches apply in attempt order.
-
-Once any patch is applied, the other outputs are optional: those the PR
-changes must match their digest, and the rest stay in the receipt. Without
-an applied patch, every output must be at head, as before. Committing a patch
-file and also applying it fails. So do a patch that does not apply to the
-base (`changes.diff does not apply to base 1a2b3c4d5e6f: src/app.py differs
-from the patch pre-image`), a patched file left unchanged (`PR #7 does not
-apply changes.diff to src/app.py (unchanged from base)`), a missing hunk or an
-extra edit (`src/app.py at head differs from changes.diff applied to base`),
-and a touched path that is absolute, contains `..`, or lies under `.git`,
-`.gitmodules` or `.apm`, or is a symlink or submodule at base or head. Nothing
-from the PR is executed. In `--format json`, `facts.change.patches` lists each
-patch output with its delivery (`applied` or `committed`) and files, and
-`facts.change.appliedFiles` lists the files the applied patches touch.
+The gate needs `factories.signers`: without them there is nothing to look
+attestations up from, and the result is INCOMPLETE (exit 2).
 
 ```yaml
 # .github/workflows/audit.yml in the receiving repository
 on: pull_request
 permissions:
   contents: read
+  attestations: read
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -99,18 +93,19 @@ jobs:
       - uses: danielmeppiel/apmx/.github/actions/setup@v0.6.0   # installs apmx 0.6.0
       - run: apmx audit
         env:
-          GH_TOKEN: ${{ github.token }}   # gh attestation verify, for the Identity row
+          GH_TOKEN: ${{ github.token }}   # gh attestation verify
 ```
 
 The setup action downloads the native release archive for the runner and
 installs it only if its SHA-256 matches the release's `.sha256` file, the
-release manifest and, if you give one, the `sha256` input. Pin `sha256` to
-trust a digest you reviewed rather than the release's own checksum files.
+release manifest and, if you give one, the `sha256` input. Reference the
+actions and `run.yml` by an immutable release tag such as `@v0.6.0`, or by
+that tag's commit SHA. apmx publishes no moving major tag (`@v1`).
 
-Reference the actions and `run.yml` by an immutable release tag such as
-`@v0.6.0`, or by that tag's commit SHA. apmx publishes no moving major tag
-(`@v1`). At a release tag, the setup action's default `version` is that
-release.
+**Offline route.** Off GitHub, ship the bundle with the files and run
+`apmx audit receipt.intoto.jsonl --outputs DIR`: the same structural and
+policy rows, with the files re-hashed. In a PR, an explicit bundle binds the
+PR's change to it instead (without `--outputs`).
 
 ## Policy: one `apm-policy.yml`, one apmx section
 
@@ -139,8 +134,8 @@ dependencies:
 factories:                               # apmx's section
   allow:                                 # approved definitions; null = no opinion, [] = none
     - "acme/checkout-factory@sha256:0311c27f3d7b..."
-  require_signed: true                   # reject receipts that are not signed (see Identity)
-  signers:                               # who may sign receipts; null = no opinion, [] = none
+  require_signed: true                   # reject deliveries that are not signed (see Identity)
+  signers:                               # who may sign; null = no opinion, [] = none
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml   # optional @<ref>
       workflow_sha: cadfa207e4645306199ddb85271c5f3e13340924   # immutable pin: git rev-parse v0.6.0^{commit}
       repo: acme/factories                 # where the factory ran (default: this repository)
@@ -157,11 +152,11 @@ is `factories` as `empty`; apmx still applies its rules and runs
 
 - `allow`: entries use the `dependencies.allow` grammar with an optional
   definition pin, `<package pattern>[@sha256:<definition digest>]`. The digest
-  is the receipt's `definition.json` SHA-256 (the Factory row and
-  `facts.definitionSha256` show it), and it is what apmx matches. Receipts do
-  not record their factory's package identity yet, so a pinned entry's
-  package is a label and an unpinned pattern such as `acme/*` allows nothing
-  for now; the Factory row says so.
+  is the SHA-256 of the receipt's canonical factory definition, named by the
+  provenance's `externalParameters.factory.definition` (the Factory row and
+  `facts.definitionSha256` show it), and it is what apmx matches. A pinned
+  entry's package is a label; an unpinned pattern such as `acme/*` allows
+  nothing yet, and the Factory row says so.
 - `signers`: `workflow: owner/repo/.github/workflows/<file>.yml`, optionally
   pinned to the signer's ref with `@<ref>` (for example `@refs/tags/v0.6.0`), an
   optional `workflow_sha`, and an optional `repo: owner/repo`: the repository
@@ -211,7 +206,7 @@ is `factories` as `empty`; apmx still applies its rules and runs
 | No policy anywhere (APM reports `absent`, `no_git_remote` or `disabled`, or an `empty` policy without `factories`) | Structural audit only: `[i] Policy  none found`. Exit 0 if valid. |
 | Policy found | Its `factories` rules apply; APM's rules apply in Ingredients. |
 | Policy found but unloadable (malformed, unreachable `extends`, an unknown `factories` key, a bad digest, or no bundled APM) | `INCOMPLETE`, exit 2. Never a pass. |
-| `require_signed` and an unsigned receipt | Identity `[x]`, exit 1 (`[!]` with `factories.enforcement: warn`). |
+| `require_signed` and an unsigned delivery | Identity `[x]`, exit 1 (`[!]` with `factories.enforcement: warn`). |
 
 Remote policies and `extends` parents are read from `github.com` repositories
 (GitHub contents API with your `GITHUB_APM_PAT`, `GITHUB_TOKEN` or `GH_TOKEN`)
@@ -220,31 +215,31 @@ and `https://` URLs. Any other host is unloadable (exit 2).
 ## Command
 
 ```text
-apmx audit [RECEIPT_DIR] [--policy SOURCE] [--outputs DIR] [--offline] [--format text|json|sarif]
+apmx audit [RECEIPT] [--policy SOURCE] [--outputs DIR] [--offline] [--format text|json|sarif]
+apmx audit [RECEIPT] --explain [factory|stages|checks|ingredients|outputs]
+apmx audit [RECEIPT] --export abom [-o FILE]
 ```
-
-Every option overrides a default:
 
 | Option | Overrides |
 | --- | --- |
-| `RECEIPT_DIR` | Receipt selection. In a PR, the change is still bound, relative to the receipt's `<root>/.apm/` workspace, or to the repository root. |
+| `RECEIPT` | A `receipt.intoto.jsonl` (or its run directory). In a PR, the PR's change is bound to it, relative to its `<root>/.apm/` workspace or the repository root. |
 | `--policy SOURCE` | Policy discovery. A relative file is resolved from your current directory. |
-| `--outputs DIR` | The PR binding: re-hash the delivered files in `DIR` against the receipt's output subjects instead. Locally, outputs are otherwise checked only inside the receipt. |
-| `--offline` | Network use. APM is not launched and nothing is fetched: Ingredients reads `not audited (offline)`, an org policy reads `not checked (offline)` and an unresolved `extends` is a warning. Only a local policy file is read. |
-| `--format json` | Machine output: `{"schema": "apmx-audit/1", "receipt", "selection", "result", "exitCode", "reason", "rows", "facts", "signed": false}`. |
+| `--outputs DIR` | Re-hash the delivered files in `DIR` against the subjects (instead of the PR binding). |
+| `--offline` | Network use. APM is not launched and nothing is fetched: Ingredients reads `not audited (offline)`, signatures `not checked (offline)`. Only a local policy file is read. |
+| `--format json` | Machine output: `{"schema": "apmx-audit/1", "receipt", "selection", "result", "exitCode", "reason", "rows", "facts", "signed"}`. `facts.stages` lists each stage's harness, version and models. |
 | `--format sarif` | SARIF 2.1.0 for GitHub code scanning: one result per `[x]` (error) or `[!]` (warning) row. |
+| `--explain [TOPIC]` | Print what the receipt records (factory, stages, checks, ingredients, outputs; default all), after it verifies structurally. Replaces v1's `summary.md`. |
+| `--export abom` | Write the inline CycloneDX 1.5 inventory as a standalone file for SBOM tools (stdout, or `-o FILE`; never overwrites). |
 
-`audit` is a reserved word. `apmx <factory-dir | x.contract.md | package-ref>`
-is still the run shorthand. To run a local directory named `audit`, write
-`./audit`.
+`audit` is a reserved word. To run a local directory named `audit`, write `./audit`.
 
 ### Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| 0 | VALID: every row passed. Warnings (`--offline`, `factories.enforcement: warn`, an unsigned receipt without `require_signed`) still count as valid. |
-| 1 | INVALID: a structural row failed, outputs differ, the PR changes files the receipt does not bind, reinstalled ingredients differ, `apm audit --ci` failed, or a `factories` rule (allowlist, revocation, `require_signed`) rejected the receipt. |
-| 2 | Not a pass: usage error, missing or ambiguous receipt, a PR change that could not be read, a policy that could not be loaded, or ingredients that could not be audited (network or authentication). Rerun with access, or use `--offline` to skip the network explicitly. |
+| 0 | VALID: every row passed. Warnings (`--offline`, `factories.enforcement: warn`, an unsigned local receipt without `require_signed`) still count as valid. |
+| 1 | INVALID: a structural row failed, outputs differ, the PR changes files no signed delivery covers or is built on a stale base, reinstalled ingredients differ, `apm audit --ci` failed, or a `factories` rule rejected the delivery. |
+| 2 | Not a pass: usage error, missing receipt, a PR change that could not be read, a policy that could not be loaded, a PR gate without signers, or ingredients or signatures that could not be checked (network or authentication). |
 
 The final line is `VALID`, `INVALID <first reason>` or `INCOMPLETE <reason>`.
 Output is printable ASCII and uses the `[+]`, `[x]`, `[!]` and `[i]` symbols.
@@ -259,86 +254,80 @@ never launched for a receipt that is already invalid.
 | Row | What it checks |
 | --- | --- |
 | Policy | Which policy applies, from where, and the `factories` enforcement; `none found` is reported, never assumed. |
-| Integrity | Every file matches `index.json` (SHA-256 and size). There are no unindexed files or symlinks, and every descriptor resolves inside the receipt. |
-| Standards | Every statement is an in-toto Statement v1, validated with the upstream in-toto protobuf bindings. Production predicates are SLSA Provenance v1 and check predicates are in-toto Test Result. `abom.cdx.json` is valid against the pinned CycloneDX 1.5 JSON Schema. |
-| Factory | The `definition.json` digest; producer statements agree with the definition (build type, builder, contract digest, checks, outputs, checker resources, capability bodies); capability bindings agree with the CycloneDX inventory. With `factories.allow`, the digest must be on the list. |
-| Checks | Every recorded check invocation has exactly one test-result statement with consistent configuration, subjects and reports. Every check of a completed attempt passed. |
+| Integrity | Every line is a canonical unsigned DSSE envelope of an in-toto statement; one provenance, one CycloneDX, at most one VSA, whose `inputAttestations` bind exactly the other lines by SHA-256. Every `evidence/sha256/<hex>` blob present matches its name (evidence is optional). |
+| Standards | in-toto Statement v1 (upstream protobuf bindings), SLSA Provenance v1, in-toto Test Result v0.1, SLSA VSA v1, and CycloneDX 1.5 against the pinned JSON Schema. |
+| Factory | Build type `.../build/factory/v2`, the factory definition digest and stages; with the definition in `evidence/`, its stages, checks and outputs agree; capability bindings agree with the CycloneDX inventory. With `factories.allow`, the digest must be on the list. |
+| Checks | One PASSED Test Result per declared check of the final candidate, whose configuration names the check, command, stage and definition. |
 | Ingredients | Dependency trust, delegated to APM (see below). |
-| Revocation | No selected capability matches a `factories.revoked` entry (exact `purl` and `bodySha256`, which only the receipt records). Package-level rules such as `dependencies.deny` stay APM's, in the Ingredients row. |
-| Outputs | The aggregate and per-attempt production subjects bind exactly the delivered artifacts. In a PR, the change is bound: outputs match at head (`PR #7: 3/3 outputs match at head ..`) or patch outputs applied to the merge-base reproduce head (`PR #7: changes.diff + documentation.diff applied to base reproduce head (5 files)`); with `--outputs`, the delivered files are re-hashed. |
-| Identity | With `factories.signers`, the receipt's GitHub artifact attestation is verified against those workflows (see [Signed receipts](#signed-receipts)). Without signers, `[!]`: the receipt proves content binding, not who ran it. With `factories.require_signed`, an unsigned receipt is rejected (exit 1), and one whose signature could not be checked is INCOMPLETE. A receipt signed by an allowed workflow at a commit other than its `workflow_sha` is rejected (exit 1); a signer pinned only by a tag or branch passes with a `[!]` note. |
+| Revocation | No selected capability matches a `factories.revoked` entry (exact `purl` and `bodySha256`). |
+| Outputs | Every statement names the same delivered files; before-images, creations and deletions are consistent. Locally the files are re-hashed; in a PR the change is bound (gate above). |
+| Identity | With `factories.signers`, a signed VSA over the delivered files from those workflows (below). Without signers, `[!]`: content binding only. |
 
 The CycloneDX schemas (`bom-1.5`, `spdx`, `jsf-0.82`, pinned by SHA-256 at the
-upstream commit noted in `NOTICE`) ship inside apmx. Structural audit
-therefore works offline.
+upstream commit noted in `NOTICE`) ship inside apmx, so structural audit works offline.
 
-## Signed receipts
+## Signed deliveries
 
-A receipt is signed in CI by
-[`.github/actions/attest`](../.github/actions/attest/action.yml). The action
-runs `apmx audit --offline` on the receipt from an empty directory, so no
-policy or PR context changes what is signed, and refuses anything that is not
-VALID. It then creates a GitHub artifact attestation (Sigstore, keyless, via
-the job's OIDC token) whose subject is the SHA-256 of the receipt's
-`index.json`, which binds every other receipt file. The predicate,
-`https://github.com/danielmeppiel/apmx/attestation/receipt/v1`, records the
-receipt digest, the factory definition digest, the outputs, and whether the
-checks ran in a separate job (`separate-job`) or the agent's own job
-(`same-job`).
+`run.yml`'s attest job signs with GitHub artifact attestations (Sigstore,
+keyless, the job's OIDC token) using
+[`.github/actions/attest`](../.github/actions/attest/action.yml). It runs
+`apmx audit --offline` on the receipt of record from an empty directory (no
+policy or PR context changes what is signed), requires complete evidence, and
+creates two attestations over the delivered files:
 
-```yaml
-  attest:   # a job that runs no agent and no candidate code
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      attestations: write
-    steps:
-      - uses: danielmeppiel/apmx/.github/actions/setup@v0.6.0
-      - uses: actions/download-artifact@v4
-        with: { name: receipt, path: receipt }
-      - uses: danielmeppiel/apmx/.github/actions/attest@v0.6.0
-        with: { receipt: receipt, checks: separate-job }
+- the receipt bundle, predicate type
+  `https://github.com/danielmeppiel/apmx/attestation/receipt-bundle/v2`
+  (`{"lines": [statement, ...]}`), so the statements can be fetched by a
+  file's digest. Signing it asserts nothing by itself. Each statement is not
+  stored on its own because GitHub's attestation store refuses a SLSA
+  provenance whose `buildType` it does not recognize;
+- a **SLSA Verification Summary v1**, the statement the gate trusts:
+
+```json
+{"_type": "https://in-toto.io/Statement/v1",
+ "subject": [{"name": "src/pricing.py", "digest": {"sha256": "e6981e53..."}}, "..."],
+ "predicateType": "https://slsa.dev/verification_summary/v1",
+ "predicate": {
+   "verifier": {"id": "https://github.com/danielmeppiel/apmx/.github/workflows/run.yml@<job_workflow_sha>"},
+   "timeVerified": "2026-10-21T18:52:30Z",
+   "resourceUri": "git+https://github.com/acme/shop@<base commit>",
+   "policy": {"uri": "apmx:factory/0bec0549...", "digest": {"sha256": "0bec0549..."}},
+   "inputAttestations": [{"uri": "receipt.intoto.jsonl#1", "digest": {"sha256": "<line 1>"}}, "..."],
+   "verificationResult": "PASSED",
+   "verifiedLevels": []}}
 ```
 
-`apmx audit` finds the attestation by that digest, the way `npm audit
-signatures` does, so nobody passes it a signature. For each
-`factories.signers` entry it runs `gh attestation verify index.json --repo
-<repo> --signer-workflow <workflow> --predicate-type <apmx> --cert-oidc-issuer
-https://token.actions.githubusercontent.com --deny-self-hosted-runners`. It
-then re-checks the verified statement itself: the subject and predicate name
-this receipt's digest and definition, the certificate's signer is that
-workflow (at the entry's `@<ref>` and `workflow_sha`, if pinned), and the runner was
-GitHub-hosted. Attestations are looked up in the signer's `repo`, the
-repository the factory ran in, which is where a reusable `run.yml` called from
-it stores them; `gh attestation verify --repo` also pins that source
-repository. Without `repo`, the repository being audited (`GITHUB_REPOSITORY`,
-or the `origin` remote) is used. `gh` needs a token
-(`GH_TOKEN: ${{ github.token }}` in Actions).
+Subjects are the delivered files at their **repository** paths (the run's
+workspace prefix applied). `verifiedLevels` is empty on purpose: apmx claims
+no SLSA level. `inputAttestations` is the standard mechanism that replaces
+v1's `index.json`. Any file can be checked with stock tooling: `gh
+attestation download src/pricing.py --repo <repo>`, then `gh attestation
+verify src/pricing.py --repo <repo> --bundle sha256:<digest>.jsonl
+--signer-workflow <workflow> --predicate-type
+https://slsa.dev/verification_summary/v1`.
 
-| Attestation | Identity row | With `require_signed` |
+| Summary | Identity row | With `require_signed` |
 | --- | --- | --- |
 | Verified from an allowed signer | `[+] signed by <workflow>@<ref> at <sha12>`; final line `VALID (authenticated: <workflow>)` | pass |
-| Verified, signer pinned only by `@<ref>` or not pinned | as above, plus the note `[!] signer pinned by mutable ref <ref>; pin workflow_sha` (or `[!] signer not pinned (any ref); pin workflow_sha`) | pass (a warning, exit 0, even with `factories.enforcement: block`) |
-| Verified from an allowed workflow, but not at its `workflow_sha` | `[x] signed by <workflow> at <sha12>, policy requires <sha12>`, exit 1 with or without `require_signed` (`[!]` with `factories.enforcement: warn`) | same |
-| Signed by an annotated tag object that could not be resolved to compare with `workflow_sha` | `[!] signer commit could not be checked against workflow_sha`, INCOMPLETE, exit 2 with or without `require_signed` | same |
-| None, or none that matches this receipt | `[!] unsigned: no attestation from factories.signers` | `[x]`, exit 1 (`[!]` with `factories.enforcement: warn`) |
+| Verified, signer pinned only by `@<ref>` or not pinned | as above, plus `[!] signer pinned by mutable ref <ref>; pin workflow_sha` | pass (a warning) |
+| Verified from an allowed workflow, but not at its `workflow_sha` | `[x] signed by <workflow> at <sha12>, policy requires <sha12>`, exit 1 (`[!]` with `factories.enforcement: warn`) | same |
+| Signed by an annotated tag object that could not be resolved | `[!] signer commit could not be checked against workflow_sha`, INCOMPLETE, exit 2 | same |
+| None that covers these files (locally: `[!] unsigned`; in a PR: `[x]`, exit 1) | `[!] unsigned: no attestation from factories.signers` | `[x]`, exit 1 |
 | Could not be checked (no `gh`, network, auth, `--offline`) | `[!] signature could not be checked` | INCOMPLETE, exit 2 |
 
 `--format json` records the signer in `facts.identity`: `signer`, `signerRef`,
-`signerSha` (the certificate's Build Signer Digest), `signerCommit` (the commit
-a tag-object digest names, when apmx resolved it), `requiredSignerSha` (the
-entry's `workflow_sha`, or `null`), `signerPin` (`workflow_sha`, `ref` or
-`none`), `sourceRepository` and `run`.
+`signerSha` (the certificate's Build Signer Digest), `signerCommit`,
+`requiredSignerSha`, `signerPin`, `sourceRepository` and `run`.
 
-**Assumptions.** Verification trusts `gh attestation verify` (GitHub CLI) and
-the Sigstore public-good instance it uses, and GitHub's OIDC issuer for
-workflow identity, and the GitHub REST API to name the commit of a tag-object
-signer digest. A `signers` entry trusts every run of that workflow file
-unless `workflow_sha` pins its code; `@<ref>` (for example a release tag) narrows
-which ref ran, but a tag or branch can be moved. The signature says which
-workflow vouched for a structurally VALID receipt. It does not make the
-producing agent trustworthy; the producer workflow must keep the agent out of
-the signing job (see `run.yml`).
+**Assumptions.** Verification trusts `gh attestation verify` and the Sigstore
+public-good instance it uses, GitHub's OIDC issuer for workflow identity, and
+the GitHub REST API to name the commit of a tag-object signer digest. A
+`signers` entry trusts every run of that workflow file unless `workflow_sha`
+pins its code. The summary says which workflow vouched for a structurally VALID
+receipt with complete evidence; it does not make the producing agent
+trustworthy. Harness and model names are what the harness reported in the
+producer job (`reportedBy: producer`): as trustworthy as the harness version
+`run.yml` installs.
 
 ## Receipts from CI: `run.yml` and `apmx check`
 
@@ -349,9 +338,9 @@ keeps the agent away from both:
 
 | Job | Permissions | Runs |
 | --- | --- | --- |
-| produce | `contents: read` | `apmx FACTORY`: the agent. Its own checks are only a fast fail; its receipt is untrusted and is uploaded as data. |
-| check | `contents: read` | A fresh runner and the same commit, no agent: `apmx check PRODUCER_RECEIPT FACTORY` (or `--from PACKAGE_REF`). |
-| attest | `id-token: write`, `attestations: write` | No checkout of the caller's code: `apmx audit --offline`, then the [attest action](#signed-receipts) with `checks: separate-job`. |
+| produce | `contents: read` | `apmx FACTORY`: the agent. Its own checks are only a fast fail; its bundle and evidence are uploaded as untrusted data. |
+| check | `contents: read` | A fresh runner and the same commit, no agent: `apmx check PRODUCER_RECEIPT FACTORY` (or `--from PACKAGE_REF`). Uploads `apmx-receipt` and a code-only `apmx-delivery`. |
+| attest | `id-token: write`, `attestations: write` | No checkout of the caller's code: `apmx audit --offline`, then the bundle and the verification summary. |
 
 ```yaml
 jobs:
@@ -365,59 +354,42 @@ jobs:
       agent-token: ${{ secrets.COPILOT_TOKEN }}   # seen only by the produce job
 ```
 
-`run.yml`'s `apmx-version` and `apmx-ref` inputs default to the same release
-(`0.6.0`, `v0.6.0`), so its jobs install that apmx and use the setup and
-attest actions from that tag. If you call `run.yml` by a commit SHA, pass the
-same SHA as `apmx-ref`. A signer entry can pin the tag with
-`workflow: danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.6.0`, but
-a tag can move: add `workflow_sha: cadfa207e4645306199ddb85271c5f3e13340924`,
-the v0.6.0 commit (see `factories.signers` above).
+`run.yml`'s `apmx-version` and `apmx-ref` inputs default to the same release,
+so its jobs install that apmx and use the setup and attest actions from that
+tag. If you call `run.yml` by a commit SHA, pass the same SHA as `apmx-ref`.
 
 `factory` can also be an APM package reference pinned to a tag or commit,
 `owner/repo[/path]#ref`. The package runs against the caller's `workspace`
 directory (default: the repository root), exactly like `apmx --from`. The
-workspace is its input and evidence root, and the delivery overlay is laid
-out under it. The check job resolves the same reference again. The definition
-digest records the package's repository, resolved commit and content, so if
-the reference moved between the jobs, the receipt is withdrawn. An unpinned
-reference is refused.
+check job resolves the same reference again; the definition digest records
+the package's repository, resolved commit and content, so if the reference
+moved between the jobs, the receipt is withdrawn.
 
-```yaml
-    with:
-      factory: "acme/checkout-factory#v1.0.0"   # reviewed once, versioned on its own
-      checks-requirements: checks/requirements.txt  # inside the package
-```
-
-`apmx check PRODUCER_RECEIPT [FACTORY] [--from PACKAGE_REF]` takes only the producer receipt's
-output bytes, matched to contracts by SHA-256, and ignores its checks,
-records and claims. It runs FACTORY (default: the current directory) from this
-checkout with a `replay` producer that writes those bytes instead of running an
-agent. The factory's own checks run on them, and a new receipt of record is
-written. That receipt records the harness as `replay`, never the producer's
-model. It must have the producer's factory definition digest; otherwise it is
-withdrawn and the command exits 1. A self-consistent forged producer receipt
-whose outputs fail the checks is REJECTED there. With `--from`, the package
-runs against the current directory and the receipt is written under `./.apm/`.
-`check` is a reserved word, like `audit`.
+`apmx check PRODUCER_RECEIPT [FACTORY] [--from PACKAGE_REF]` takes only the
+output bytes of each stage from the producer's bundle and `evidence/`,
+matched to contracts by SHA-256, and ignores its checks, records and claims.
+It runs FACTORY from this checkout with a `replay` producer that writes those
+bytes instead of running an agent; the factory's own checks run on them, and a
+new receipt of record is written. Its stages carry the producer's harness,
+harness version and models, labelled `reportedBy: producer` and `checkedBy:
+apmx check (replay)`, and the producer bundle's digest is an input. It must
+have the producer's factory definition digest; otherwise it is withdrawn and
+the command exits 1. A self-consistent forged producer receipt whose outputs
+fail the checks is REJECTED there.
 
 Checks run with `python3` from `PATH`. A factory whose checks need Python
-packages names its own approved requirements file in `checks-requirements`
-(a path inside the factory or factory package). `run.yml` installs it into a fresh virtual
-environment and puts that environment's `python3` first on `PATH`, in the
-produce and check jobs only; the attest job runs no factory code. When the
-file contains any `--hash`, pip runs with `--require-hashes`. The file is part
-of the factory directory, so changing it is a change to the factory you review.
-The check job also requires the installed file to be the `checks/` resource
-that the receipt's factory definition records.
+packages names its own approved requirements file in `checks-requirements`.
+`run.yml` installs it into a fresh virtual environment in the produce and
+check jobs only (`--require-hashes` when the file has hashes), and the check
+job requires it to be the `checks/` resource the factory definition records.
 
-`run.yml` uploads `apmx-receipt` (the receipt of record) and `apmx-delivery`
-(the outputs at their paths plus the receipt under `FACTORY/.apm/`, or under
-`WORKSPACE/.apm/` for a package), ready to
-commit as a pull request that `apmx audit` accepts by proof. apmx's own CI
-runs it end to end with the hermetic protocol actor (no model calls) in
+`apmx-delivery` holds exactly the delivered files at their repository paths,
+plus `.apmx-deleted` (one path per line) for files the factory deleted: a
+control file for the step that opens the PR, never to commit. apmx's own CI
+runs `run.yml` end to end with the hermetic protocol actor (no model calls) in
 `.github/workflows/run-selftest.yml`, signs with this repository's OIDC
-identity, and verifies that signature with `apmx audit`.
-`run-selftest-package.yml` runs a fixture package pinned to the tested commit.
+identity, commits the code-only delivery as a PR would, and checks it with
+`apmx audit` from the attestation store alone.
 
 ### Deployment: one factory platform, many repositories
 
@@ -469,11 +441,14 @@ to `run.yml` becomes each called job's own read-only token.
 
 ## Ingredients: APM owns dependency trust
 
-apmx does not reimplement dependency auditing. The receipt retains the run's
-exact `apm.yml` and `apm.lock.yaml`. For an audit, apmx:
+apmx does not reimplement dependency auditing. The provenance carries the
+run's exact `apm.yml` and `apm.lock.yaml` inline (`resolvedDependencies` with
+`content`, bound by digest), so this row works in a PR with no receipt file.
+For an audit, apmx:
 
 1. Checks that the retained lock projects to the definition's
-   `resolvedDependencies`. With zero dependencies, the row reads
+   `resolvedDependencies` (when the definition is present in `evidence/`; the
+   signed summary vouches for it otherwise). With zero dependencies, the row reads
    `0 APM dependencies` and nothing is launched.
 2. Stages the manifest and lock in a fresh temporary project and runs the
    **bundled, pinned** APM: `apm install --frozen --only apm --target
@@ -511,14 +486,13 @@ package access with your normal APM authentication.
 
 ## What VALID does not mean
 
-The receipt is **unsigned**. VALID means the receipt is internally consistent
-and that its files are bound by content to this factory definition, these
-ingredients and these check results. It does not authenticate who ran the
-factory. Anyone who can rewrite every file and hash can forge a
-self-consistent receipt; `factories.allow` limits which definitions are
-accepted, and only a signature from an allowed CI workflow (`require_signed`
-with `signers`) says who produced it. VALID is not a sandbox, a correctness guarantee or
-permission to merge or deploy.
+A local receipt is **unsigned**. VALID then means the receipt is internally
+consistent and its files are bound by content to this factory definition,
+these ingredients and these check results. Anyone who can rewrite every file
+and hash can forge a self-consistent receipt; `factories.allow` limits which
+definitions are accepted, and only a summary signed by an allowed CI workflow
+(`require_signed` with `signers`) says who produced it. VALID is not a sandbox,
+a correctness guarantee or permission to merge or deploy.
 
 ## Independent verification
 

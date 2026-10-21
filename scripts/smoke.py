@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import base64
 import json
 import os
 import re
@@ -689,10 +690,24 @@ def require_child_cleanup(root: Path) -> None:
     require(heartbeat.read_bytes() == before, "Fixture descendant kept writing after recorded cleanup")
 
 
+def bundle_statements(bundle: Path) -> list[dict]:
+    """The in-toto statements of a receipt.intoto.jsonl, in line order."""
+    return [
+        json.loads(base64.b64decode(json.loads(line)["payload"]))
+        for line in bundle.read_bytes().splitlines()
+    ]
+
+
 def require_standard_delivery(run: Path, stdout: str, *, ambiguous_inventory: bool) -> str:
-    package = run / "receipt"
+    package = run / "receipt.intoto.jsonl"
     if ambiguous_inventory:
-        require(not package.exists() and not package.is_symlink(), "Failed export published a package")
+        require(
+            not package.exists()
+            and not package.is_symlink()
+            and not (run / "outputs").exists()
+            and not (run / "evidence").exists(),
+            "Failed export published a receipt",
+        )
         require("Receipt export failed (command exit 23)" in stdout, "Missing delivery diagnostic")
         require(
             "official ABOM has missing or duplicate component identities" in stdout,
@@ -700,10 +715,18 @@ def require_standard_delivery(run: Path, stdout: str, *, ambiguous_inventory: bo
         )
         require("Recorded execution remains COMPLETE" in stdout, "Delivery rewrote completion")
         return "refused-ambiguous-inventory"
-    for name in ("index.json", "summary.md", "abom.cdx.json", "provenance.intoto.json"):
-        require((package / name).is_file(), f"Automatic receipt delivery missing {name}")
-    index = json.loads((package / "index.json").read_bytes())
-    require(index.get("schema") == "apmx-evidence-package/1", "Unexpected standard package index")
+    require(package.is_file(), "Automatic receipt delivery missing receipt.intoto.jsonl")
+    for name in ("outputs", "evidence"):
+        require((run / name).is_dir(), f"Automatic receipt delivery missing {name}/")
+    for name in ("receipt", "index.json", "summary.md", "abom.cdx.json"):
+        require(not (run / name).exists(), f"Receipt v1 file {name} is still written")
+    kinds = [item["predicateType"] for item in bundle_statements(package)]
+    require(
+        kinds[0] == "https://slsa.dev/provenance/v1"
+        and kinds[-1] == "https://cyclonedx.org/bom"
+        and set(kinds[1:-1]) <= {"https://in-toto.io/attestation/test-result/v0.1"},
+        f"Unexpected receipt bundle lines: {kinds}",
+    )
     require("\nReceipt   " in stdout and "in-toto" in stdout, "Missing receipt paths")
     require("\nNext      apmx audit " in stdout, "Missing the apmx audit next step")
     return "delivered"
@@ -749,17 +772,29 @@ def require_receipt_check(
         (log.read_text(encoding="utf-8") if log.exists() else "") == calls,
         "apmx check launched the agent CLI",
     )
-    receipts = [path.parent for path in (checkout / ".apm").glob("*/*/receipt/index.json")]
+    receipts = list((checkout / ".apm").glob("*/*/receipt.intoto.jsonl"))
     require(len(receipts) == 1, "apmx check must deliver exactly one receipt of record")
-    index = json.loads((receipts[0] / "index.json").read_bytes())
+
+    def factory(bundle: Path) -> dict:
+        provenance = bundle_statements(bundle)[0]["predicate"]["buildDefinition"]
+        return provenance["externalParameters"]["factory"]
+
     require(
-        index["definition"] == json.loads((producer / "index.json").read_bytes())["definition"],
+        factory(receipts[0]) == factory(producer),
         "apmx check receipt names a different factory definition",
     )
     harnesses = {
-        json.loads(path.read_bytes())["harness"] for path in receipts[0].glob("attempts/*/execution.json")
+        json.loads(path.read_bytes())["harness"]
+        for path in (checkout / ".apm/runs").glob("*/record.json")
     }
     require(harnesses == {"replay"}, f"apmx check must record the replay harness: {harnesses}")
+    stages = bundle_statements(receipts[0])[0]["predicate"]["buildDefinition"][
+        "internalParameters"
+    ]["stages"]
+    require(
+        all(stage.get("reportedBy") == "producer" for stage in stages),
+        "apmx check must carry the producer's harness and models, labelled as reported",
+    )
     require_receipt_audit(binary, receipts[0], cwd, env)
 
 
@@ -1065,10 +1100,13 @@ def _run_case(
     if outcome == "COMPLETE":
         delivery = require_standard_delivery(run, result.stdout, ambiguous_inventory=mixed_imports)
     else:
-        require(not (run / "receipt").exists(), "A run that did not complete published a receipt")
+        require(
+            not (run / "receipt.intoto.jsonl").exists(),
+            "A run that did not complete published a receipt",
+        )
     audit = None
     if delivery == "delivered":
-        audit = require_receipt_audit(binary, run / "receipt", caller, env)
+        audit = require_receipt_audit(binary, run / "receipt.intoto.jsonl", caller, env)
         if selection == "package":
             require(
                 audit["facts"].get("apmAudit", {}).get("passed") is True,
@@ -1148,26 +1186,29 @@ def run_factory_case(binary: Path, root: Path, actor: Path | None) -> dict:
     for name in ("first.json", "second.json", "final.json"):
         require(json.loads((view / name).read_bytes()) == expected, f"Factory delivery mismatch: {name}")
     require(digest(view / "checks/check.py") == digest(FIXTURES / "check.py"), "Factory checker changed")
-    receipt = chains[0].parent / "receipt"
+    receipt = chains[0].parent / "receipt.intoto.jsonl"
     require(
         require_standard_delivery(chains[0].parent, result.stdout, ambiguous_inventory=False)
         == "delivered",
         "Factory receipt was not delivered",
     )
     require(
-        json.loads((receipt / "abom.cdx.json").read_bytes())["components"] == [],
+        bundle_statements(receipt)[-1]["predicate"]["components"] == [],
         "Dependency-free factory receipt must list zero CycloneDX components",
     )
     audit = require_receipt_audit(binary, receipt, caller, env, outputs=view)
     require_receipt_check(binary, receipt, factory, root / "checkout", caller, env)
     tampered = root / "tampered-receipt"
-    shutil.copytree(receipt, tampered)
-    forged = next(tampered.glob("attempts/*/artifacts/final.json"))
+    tampered.mkdir()
+    shutil.copyfile(receipt, tampered / "receipt.intoto.jsonl")
+    for name in ("outputs", "evidence"):
+        shutil.copytree(receipt.parent / name, tampered / name)
+    forged = next((tampered / "evidence/sha256").iterdir())
     forged.chmod(0o600)
     forged.write_text('{"source": "forged"}\n', encoding="utf-8")
-    rejected = run_binary(binary, ["audit", str(tampered)], caller, env)
+    rejected = run_binary(binary, ["audit", str(tampered / "receipt.intoto.jsonl")], caller, env)
     require(
-        rejected.returncode == 1 and "[x] INVALID   Integrity: File hash mismatch" in rejected.stdout,
+        rejected.returncode == 1 and "[x] INVALID   Integrity: Evidence blob" in rejected.stdout,
         f"Frozen audit accepted a tampered receipt: {rejected.stdout}\n{rejected.stderr}",
     )
     leaves = [json.loads(path.read_bytes()) for path in (factory / ".apm/runs").glob("*/record.json")]

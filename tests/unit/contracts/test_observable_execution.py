@@ -1,6 +1,5 @@
 """Execution must explain its work live, not only retain it for later inspection."""
 
-import json
 from pathlib import Path
 
 import pytest
@@ -97,29 +96,37 @@ def test_attempt_wording_explains_the_bound_and_first_pass_success(
 def test_delivered_evidence_names_the_actual_standards(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    from apmx.audit import verifier
+
+    bundle = tmp_path / "receipt.intoto.jsonl"
     # Nothing written yet: the receipt names no standard it cannot show.
-    ContractLogger().evidence_package(tmp_path)
+    ContractLogger().evidence_package(bundle)
     empty = capsys.readouterr().out
     assert empty.startswith("Receipt   ")
     for value in ("SLSA", "in-toto", "CycloneDX"):
         assert value not in empty
-    (tmp_path / "checks").mkdir()
-    statement = {"predicateType": "https://slsa.dev/provenance/v1"}
-    (tmp_path / "provenance.intoto.json").write_text(json.dumps(statement))
-    for index in (1, 2):
-        (tmp_path / "checks" / f"run-{index}.intoto.json").write_text("{}")
-    (tmp_path / "abom.cdx.json").write_text(json.dumps({"specVersion": "1.5", "components": []}))
+    subjects = [{"name": "a.txt", "digest": {"sha256": "0" * 64}}]
+    statements = [
+        verifier.statement(subjects, verifier.PROVENANCE, {}),
+        verifier.statement(subjects, verifier.TEST_RESULT, {}),
+        verifier.statement(subjects, verifier.TEST_RESULT, {}),
+        verifier.statement(subjects, verifier.CYCLONEDX, {"specVersion": "1.5", "components": []}),
+    ]
+    bundle.write_bytes(verifier.bundle_bytes(statements))
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs/a.txt").write_text("a")
     logger = ContractLogger(verbose=True)
-    logger.evidence_package(tmp_path)
+    logger.evidence_package(bundle)
     text = capsys.readouterr().out
     assert "Evidence" not in text and "Standard package:" not in text
     for line in (
         "          provenance  in-toto + SLSA v1\n",
         "          checks      in-toto test-result (2)\n",
         "          inventory   CycloneDX 1.5 (0 components)\n",
+        "          outputs     1 delivered file in outputs/\n",
         "unsigned",
     ):
         assert line in text
-    for name in ("provenance.intoto.json", "abom.cdx.json", "definition.json", "index.json"):
+    for name in ("receipt.intoto.jsonl", "outputs", "evidence"):
         assert name in text
     logger.close()

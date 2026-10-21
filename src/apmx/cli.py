@@ -150,7 +150,7 @@ def _select_entry(
         "Use ./PATH to require a local directory; use --from to select a source package "
         "even when a local directory has the same name.\n\n"
         "Every COMPLETE run delivers a receipt. Verify the newest with 'apmx audit', "
-        "or one with 'apmx audit RECEIPT_DIR' (see 'apmx audit --help'). "
+        "or one with 'apmx audit RECEIPT' (see 'apmx audit --help'). "
         "'apmx check PRODUCER_RECEIPT' re-checks another run's outputs here (see "
         "'apmx check --help'). 'audit' and 'check' are reserved: run a directory with "
         "either name as ./audit or ./check."

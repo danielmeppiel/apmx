@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import base64
 import json
 import os
 import re
@@ -460,13 +461,12 @@ def evidence_package(root: Path, config: dict, harness: str | None, run: str | N
             raise ValueError("Concurrent factory runs are ambiguous. Select one with --run ID.")
         (selected,) = matches
     directory(selected)
-    package = selected / "receipt"
-    if not package.is_dir():
+    package = selected / "receipt.intoto.jsonl"
+    if package.is_symlink() or not package.is_file():
         raise ValueError(
             f"Recorded run {selected.name} has no delivered receipt. "
             "Inspect that run; an earlier success will not be substituted."
         )
-    directory(package)
     print(f"Recorded {harness} run: {selected.name}")
     print("This selects a saved run, not an observation of your last terminal command.")
     print(f"Receipt: {package.relative_to(root)}")
@@ -477,28 +477,25 @@ def proof(root: Path, harness: str | None, run: str | None) -> None:
     with locked(root, exclusive=False) as config:
         validate(root, config)
         package = evidence_package(root, config, harness, run)
-        documents = {}
-        for name in ("index.json", "provenance.intoto.json", "abom.cdx.json"):
-            path = package / name
-            if path.is_symlink() or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
-                raise ValueError(f"Expected an ordinary bounded evidence document: {name}")
-            documents[name] = json.loads(path.read_bytes())
-        index = documents["index.json"]
-        statement = documents["provenance.intoto.json"]
-        definition = index["definition"]["digest"]["sha256"]
-        binding = statement["predicate"]["buildDefinition"]["externalParameters"]["definition"]
+        if package.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("Expected a bounded receipt bundle")
+        statements = [
+            json.loads(base64.b64decode(json.loads(line)["payload"]))
+            for line in package.read_bytes().splitlines()
+        ]
+        statement = statements[0]
+        factory = statement["predicate"]["buildDefinition"]["externalParameters"]["factory"]
+        kinds = [item["predicateType"] for item in statements]
+        bom = statements[-1]["predicate"]
         print("Recorded claims (not yet independently verified):")
-        print(f"  Factory definition SHA-256: {json.dumps(definition, ensure_ascii=True)}")
+        print(f"  Factory definition SHA-256: {json.dumps(factory['definition']['sha256'])}")
+        print(f"  Factory package: {json.dumps(factory['package'], ensure_ascii=True)}")
         print(f"  in-toto envelope: {json.dumps(statement['_type'], ensure_ascii=True)}")
         print(f"  SLSA predicate: {json.dumps(statement['predicateType'], ensure_ascii=True)}")
-        print(f"  SLSA factory binding: {json.dumps(binding['digest'], ensure_ascii=True)}")
-        print("  ABOM: abom.cdx.json (official APM inventory, a byproduct, not a model input)")
-        print(f"  CycloneDX version: {json.dumps(documents['abom.cdx.json']['specVersion'])}")
-        print(f"  ABOM SHA-256: {json.dumps(index['inventory']['digest'], ensure_ascii=True)}")
-        print(
-            f"  Producer statements: {len(index['production'])}; check statements: {len(index['checks'])}"
-        )
-        print("  Selected outputs and their SHA-256 subjects:")
+        print("  ABOM: inline CycloneDX statement (official APM inventory, not a model input)")
+        print(f"  CycloneDX version: {json.dumps(bom['specVersion'])}")
+        print(f"  Bundle lines: {len(statements)}; check statements: {kinds.count(kinds[1])}")
+        print("  Delivered files and their SHA-256 subjects:")
         for subject in statement["subject"]:
             print("    " + json.dumps(subject, ensure_ascii=True, sort_keys=True))
         print(
@@ -553,8 +550,8 @@ def verify(root: Path, harness: str | None, run: str | None, *, controls: bool) 
         ):
             raise ValueError("Independent controls did not preserve the required boundary.")
         print(
-            f"Independent verification passed: {positive['files']} files, "
-            f"{positive['statements']} statements, {positive['capabilities']} capabilities."
+            f"Independent verification passed: {positive['statements']} statements, "
+            f"{positive['outputs']} delivered files, {positive['capabilities']} capabilities."
         )
         print("Verified factory definition SHA-256: " + positive["definitionSha256"])
         if controls:

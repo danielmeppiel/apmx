@@ -17,14 +17,16 @@ first   needs notes.md -> produces
 
 Outputs   .apm/runs/run-1/artifacts/
           first.json  second.json
-Receipt   .apm/runs/run-1/receipt/
+Receipt   .apm/runs/run-1/receipt.intoto.jsonl
           provenance  in-toto + SLSA v1
           checks      in-toto
           test-result (1)
           inventory   CycloneDX 1.5 (0
           components)
+          outputs     1 delivered file
+          in outputs/
           unsigned: binds content, not
           identity; review before
           sharing
 
-Next      apmx audit .apm/runs/run-1/receipt
+Next      apmx audit .apm/runs/run-1/receipt.intoto.jsonl
