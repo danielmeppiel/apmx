@@ -45,7 +45,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # The commit the factory ran against (for a pull request, its merge
+          # commit): the simulated PR below is built on it, like a real one.
+          ref: ${{ github.sha }}
           path: apmx
           persist-credentials: false
       - uses: ./apmx/.github/actions/setup-from-source

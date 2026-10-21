@@ -573,3 +573,36 @@ def test_gate_is_the_default_in_a_pull_request(pull, receipt, monkeypatch) -> No
     result = _audit("--offline")
     assert result.exit_code == 2, result.output
     assert "signature not checked (offline)" in result.output
+
+
+def _with_base_commit(receipt: Path, commit: str) -> None:
+    statements = _statements(receipt)
+    base = statements[0]["predicate"]["buildDefinition"]["resolvedDependencies"][0]
+    base["digest"]["gitCommit"] = commit
+    base["uri"] = f"git+https://github.com/acme/shop@{commit}"
+    receipt.chmod(0o600)
+    receipt.write_bytes(verifier.bundle_bytes(statements))
+
+
+def test_a_recorded_base_commit_must_be_in_the_pr_base_history(pull, receipt) -> None:
+    change = pull()
+    _with_base_commit(receipt, change.merge_base)
+    result = _audit(receipt, "--offline")
+    assert result.exit_code == 0, result.output
+    assert f"built on {change.merge_base[:12]}, in the PR base's history" in result.output
+    _git(change.root, "switch", "-qc", "elsewhere", change.merge_base)
+    (change.root / "other.txt").write_text("x\n")
+    _git(change.root, "add", "-A")
+    _git(change.root, "commit", "-qm", "unrelated")
+    unrelated = _git(change.root, "rev-parse", "HEAD")
+    _git(change.root, "switch", "-q", "factory")
+    _with_base_commit(receipt, unrelated)
+    result = _audit(receipt, "--offline")
+    assert result.exit_code == 1, result.output
+    assert f"it was built on {unrelated[:12]}, which is not in the PR base's history" in (
+        result.output
+    )
+    _with_base_commit(receipt, "e" * 40)
+    result = _audit(receipt, "--offline")
+    assert result.exit_code == 2, result.output
+    assert "is not in this checkout" in result.output
