@@ -895,6 +895,9 @@ class ContractLogger:
     def on_preparation(self, event: PreparationEvent) -> None:
         """Retain pre-run facts in the same bounded transcript later attached by the engine."""
         if isinstance(event, ApmInstallEvent):
+            if event.resolve_only:
+                self._resolve_only(event)
+                return
             subject = "packages" if event.scope == "package" else "project imports"
             if event.phase == "completed":
                 self.stop_activity()
@@ -950,6 +953,34 @@ class ContractLogger:
                 severity="detail",
                 detail=True,
             )
+
+    def _resolve_only(self, event: ApmInstallEvent) -> None:
+        """A preview fetch: resolved in a temporary workspace, never installed."""
+        if event.phase == "completed":
+            self.stop_activity()
+            self._write("Package source ready; nothing was installed.", severity="success")
+            return
+        self._apm_paths = (
+            ((str(event.directory), "<temporary workspace>"),) if event.directory else ()
+        )
+        message = f"Fetching package source with APM {event.version}"
+        self._write(message, severity="start")
+        self.start_activity(message, announce=False)
+        if not self._preparation_notice_shown:
+            self._write(
+                "Temporary workspace; nothing is installed and your project files are unchanged.",
+                severity="detail",
+            )
+            self._preparation_notice_shown = True
+        self._write(
+            "Running: apm lock (in a temporary workspace)",
+            severity="detail",
+            detail=True,
+        )
+        options = "--target agent-skills"
+        if event.verbose:
+            options += " --verbose"
+        self._write(f"APM options: {options}", severity="detail", detail=True)
 
     def _apm_output(self, event: ApmOutputEvent) -> None:
         text = event.text.strip()
@@ -1789,6 +1820,7 @@ class ContractLogger:
 
     def render_plan(self, plan: LeafPlan, inventory: tuple[FileEntry, ...]) -> None:
         """Show the admitted surface without printing source bodies or prompts."""
+        self._display.gap()
         self._harness = self._harness_label(plan.harness)
         relative = plan.source.contract_relative_path if plan.source else ""
         source = (
@@ -2219,6 +2251,8 @@ class ContractLogger:
         self._display.gap()
 
     def render_chain_plan(self, plan: ChainPlan) -> None:
+        # Only a preceding preview fetch adds this gap; a fresh screen stays flush.
+        self._display.gap()
         first = plan.nodes[0].plan
         self.render_factory_work(
             plan.graph,
@@ -2239,7 +2273,7 @@ class ContractLogger:
                 )
             )
         for detail in (
-            "Nothing will execute or download. Dependency resolution uses no model calls.",
+            "Nothing will execute or install. Dependency resolution uses no model calls.",
             "Handoff policy: "
             + (
                 "fully checked local outputs (--allow-unproven-inputs); assurance remains unproven"

@@ -25,6 +25,8 @@ class ApmInstallEvent:
     directory: Path | None = None
     package_ref: str | None = None
     verbose: bool = False
+    # `apm lock` for --plan: fetch and resolve into the stage, deploy nothing.
+    resolve_only: bool = False
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ Nothing ran. Run it with:  apmx ./factory --model fixture-model
 Unattended:                apmx ./factory --model fixture-model --allow-host-access --allow-unproven-inputs
 Runs are local and not sandboxed; APMX does not cap model charges.
 Handoffs: fully checked local outputs (--allow-unproven-inputs); assurance remains unproven.
-    Nothing will execute or download. Dependency resolution uses no model calls.
+    Nothing will execute or install. Dependency resolution uses no model calls.
     Handoff policy: fully checked local outputs (--allow-unproven-inputs); assurance remains unproven
     Limits: 64 discovered contracts; retries only within the explicit per-contract budgets above.
     Without --plan or consent flags, an interactive factory invocation asks for confirmation before execution. COMPLETE does not certify isolation.

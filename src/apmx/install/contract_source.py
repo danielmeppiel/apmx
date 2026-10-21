@@ -35,6 +35,8 @@ from apmx.models.dependency.selection import (
 )
 from apmx.utils.path_security import has_symlink_component, safe_rmtree
 
+PREVIEW_SOURCE_UNAVAILABLE = "preview_source_unavailable"
+
 
 @contextmanager
 def _private_root(caller_root: Path, original_root: Path | None) -> Iterator[Path]:
@@ -159,6 +161,35 @@ def _resource_subdirectory(root: Path, name: str, factory: bool) -> str:
     return candidates[0].relative_to(root).as_posix() if candidates else "."
 
 
+def _preview_fetch(
+    requested: DependencyReference,
+    stage: Path,
+    *,
+    request: str | None = None,
+    limits: ContractLimits,
+    on_preparation: PreparationSink | None,
+    verbose: bool,
+) -> dict[str, str]:
+    """Resolve like a run, but only fetch: a failed fetch is unavailable, not unproven."""
+    try:
+        return apm_backend.resolve(
+            stage,
+            package_ref=request,
+            limits=limits,
+            on_preparation=on_preparation,
+            verbose=verbose,
+        )
+    except ContractError as exc:
+        if exc.code != "apm_resolve_failed":
+            raise
+        raise ContractError(
+            f"Could not fetch {requested.to_canonical()} to preview it. Check that the reference and "
+            "ref exist, that the network is reachable and that Git credentials grant "
+            "access (for example GITHUB_APM_PAT or 'gh auth login'), then retry.",
+            code=PREVIEW_SOURCE_UNAVAILABLE,
+        ) from exc
+
+
 @contextmanager
 def prepare_contract_source(
     package_ref: str,
@@ -245,13 +276,11 @@ def prepare_contract_source(
                     resource_subdirectory=resources,
                 )
                 return
-        elif planning:
-            if selection.status != DependencySelectionStatus.MATCHED or caller_lock is None:
-                raise ContractError(
-                    "Remote source is unresolved offline; install it explicitly first.",
-                    code="unresolved_source",
-                    outcome=Outcome.UNPROVEN,
-                )
+        elif (
+            planning
+            and selection.status == DependencySelectionStatus.MATCHED
+            and caller_lock is not None
+        ):
             root, locked, managed_metadata = _selected_source(caller_root, requested, limits)
             _entry_contracts(root, contract_relative_path, factory, limits)
             yield ContractSource(
@@ -285,13 +314,22 @@ def prepare_contract_source(
                 if staged_selection.status != DependencySelectionStatus.MATCHED:
                     apm_backend.add_package_request(stage, request, limits)
                     frozen = False
-                identity = apm_backend.install(
-                    stage,
-                    frozen=frozen,
-                    limits=limits,
-                    on_preparation=on_preparation,
-                    verbose=verbose,
-                )
+                if planning:
+                    identity = _preview_fetch(
+                        requested,
+                        stage,
+                        limits=limits,
+                        on_preparation=on_preparation,
+                        verbose=verbose,
+                    )
+                else:
+                    identity = apm_backend.install(
+                        stage,
+                        frozen=frozen,
+                        limits=limits,
+                        on_preparation=on_preparation,
+                        verbose=verbose,
+                    )
                 installed_lock, _ = read_lock(stage, limits)
                 apm_backend.require_preserved_pins(established, installed_lock)
             else:
@@ -299,13 +337,23 @@ def prepare_contract_source(
                     raise ContractError(
                         "Consumer lock requires its manifest.", code="invalid_manifest"
                     )
-                identity = apm_backend.install(
-                    stage,
-                    package_ref=str(original) if original else package_ref,
-                    limits=limits,
-                    on_preparation=on_preparation,
-                    verbose=verbose,
-                )
+                if planning:
+                    identity = _preview_fetch(
+                        requested,
+                        stage,
+                        request=package_ref,
+                        limits=limits,
+                        on_preparation=on_preparation,
+                        verbose=verbose,
+                    )
+                else:
+                    identity = apm_backend.install(
+                        stage,
+                        package_ref=str(original) if original else package_ref,
+                        limits=limits,
+                        on_preparation=on_preparation,
+                        verbose=verbose,
+                    )
             _, _, current_manifest = read_project_manifest(caller_root, limits, allow_missing=True)
             _, current_lock = read_lock(caller_root, limits)
             if (current_manifest, current_lock) != (caller_manifest_digest, caller_lock_digest):

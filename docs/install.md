@@ -340,8 +340,9 @@ The commands select **Python 3.12**; uv can provision it if needed. They include
 the optional `factory` extra, which supplies **Behave 1.3.3** for this example's
 Gherkin checks. Gherkin is not required by APMX or by other contracts.
 Installation downloads dependencies and a checksum-verified APM distribution.
-Preview later is offline with respect to model work and package preparation;
-installation is not.
+Preview later makes no model calls and installs nothing; previewing a Git
+package that is not installed locally fetches it read-only, so it needs network
+access, as installation does.
 
 In a managed environment, use your organization's approved package proxy and
 certificate configuration before running these commands. Do not disable that

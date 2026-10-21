@@ -281,7 +281,7 @@ def test_consumer_preparation_is_separately_scoped_and_retained(
     assert result.output.count("Running: apm install") == int(verbose)
 
 
-@pytest.mark.parametrize("selection", ["local", "package", "remote"])
+@pytest.mark.parametrize("selection", ["local", "package"])
 @pytest.mark.parametrize("verbose", [False, True])
 def test_offline_cli_never_reports_an_install(caller, tmp_path, monkeypatch, selection, verbose):
     package = _package(tmp_path / "job")
@@ -289,7 +289,7 @@ def test_offline_cli_never_reports_an_install(caller, tmp_path, monkeypatch, sel
         shutil.copytree(package, caller, dirs_exist_ok=True)
     install = Mock(side_effect=AssertionError("Offline planning invoked APM"))
     monkeypatch.setattr("apmx.install.apm_backend.install", install)
-    ref = str(package) if selection == "package" else "org/job#v1"
+    monkeypatch.setattr("apmx.install.apm_backend.resolve", install)
     result = CliRunner().invoke(
         main,
         [
@@ -297,11 +297,11 @@ def test_offline_cli_never_reports_an_install(caller, tmp_path, monkeypatch, sel
             "--on",
             "copilot",
             "--plan",
-            *(["--from", ref] if selection != "local" else []),
+            *(["--from", str(package)] if selection == "package" else []),
             *(["--verbose"] if verbose else []),
         ],
     )
-    assert result.exit_code == (Outcome.UNPROVEN if selection == "remote" else 0), result.output
+    assert result.exit_code == 0, result.output
     install.assert_not_called()
     assert "with APM" not in result.output
     assert "Packages ready" not in result.output
@@ -551,9 +551,11 @@ def test_no_policy_gate_precedes_remote_acquisition(caller, monkeypatch, variabl
     acquire.assert_not_called()
 
 
-def test_remote_plan_never_initializes_backend(caller, monkeypatch):
-    acquire = Mock(side_effect=AssertionError("offline network"))
+def test_remote_plan_fetches_but_never_installs(caller, monkeypatch):
+    acquire = Mock(side_effect=AssertionError("a preview never installs"))
+    fetch = Mock(side_effect=ContractError("APM failed.", code="apm_resolve_failed"))
     monkeypatch.setattr("apmx.install.apm_backend.install", acquire)
+    monkeypatch.setattr("apmx.install.apm_backend.resolve", fetch)
     result = CliRunner().invoke(
         main,
         [
@@ -565,8 +567,9 @@ def test_remote_plan_never_initializes_backend(caller, monkeypatch):
             "--plan",
         ],
     )
-    assert result.exit_code == 21, result.output
-    assert "unresolved" in result.output.lower()
+    assert result.exit_code == 2, result.output
+    assert "Could not fetch org/job#v1 to preview it." in result.output
+    fetch.assert_called_once()
     acquire.assert_not_called()
     assert not list(caller.glob(".apmx-source-*"))
 
@@ -666,6 +669,7 @@ def test_installed_remote_plan_is_exact_and_read_only(caller, locked_remote_sour
     installed, _ = locked_remote_source
     backend = Mock(side_effect=AssertionError("offline acquisition"))
     monkeypatch.setattr("apmx.install.apm_backend.install", backend)
+    monkeypatch.setattr("apmx.install.apm_backend.resolve", backend)
     with contract_source.prepare_contract_source(
         "org/repo#v1", "job.contract.md", caller_root=caller, planning=True, limits=ContractLimits()
     ) as source:
@@ -698,6 +702,7 @@ def test_remote_caller_pin_drift_never_falls_back(
         LockFile().write(caller / "apm.lock.yaml")
     backend = Mock(side_effect=AssertionError("Drift cannot trigger fresh acquisition"))
     monkeypatch.setattr("apmx.install.apm_backend.install", backend)
+    monkeypatch.setattr("apmx.install.apm_backend.resolve", backend)
     before = compute_package_hash(caller)
     with (
         pytest.raises(ContractError),
@@ -712,6 +717,147 @@ def test_remote_caller_pin_drift_never_falls_back(
         pytest.fail("Caller source drift admitted")
     backend.assert_not_called()
     assert compute_package_hash(caller) == before
+
+
+def _caller_files(caller):
+    return {
+        path.relative_to(caller).as_posix(): path.read_bytes()
+        for path in caller.rglob("*")
+        if path.is_file() and ".git" not in path.relative_to(caller).parts
+    }
+
+
+def _remote_apm(tmp_path, monkeypatch, *, fail=False):
+    """Stand in for native `apm lock`: the same staged files, no network."""
+    from apmx.contracts.models import ProcessObservation
+    from apmx.install import apm_backend
+
+    binary = tmp_path / "apm"
+    binary.write_bytes(b"unit executable identity")
+    binary.chmod(0o755)
+    monkeypatch.setenv("APMX_APM_BACKEND", str(binary))
+    package = _package(tmp_path / "download")
+    (package / "apm.yml").write_text(
+        "name: packaged-job\nversion: 1.0.0\ndependencies:\n  apm: [org/style#v1]\n"
+    )
+    contract = package / "job.contract.md"
+    contract.write_text(contract.read_text().replace("verify:", "imports: [style]\nverify:"))
+    _skill(tmp_path / "style")
+    requests = []
+
+    def supervise(request, *, on_bytes, limits):
+        requests.append(request)
+        if request.argv[1] == "--version":
+            on_bytes("stdout", (apm_backend.expected_version_output() + "\n").encode())
+            return ProcessObservation(0)
+        stage = request.cwd
+        manifest = (stage / "apm.yml").read_text()
+        if fail:
+            on_bytes("stderr", b"[x] org/repo#v1: repository not found or not accessible\n")
+            return ProcessObservation(1)
+        assert "org/repo#v1" in manifest
+        on_bytes("stdout", b"[>] Resolving org/repo...\n")
+        lock = LockFile()
+        for ref, source, depth in (
+            ("org/repo#v1", package, 1),
+            ("org/style#v1", tmp_path / "style", 2),
+        ):
+            dependency = DependencyReference.parse(ref)
+            installed = dependency.get_install_path(stage / "apm_modules")
+            shutil.copytree(source, installed)
+            locked = LockedDependency.from_dependency_ref(
+                dependency, "b" * 40, depth=depth, resolved_by=None if depth == 1 else "org/repo"
+            )
+            locked.content_hash = compute_package_hash(installed)
+            lock.add_dependency(locked)
+        lock.write(stage / "apm.lock.yaml")
+        return ProcessObservation(0)
+
+    monkeypatch.setattr(apm_backend, "supervise_process", supervise)
+    install = Mock(side_effect=AssertionError("A preview must not install"))
+    monkeypatch.setattr(apm_backend, "install", install)
+    return requests, install
+
+
+@pytest.mark.parametrize("entry", ["job.contract.md", None])
+@pytest.mark.parametrize("consumer", [False, True])
+@pytest.mark.parametrize("verbose", [False, True])
+def test_uninstalled_remote_preview_fetches_read_only(
+    caller, tmp_path, monkeypatch, entry, consumer, verbose
+):
+    requests, install = _remote_apm(tmp_path, monkeypatch)
+    if consumer:
+        (caller / "apm.yml").write_text("name: caller\nversion: 1.0.0\n")
+    before = _caller_files(caller)
+    result = CliRunner().invoke(
+        main,
+        [
+            *([entry] if entry else []),
+            "--from",
+            "org/repo#v1",
+            "--on",
+            "copilot",
+            "--plan",
+            *(["--verbose"] if verbose else []),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    install.assert_not_called()
+    fetch = requests[-1]
+    assert fetch.argv[1:] == ("lock", "--target", "agent-skills", *(["--verbose"] * verbose))
+    assert not fetch.cwd.is_relative_to(caller) and not fetch.cwd.exists()
+    assert _caller_files(caller) == before
+    for written in ("apm.lock.yaml", "apm_modules", ".apm"):
+        assert not (caller / written).exists()
+    assert (caller / "apm.yml").exists() is consumer
+    output = result.output
+    assert "Fetching package source with APM 0.33.0" in output
+    assert "Package source ready; nothing was installed." in output
+    assert "Installing" not in output and "Packages ready" not in output
+    assert "Nothing ran." in output and "UNPROVEN" not in output
+    assert ("Running: apm lock (in a temporary workspace)" in output) is verbose
+    if entry:
+        assert "imports: style" in output
+    else:
+        assert "Factory  org/repo#v1   1 contract" in output
+
+
+@pytest.mark.parametrize("entry", ["job.contract.md", None])
+def test_remote_preview_fetch_failure_is_unavailable_not_unproven(
+    caller, tmp_path, monkeypatch, entry
+):
+    requests, install = _remote_apm(tmp_path, monkeypatch, fail=True)
+    before = _caller_files(caller)
+    result = CliRunner().invoke(
+        main,
+        [*([entry] if entry else []), "--from", "org/repo#v1", "--on", "copilot", "--plan"],
+    )
+    assert result.exit_code == 2, result.output
+    assert "Could not fetch org/repo#v1 to preview it." in result.output
+    assert "network" in result.output and "credentials" in result.output
+    assert "repository not found" in result.output
+    assert "UNPROVEN" not in result.output and "HALTED" not in result.output
+    install.assert_not_called()
+    assert requests[-1].argv[1] == "lock" and not requests[-1].cwd.exists()
+    assert _caller_files(caller) == before
+    assert not (caller / "apm.yml").exists() and not (caller / ".apm").exists()
+
+
+def test_remote_run_failure_keeps_its_outcome(caller, tmp_path, monkeypatch):
+    from apmx.install import apm_backend
+
+    _remote_apm(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        apm_backend,
+        "install",
+        Mock(side_effect=ContractError("APM failed.", code="apm_install_failed")),
+    )
+    result = CliRunner().invoke(
+        main,
+        ["job.contract.md", "--from", "org/repo#v1", "--on", "copilot", "--allow-host-access"],
+    )
+    assert result.exit_code == Outcome.HALTED, result.output
+    assert "Could not fetch" not in result.output
 
 
 @pytest.mark.parametrize("extra", ["scripts: {start: echo nope}", "dependencies: {mcp: [server]}"])

@@ -233,6 +233,8 @@ def test_package_preview_is_same_source_and_offline(
         p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()
     }
     install.assert_not_called()
+    fetch = Mock(side_effect=ContractError("APM failed.", code="apm_resolve_failed"))
+    monkeypatch.setattr(apm_backend, "resolve", fetch)
     unknown = CliRunner().invoke(
         main,
         [
@@ -244,8 +246,10 @@ def test_package_preview_is_same_source_and_offline(
             "--plan",
         ],
     )
-    assert unknown.exit_code == 21 and "unresolved offline" in unknown.output
+    assert unknown.exit_code == 2 and "Could not fetch example/uninstalled" in unknown.output
+    fetch.assert_called_once()
     install.assert_not_called()
+    assert not (caller / ".apm").exists() and not (caller / "apm_modules").exists()
 
 
 @pytest.mark.parametrize("allow", (False, True))

@@ -67,6 +67,18 @@
   `[i] Policy  none found`; a policy that cannot be loaded is INCOMPLETE
   (exit 2). APM's own keys stay APM's, enforced in the Ingredients row.
 
+### Fixed
+
+- `apmx --from OWNER/REPO#REF --plan` previews a Git package that is not
+  installed in the calling directory instead of refusing with UNPROVEN (21).
+  The bundled APM resolves it exactly as a run would, with `apm lock` in a
+  private temporary workspace: the package and its dependency graph are
+  fetched there, nothing is installed or integrated, no model is called and
+  the calling directory is unchanged. A package the caller declares and locks
+  is still previewed offline. A fetch that fails (offline, unknown ref,
+  authentication) exits 2 with what to check. `--plan` help now reads "Show
+  steps and checks without running agents or installing dependencies."
+
 ## 0.5.0 - 2026-10-14
 
 ### Added

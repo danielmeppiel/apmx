@@ -402,6 +402,59 @@ def test_frozen_native_replay_never_adds_positional_packages(tmp_path, monkeypat
     assert len(requests) == 2
 
 
+@pytest.mark.parametrize("verbose", [False, True])
+def test_preview_resolve_locks_without_installing(tmp_path, monkeypatch, verbose):
+    from apmx.contracts.models import ContractLimits
+    from apmx.install.apm_backend import resolve
+    from apmx.utils.yaml_io import load_yaml_str
+
+    requests = _unit_backend(tmp_path, monkeypatch)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    events = []
+    identity = resolve(
+        stage,
+        package_ref="org/repo#v1",
+        limits=ContractLimits(),
+        on_preparation=events.append,
+        verbose=verbose,
+    )
+    assert len(requests) == 2 and requests[-1].cwd == stage
+    assert requests[-1].argv[1:] == (
+        "lock",
+        "--target",
+        "agent-skills",
+        *(["--verbose"] if verbose else []),
+    )
+    manifest = load_yaml_str((stage / "apm.yml").read_text())
+    assert manifest["dependencies"] == {"apm": ["org/repo#v1"]}
+    started, completed = [event for event in events if isinstance(event, ApmInstallEvent)]
+    assert started.phase == "started" and completed.phase == "completed"
+    assert started.resolve_only and completed.resolve_only
+    assert started.version == identity["version"] and started.verbose is verbose
+    with pytest.raises(ContractError, match="already exists"):
+        resolve(stage, package_ref="org/repo#v1", limits=ContractLimits())
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "spawn"])
+def test_preview_resolve_failure_is_distinct_from_install(tmp_path, monkeypatch, failure):
+    from apmx.contracts.models import ContractLimits, ProcessObservation
+    from apmx.install.apm_backend import resolve
+
+    observation = {
+        "exit": ProcessObservation(1),
+        "timeout": ProcessObservation(None, stop_reason="deadline"),
+        "spawn": ProcessObservation(None, error="private host error"),
+    }[failure]
+    _unit_backend(tmp_path, monkeypatch, install_observation=observation)
+    events = []
+    with pytest.raises(ContractError) as error:
+        resolve(tmp_path, limits=ContractLimits(), on_preparation=events.append)
+    assert error.value.code == "apm_resolve_failed"
+    assert "private host" not in str(error.value)
+    assert [event.phase for event in events if isinstance(event, ApmInstallEvent)] == ["started"]
+
+
 @pytest.mark.parametrize("failure", ["exit", "timeout", "cleanup", "spawn", "cancelled"])
 def test_native_failures_halt_without_leaking_output(tmp_path, monkeypatch, failure):
     from apmx.contracts.models import ContractLimits, ProcessObservation

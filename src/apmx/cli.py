@@ -13,13 +13,19 @@ from apmx.contracts.records import CompletionBoundary, preparation_failure
 from apmx.core.contract_logger import ContractLogger
 from apmx.core.output_mode import configure_output_mode, detect_output_mode
 from apmx.core.tls_trust import configure_process_tls_trust
-from apmx.install.contract_source import prepare_contract_source
+from apmx.install.contract_source import PREVIEW_SOURCE_UNAVAILABLE, prepare_contract_source
 from apmx.install.contract_source_validation import validate_reference
 from apmx.models.dependency.reference import DependencyReference
 from apmx.version import get_version
 
 AUDIT = "audit"
 CHECK = "check"
+
+
+class PreviewSourceUnavailable(click.ClickException):
+    """A preview whose package could not be fetched is unavailable, not unproven."""
+
+    exit_code = 2
 
 
 class NativeCommand(click.Command):
@@ -167,7 +173,13 @@ def _select_entry(
 )
 @click.option("--model", metavar="MODEL", help="Model to use through the selected agent CLI.")
 @click.option(
-    "--plan", "planning", is_flag=True, help="Show steps and checks without running or downloading."
+    "--plan",
+    "planning",
+    is_flag=True,
+    help=(
+        "Show steps and checks without running agents or installing dependencies. "
+        "A package not installed here is fetched read-only into a temporary workspace."
+    ),
 )
 @click.option(
     "--allow-unproven-inputs",
@@ -282,6 +294,9 @@ def main(
         if result is not None:
             ctx.exit(_finish_result(result, completion, logger))
     except ContractError as exc:
+        if planning and exc.code == PREVIEW_SOURCE_UNAVAILABLE:
+            logger.stop_activity()
+            raise PreviewSourceUnavailable(str(exc)) from None
         error = preparation_failure(result, exc)
         logger.render_error(error)
         ctx.exit(int(error.outcome))

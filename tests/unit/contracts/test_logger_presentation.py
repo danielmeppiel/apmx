@@ -876,7 +876,7 @@ def test_factory_preview_distinguishes_strict_policy_from_explicit_native_opt_in
     ) is allow_unproven
     # The full policy lecture is verbose detail, unchanged in substance.
     assert (
-        "Nothing will execute or download. Dependency resolution uses no model calls." in output
+        "Nothing will execute or install. Dependency resolution uses no model calls." in output
     ) is verbose
     assert ("Handoff policy: strict VERIFIED-only; native outputs block" in output) is (
         verbose and not allow_unproven

@@ -144,6 +144,10 @@ The default is no; declining a local factory starts no package, model or check
 work. Headings are cyan, context and the prompt are neutral, and no success or
 warning color precedes execution. `--plan` shows no disclosure or consent
 prompt. Explicit consent flags still disclose local execution before action.
+Previewing a Git package that the caller has not installed first prints
+`Fetching package source with APM <version>` and
+`Package source ready; nothing was installed.`, then one blank line before the
+work preview; see [previewing a Git package](source-origin.md#previewing-a-git-package).
 
 With `--from`, an interactive factory first explains in one sentence that
 loading installs APM dependencies in a temporary workspace and can use host
