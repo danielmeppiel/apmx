@@ -19,8 +19,8 @@ import click
 
 from . import change as changes
 from . import identity as identities
+from . import patches, verifier
 from . import policy as policies
-from . import verifier
 from .ingredients import FAIL, PASS, UNAVAILABLE, WARN, audit_ingredients
 
 SCHEMA = "apmx-audit/1"
@@ -186,6 +186,7 @@ def run_audit(
                 prefix,
                 verifier.delivered_outputs(receipt),
                 changes.receipt_inputs(receipt.index),
+                patches.receipt_patches(receipt),
             )
         except (changes.ChangeUnavailable, OSError, ValueError) as exc:
             audit.incomplete("Outputs", f"the PR change could not be read ({_ascii(exc)})")
