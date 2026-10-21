@@ -297,7 +297,10 @@ def test_git_tree_matches_git_write_tree(tmp_path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw)
         target.chmod(0o755 if mode == "100755" else 0o644)
+    subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=repo, check=True)
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    # Windows Git ignores the file system's executable bit; set the mode explicitly.
+    subprocess.run(["git", "update-index", "--chmod=+x", "dir/b.py"], cwd=repo, check=True)
     tree = subprocess.run(
         ["git", "write-tree"], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
