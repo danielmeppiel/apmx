@@ -18,7 +18,7 @@ installation and model access remain external prerequisites.
 ## Three commands
 
 ```sh
-apmx ./feature-factory --plan     # see the contracts, handoffs and checks; no model calls
+apmx ./feature-factory --plan     # see the contracts, handoffs and checks; no agents, no installs
 apmx ./feature-factory            # run: each contract loops until its checks pass
 apmx audit <receipt>              # verify what was produced, from what, and how
 ```

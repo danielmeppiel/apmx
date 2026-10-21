@@ -10,6 +10,7 @@ import sys
 import time
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -261,12 +262,10 @@ def install(
     """
     if frozen and package_ref is not None:
         raise ContractError("A frozen install cannot add packages.", code="invalid_lock")
-    executable = locate_backend()
-    identity = backend_identity(executable)
-    argv = [str(executable), "install"]
+    arguments = ["install"]
     if package_ref is not None:
-        argv.append(package_ref)
-    argv.extend(
+        arguments.append(package_ref)
+    arguments.extend(
         (
             "--root",
             str(stage),
@@ -278,27 +277,104 @@ def install(
         )
     )
     if frozen:
-        argv.append("--frozen")
-    if verbose:
+        arguments.append("--frozen")
+    return _run_backend(
+        stage,
+        arguments,
+        event=ApmInstallEvent(
+            "started",
+            scope,
+            "",
+            frozen,
+            package_ref is not None,
+            stage,
+            package_ref,
+            verbose,
+        ),
+        limits=limits,
+        on_preparation=on_preparation,
+        failure=(
+            "Official APM could not prepare the selected dependencies. Check the manifest, "
+            "lock, package access and APM configuration. No producer was launched."
+        ),
+    )
+
+
+def resolve(
+    stage: Path,
+    *,
+    package_ref: str | None = None,
+    limits: ContractLimits,
+    on_preparation: PreparationSink | None = None,
+    verbose: bool = False,
+) -> dict[str, str]:
+    """Fetch and lock the stage's graph with native APM resolution; deploy nothing.
+
+    `apm lock` uses the resolver of `apm install`, honors pins already in the
+    staged lock and writes only apm.lock.yaml and apm_modules/ under the stage.
+    APM has no option to skip transitive packages, so they are fetched into the
+    stage too; nothing is integrated into any harness. A request without a
+    staged manifest gets a minimal one, as `apm install PACKAGE` would.
+    """
+    if package_ref is not None:
+        manifest = stage / "apm.yml"
+        if manifest.exists() or manifest.is_symlink():
+            raise ContractError("A staged manifest already exists.", code="invalid_manifest")
+        dump_yaml(
+            {
+                "name": "apmx-preview",
+                "version": "0.0.0",
+                "dependencies": {"apm": [package_ref]},
+            },
+            manifest,
+        )
+    return _run_backend(
+        stage,
+        ["lock", "--target", "agent-skills"],
+        event=ApmInstallEvent(
+            "started",
+            "package",
+            "",
+            False,
+            package_ref is not None,
+            stage,
+            package_ref,
+            verbose,
+            resolve_only=True,
+        ),
+        limits=limits,
+        on_preparation=on_preparation,
+        failure=(
+            "Official APM could not fetch the selected package. Check the package reference, "
+            "network access and Git credentials, then retry."
+        ),
+        code="apm_resolve_failed",
+    )
+
+
+def _run_backend(
+    stage: Path,
+    arguments: list[str],
+    *,
+    event: ApmInstallEvent,
+    limits: ContractLimits,
+    on_preparation: PreparationSink | None,
+    failure: str,
+    code: str = "apm_install_failed",
+) -> dict[str, str]:
+    executable = locate_backend()
+    identity = backend_identity(executable)
+    argv = [str(executable), *arguments]
+    if event.verbose:
         argv.append("--verbose")
     env = backend_child_env(dict(os.environ))
     for name in ("FORCE_COLOR", "CLICOLOR_FORCE", "PY_COLORS"):
         env.pop(name, None)
     env.update(NO_COLOR="1", TERM="dumb", COLUMNS="4096")
     _check_backend_version(executable, stage, env, limits)
+    event = replace(event, version=identity["version"])
     if on_preparation is not None:
-        on_preparation(
-            ApmInstallEvent(
-                "started",
-                scope,
-                identity["version"],
-                frozen,
-                package_ref is not None,
-                stage,
-                package_ref,
-                verbose,
-            )
-        )
+        on_preparation(event)
     decoder = ApmStreamDecoder(on_preparation, limits=limits)
     try:
         observed = supervise_process(
@@ -314,26 +390,11 @@ def install(
         or observed.error
         or not observed.cleanup_confirmed
     ):
-        raise ContractError(
-            "Official APM could not prepare the selected dependencies. Check the manifest, "
-            "lock, package access and APM configuration. No producer was launched.",
-            code="apm_install_failed",
-        )
+        raise ContractError(failure, code=code)
     if backend_identity(executable) != identity:
         raise ContractError("APM backend changed during preparation.", code="apm_backend_changed")
     if on_preparation is not None:
-        on_preparation(
-            ApmInstallEvent(
-                "completed",
-                scope,
-                identity["version"],
-                frozen,
-                package_ref is not None,
-                stage,
-                package_ref,
-                verbose,
-            )
-        )
+        on_preparation(replace(event, phase="completed"))
     return identity
 
 

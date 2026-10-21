@@ -150,7 +150,7 @@ protection against every unknown secret. Review logs before sharing them. No
 environment dump, raw stream spool or full argv is logged. Copilot protocol
 housekeeping names stay in the private bounded transcript rather than obscuring
 prose on the verbose screen; public/private message filtering and completion
-checks are unchanged. Offline `--plan` never runs or reports an install; local
+checks are unchanged. `--plan` never runs or reports an install; local
 execution without imports does not claim APM ran.
 
 Contract and factory output share a presentation owner for spacing, outcome
@@ -176,7 +176,9 @@ Imports name APM packages, not arbitrary skill symbols or repository basenames.
 The consumer's manifest and lock govern even a packaged contract. Without a
 consumer environment, execution can resolve an ephemeral one; a package-owned
 lock is provenance, not a competing consumer lock. Read-only planning never
-installs, fetches, repairs or migrates missing dependencies.
+installs, repairs or migrates dependencies. Only a Git package that is not
+already declared and locked by the caller is fetched for a preview; see
+[previewing a Git package](#previewing-a-git-package).
 If a selected import matches both an explicitly declared top-level package and
 a factory's transitive default, the top-level declaration wins and is still
 validated against its native lock. Multiple top-level matches, or multiple
@@ -186,7 +188,7 @@ transitive matches without a top-level choice, remain an ambiguity error.
 
 Name a Git package once: `apmx OWNER/REPO` runs its root factory against the
 current application. Copilot is the default harness; `--on opencode` overrides
-it. No model is selected on the user's behalf. `--plan` is an optional offline
+it. No model is selected on the user's behalf. `--plan` is an optional
 preview, not a prerequisite to execution. Existing policy, dependency locks,
 integrity checks and preparation/execution consent still apply.
 
@@ -275,6 +277,31 @@ The remaining budget handles forced cleanup; it is not additional time.
 This avoids premature halts for native clients that close after their leader.
 Timeout/cancellation still request immediate termination, genuinely lingering
 processes still halt, and success still requires confirmed group/job cleanup.
+
+## Previewing a Git package
+
+`apmx --from OWNER/REPO#REF --plan` shows the same steps, checks and imports a
+run would use, without running agents or installing dependencies:
+
+- **Declared and locked by the caller.** When the calling directory's `apm.yml`
+  declares the package and `apm.lock.yaml` pins it, the preview reads the
+  installed copy under `apm_modules/` and uses no network.
+- **Anything else.** The bundled APM resolves the reference exactly as a run
+  would, but with `apm lock --target agent-skills` instead of `apm install`, in
+  a private temporary workspace outside the calling directory. A caller
+  manifest and lock are snapshotted into that workspace first, so existing
+  pins still apply. APM cannot skip transitive packages, so the package and
+  its dependency graph are fetched into the workspace (and APM's normal user
+  cache); nothing is deployed to any harness, no lifecycle script runs and
+  no model is called. Imports resolve from that fetched graph. The workspace
+  is deleted after the preview; the calling directory gains no `apm.yml`,
+  `apm.lock.yaml`, `apm_modules/` or `.apm/`.
+
+If the fetch fails (no network, a reference or ref that does not exist, or
+missing Git credentials), the preview exits **2** with what to check; APM's own
+diagnostics appear above it. Exit 2 means the preview is unavailable, not
+that the factory is unproven. A local `--from ../factory` preview never uses
+the network.
 
 ## Factory execution
 

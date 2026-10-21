@@ -24,7 +24,7 @@ apmx --from ../factory --plan
 ```
 
 Expect five stages, seven outputs and nine checks. Preview performs no model
-calls. The application is the implicit workspace; source files need no inventory
+calls and installs nothing. The application is the implicit workspace; source files need no inventory
 in the contract. The factory supplies contracts, checks and the pinned testing
 capability. The package root is the default entrypoint; Copilot is the default
 harness. Preview is optional: the execution command also displays the factory
