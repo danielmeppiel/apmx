@@ -41,14 +41,48 @@ with a message saying what to pass.
 In a PR, apmx reads the event's base and head commits and diffs
 `merge-base..head`. The audit passes only when:
 
-- every receipt output exists at head with exactly the receipt's SHA-256, and
-- every file the PR changes is either a receipt output or a recorded input
-  with unchanged bytes. The receipt's own `.apm/` directory is excluded.
+- every receipt output exists at head with exactly the receipt's SHA-256, or
+  is a patch output the PR applies (below), and
+- every file the PR changes is a receipt output, a file an applied patch
+  touches, or a recorded input with unchanged bytes. The receipt's own
+  `.apm/` directory is excluded.
 
 A PR that also edits `backdoor.py`, `apm-policy.yml` or a check script fails
 the Outputs row with exit 1: `PR #7 changes backdoor.py, which the receipt
 does not bind`. Use `actions/checkout` with `fetch-depth: 0` so both commits
 are present; a missing commit is exit 2.
+
+**Applied patches.** A factory that delivers code as a patch (the
+`export_changes` tool, for example `changes.diff`) should open a PR with the
+patch applied, not the `.diff` file. An output is a *patch output* when the
+receipt's own indexed bytes (never the PR's copy) are a `git diff
+--full-index` text patch and every file it modifies or deletes has, as its
+pre-image, the exact bytes the producing attempt captured in its baseline.
+Patch paths are relative to the receipt's workspace, the directory that holds
+`.apm/`. Each patch output is delivered one of two ways:
+
+- **committed**: the PR adds or modifies `<workspace>/<name>`, or head already
+  has it with the receipt's digest. It is an ordinary output, bound by SHA-256,
+  and the files it touches must not change.
+- **applied**: otherwise. apmx copies the merge-base bytes of the touched
+  files into a temporary directory outside the checkout, checks each against
+  the patch's recorded pre-image, runs `git apply` (no fuzz, no 3-way) and
+  requires head to equal the result for every touched file: bytes, mode,
+  additions and deletions. Patches apply in attempt order.
+
+Once any patch is applied, the other outputs are optional: those the PR
+changes must match their digest, and the rest stay in the receipt. Without
+an applied patch, every output must be at head, as before. Committing a patch
+file and also applying it fails. So do a patch that does not apply to the
+base (`changes.diff does not apply to base 1a2b3c4d5e6f: src/app.py differs
+from the patch pre-image`), a patched file left unchanged (`PR #7 does not
+apply changes.diff to src/app.py (unchanged from base)`), a missing hunk or an
+extra edit (`src/app.py at head differs from changes.diff applied to base`),
+and a touched path that is absolute, contains `..`, or lies under `.git`,
+`.gitmodules` or `.apm`, or is a symlink or submodule at base or head. Nothing
+from the PR is executed. In `--format json`, `facts.change.patches` lists each
+patch output with its delivery (`applied` or `committed`) and files, and
+`facts.change.appliedFiles` lists the files the applied patches touch.
 
 ```yaml
 # .github/workflows/audit.yml in the receiving repository
@@ -204,7 +238,7 @@ never launched for a receipt that is already invalid.
 | Checks | Every recorded check invocation has exactly one test-result statement with consistent configuration, subjects and reports. Every check of a completed attempt passed. |
 | Ingredients | Dependency trust, delegated to APM (see below). |
 | Revocation | No selected capability matches a `factories.revoked` entry (exact `purl` and `bodySha256`, which only the receipt records). Package-level rules such as `dependencies.deny` stay APM's, in the Ingredients row. |
-| Outputs | The aggregate and per-attempt production subjects bind exactly the delivered artifacts. In a PR, the change is bound; with `--outputs`, the delivered files are re-hashed. |
+| Outputs | The aggregate and per-attempt production subjects bind exactly the delivered artifacts. In a PR, the change is bound: outputs match at head (`PR #7: 3/3 outputs match at head ..`) or patch outputs applied to the merge-base reproduce head (`PR #7: changes.diff + documentation.diff applied to base reproduce head (5 files)`); with `--outputs`, the delivered files are re-hashed. |
 | Identity | With `factories.signers`, the receipt's GitHub artifact attestation is verified against those workflows (see [Signed receipts](#signed-receipts)). Without signers, `[!]`: the receipt proves content binding, not who ran it. With `factories.require_signed`, an unsigned receipt is rejected (exit 1), and one whose signature could not be checked is INCOMPLETE. |
 
 The CycloneDX schemas (`bom-1.5`, `spdx`, `jsf-0.82`, pinned by SHA-256 at the

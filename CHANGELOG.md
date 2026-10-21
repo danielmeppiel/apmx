@@ -4,6 +4,13 @@
 
 ### Added
 
+- `apmx audit` binds applied patch outputs in pull requests. When a receipt
+  output is an `export_changes`-format patch (identified from the receipt's own
+  bytes and the attempt's captured baseline), the PR may apply it instead of
+  committing the `.diff`: apmx applies it with strict `git apply` to the
+  merge-base in a temporary directory, and every touched file at head must equal
+  the result. A patch that does not apply, a partial application or an extra
+  edit is exit 1. PRs that commit patch files keep today's binding.
 - `run.yml` runs factory packages: `factory` accepts a pinned APM package
   reference (`owner/repo[/path]#ref`) run against the caller's `workspace`,
   like `apmx --from`. `apmx check PRODUCER_RECEIPT --from PACKAGE_REF`
