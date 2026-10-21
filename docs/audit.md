@@ -419,6 +419,54 @@ runs it end to end with the hermetic protocol actor (no model calls) in
 identity, and verifies that signature with `apmx audit`.
 `run-selftest-package.yml` runs a fixture package pinned to the tested commit.
 
+### Deployment: one factory platform, many repositories
+
+At scale, one platform repository runs approved factories against many
+repositories and opens code-only pull requests there
+([`examples/factory-platform`](../examples/factory-platform)). Call `run.yml`
+with `target-repository` (and optionally `target-ref`, default its default
+branch; `request`, the request text written into the run root):
+
+```yaml
+    with:
+      factory: "acme/checkout-factory#v1.0.0"   # must be a pinned package
+      target-repository: acme/shop
+      request: ${{ inputs.request }}
+      target-app-client-id: ${{ vars.FACTORY_APP_CLIENT_ID }}
+    secrets:
+      agent-token: ${{ secrets.COPILOT_TOKEN }}
+      target-app-private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+```
+
+| Job | Credential | Runs |
+| --- | --- | --- |
+| target | App token, *Contents: read*, this repository only | Fetches the target at its base commit without persisting credentials and passes the tree (no `.git`) on as an artifact. |
+| produce, check | none for the target | Run on that tree. `APMX_BASE_REPOSITORY` and `APMX_BASE_COMMIT` name the base for the provenance. |
+| attest | OIDC | Unchanged: attestations are stored in the platform repository. |
+| deliver | App token, *Contents* and *Pull requests: write*, this repository only | No agent and no apmx: commits the `apmx-delivery` files onto the base commit, force-pushes `target-branch` (default `apmx/run-<run id>`, never the base or default branch) and opens or updates its pull request, linking the run, the attestation and the factory definition digest. `deliver: branch` only pushes; `deliver: bundle` needs no token and only uploads the commit as the `apmx-delivered` git bundle, which every mode uploads. |
+
+The App's private key is a secret only the target and deliver jobs reference,
+and each mints its own token, so the agent's job never receives a target
+credential (a GitHub App token cannot be passed between jobs, which is why
+`run.yml` mints them). `target-token` is an alternative for a token you
+already have, such as `GITHUB_TOKEN` when the target is the calling
+repository. The deliver job refuses paths in `.git` and under
+`.github/workflows/`, symbolic links, and writes through a symbolic link in
+the target. Each target's gate pins the platform as the signer:
+
+```yaml
+  signers:
+    - workflow: danielmeppiel/apmx/.github/workflows/run.yml
+      workflow_sha: cadfa207e4645306199ddb85271c5f3e13340924   # or the tag object SHA
+      repo: acme/factory-platform
+```
+
+Without `target-repository`, `run.yml` behaves as before: the caller's
+repository, no deliver job. `run-selftest-platform.yml` exercises the
+platform model with this repository as both platform and target. It uses
+`deliver: bundle` and pushes from its own job, because a `GITHUB_TOKEN` passed
+to `run.yml` becomes each called job's own read-only token.
+
 ## Ingredients: APM owns dependency trust
 
 apmx does not reimplement dependency auditing. The receipt retains the run's

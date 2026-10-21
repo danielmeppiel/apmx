@@ -106,3 +106,99 @@ def test_verify_requires_the_definition_to_record_the_installed_file(caller, tmp
         run_stage.verify(_receipt(tmp_path / "b", "0" * 64), "checks/requirements.txt", installed)
     with pytest.raises(run_stage.StageError, match="not a checker resource"):
         run_stage.verify(_receipt(tmp_path / "c", digest), "requirements.txt", installed)
+
+
+def test_a_target_run_requires_a_pinned_package_factory(caller, tmp_path) -> None:
+    with pytest.raises(run_stage.StageError, match="must be a pinned package reference"):
+        run_stage.stage(caller, "factory", ".", tmp_path / "temp", target=True)
+    values = run_stage.stage(caller, "owner/factory#v1", "app", tmp_path / "temp", target=True)
+    assert values["APMX_FACTORY_REF"] == "owner/factory#v1"
+
+
+def test_the_base_is_a_repository_and_a_full_commit() -> None:
+    sha = "a" * 40
+    assert run_stage.base("acme/shop", sha) == {
+        "APMX_BASE_REPOSITORY": "acme/shop",
+        "APMX_BASE_COMMIT": sha,
+    }
+    for repository, commit in [
+        ("acme", sha),
+        ("acme/../x", sha),
+        ("acme/shop\nAPMX_X=1", sha),
+        ("acme/shop", "main"),
+        ("acme/shop", sha[:12]),
+    ]:
+        with pytest.raises(run_stage.StageError):
+            run_stage.base(repository, commit)
+
+
+def test_stage_exports_the_base_for_the_provenance(caller, tmp_path, monkeypatch) -> None:
+    env = tmp_path / "github_env"
+    monkeypatch.setenv("GITHUB_ENV", str(env))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "temp"))
+    argv = ["stage", "--caller", str(caller), "--factory", "owner/factory#v1", "--workspace", "app"]
+    sha = "b" * 40
+    assert run_stage.main([*argv, "--base-repository", "acme/shop", "--base-commit", sha]) == 0
+    lines = env.read_text().splitlines()
+    assert "APMX_BASE_REPOSITORY=acme/shop" in lines and f"APMX_BASE_COMMIT={sha}" in lines
+    assert run_stage.main([*argv, "--target", "--base-repository", "x", "--base-commit", sha]) == 1
+
+
+def test_the_request_is_written_inside_the_run_root(tmp_path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    written = run_stage.request(root, "request.md", "Add free shipping")
+    assert written.read_text() == "Add free shipping\n"
+    assert run_stage.request(root, "inbox/request.md", "x\n").read_text() == "x\n"
+    for relative in ("../request.md", "/tmp/request.md"):
+        with pytest.raises(run_stage.StageError, match="inside the factory"):
+            run_stage.request(root, relative, "x")
+
+
+def _credentials_log(tmp_path, *records) -> Path:
+    log = tmp_path / "agent-credentials.jsonl"
+    log.write_text("".join(json.dumps(record) + "\n" for record in records))
+    return log
+
+
+def test_the_hermetic_agent_must_have_seen_no_credential(caller, tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    assert run_stage.credentials(_credentials_log(tmp_path, [], []), tree, home, target=True) == 2
+    with pytest.raises(run_stage.StageError, match="held credentials: GH_TOKEN"):
+        run_stage.credentials(_credentials_log(tmp_path, [], ["GH_TOKEN"]), tree, home)
+    with pytest.raises(run_stage.StageError, match="recorded no environment"):
+        run_stage.credentials(tmp_path / "missing.jsonl", tree, home)
+    # In platform mode the target is a plain tree; an in-repo checkout keeps no token.
+    with pytest.raises(run_stage.StageError, match="must be a plain tree"):
+        run_stage.credentials(_credentials_log(tmp_path, []), caller, home, target=True)
+    (caller / ".git/config").write_text("[core]\n")
+    assert run_stage.credentials(_credentials_log(tmp_path, []), caller, home) == 1
+    (caller / ".git/config").write_text("[http]\n  extraheader = AUTHORIZATION: basic x\n")
+    with pytest.raises(run_stage.StageError, match="holds a GitHub credential"):
+        run_stage.credentials(_credentials_log(tmp_path, []), caller, home)
+    (home / ".git-credentials").write_text("https://x-access-token:ghs_x@github.com\n")
+    with pytest.raises(run_stage.StageError, match="holds a GitHub credential"):
+        run_stage.credentials(_credentials_log(tmp_path, []), tree, home)
+
+
+def test_the_hermetic_actor_names_credential_shaped_variables(tmp_path) -> None:
+    import subprocess
+    import sys
+
+    log = tmp_path / "credentials.jsonl"
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "APMX_ACTOR_LOG": str(tmp_path / "actor.jsonl"),
+        "APMX_ACTOR_CREDENTIALS": str(log),
+        "LEAKED": "ghs_" + "a" * 36,
+        "KEY": "-----BEGIN RSA PRIVATE KEY-----",
+        "HARMLESS": "ghs_short",
+    }
+    actor = ROOT / "scripts/fixtures/copilot_actor.py"
+    subprocess.run(
+        [sys.executable, str(actor), "--version"], env=env, check=True, capture_output=True
+    )
+    assert json.loads(log.read_text()) == ["KEY", "LEAKED"]

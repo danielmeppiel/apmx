@@ -3,10 +3,16 @@
 Standard library only: run.yml also runs with the native apmx release, which
 has no importable apmx package.
 
-    stage         Copy what apmx runs out of the caller's Git checkout. A local
+    stage         Copy what apmx runs out of the caller's Git checkout (or the
+                  target repository's tree, in platform mode). A local
                   factory directory is copied whole; for a package factory
                   (an APM package reference), the caller's workspace is copied
-                  and apmx runs the package against it with --from.
+                  and apmx runs the package against it with --from. Exports
+                  the base the run builds on (APMX_BASE_REPOSITORY and
+                  APMX_BASE_COMMIT) for the receipt's provenance.
+    request       Write the run's request text (REQUEST) into the run root.
+    credentials   apmx CI only: the hermetic agent saw no credential-shaped
+                  environment value, no Git credential and no .git directory.
     requirements  Install the factory's checks-requirements file into a fresh
                   virtualenv and put its python3 first on PATH.
     verify        Require the installed requirements file to be the one the
@@ -29,6 +35,8 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
+_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$")
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _GITHUB = re.compile(
     r"^(?:https://)?(?:github\.com/)?(?P<owner>[A-Za-z0-9-]+)/(?P<repo>[A-Za-z0-9._-]+?)"
     r"(?:\.git)?(?P<path>(?:/[A-Za-z0-9._-]+)*)(?:#(?P<ref>[A-Za-z0-9._/-]+))?$"
@@ -57,9 +65,25 @@ def _env(**values: str) -> None:
             stream.write(f"{key}={value}\n")
 
 
-def stage(caller: Path, factory: str, workspace: str, temp: Path) -> dict[str, str]:
+def base(repository: str, commit: str) -> dict[str, str]:
+    """The repository and commit the run builds on, as recorded in its provenance."""
+    if not _REPOSITORY.fullmatch(repository) or ".." in repository:
+        raise StageError(f"base repository must be owner/name: {repository!r}")
+    if not _COMMIT.fullmatch(commit):
+        raise StageError(f"base commit must be a 40-hex commit SHA: {commit!r}")
+    return {"APMX_BASE_REPOSITORY": repository, "APMX_BASE_COMMIT": commit}
+
+
+def stage(
+    caller: Path, factory: str, workspace: str, temp: Path, target: bool = False
+) -> dict[str, str]:
     """Copy the factory (local) or the workspace (package) and describe the run."""
     ignore = shutil.ignore_patterns(".git", ".apm")
+    if target and "#" not in factory:
+        raise StageError(
+            "with target-repository, factory must be a pinned package reference "
+            f"(owner/repo[/path]#tag-or-commit), not a directory: {factory}"
+        )
     local = _inside(caller, factory, "factory") if factory not in ("", ".") else caller.resolve()
     if local.is_dir():
         root = temp / "factory"
@@ -76,6 +100,36 @@ def stage(caller: Path, factory: str, workspace: str, temp: Path) -> dict[str, s
     root = temp / "workspace"
     shutil.copytree(source, root, ignore=ignore)
     return {"APMX_RUN_ROOT": str(root), "APMX_FACTORY_REF": factory, "APMX_DELIVERY": workspace}
+
+
+def request(root: Path, relative: str, text: str) -> Path:
+    """Write the request text into the run root, where the factory reads its inputs."""
+    path = _inside(root, relative, "request-file")
+    if path.is_dir():
+        raise StageError(f"request-file is a directory: {relative}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+    return path
+
+
+def credentials(log: Path, caller: Path, home: Path, target: bool = False) -> int:
+    """The hermetic agent's record: every invocation saw no credential; nothing to borrow on disk."""
+    lines = log.read_text(encoding="ascii").splitlines() if log.is_file() else []
+    if not lines:
+        raise StageError(f"the hermetic agent recorded no environment in {log}")
+    seen = sorted({name for line in lines for name in json.loads(line)})
+    if seen:
+        raise StageError(f"the agent's environment held credentials: {', '.join(seen)}")
+    if target and (caller / ".git").exists():
+        raise StageError(f"{caller} is a Git checkout of the target; it must be a plain tree")
+    for config in (caller / ".git/config", home / ".gitconfig", home / ".git-credentials"):
+        if config.is_file() and re.search(
+            r"extraheader|x-access-token|gh[pousr]_",
+            config.read_text(encoding="utf-8"),
+            re.IGNORECASE,
+        ):
+            raise StageError(f"{config} holds a GitHub credential")
+    return len(lines)
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -154,6 +208,15 @@ def main(argv: list[str] | None = None) -> int:
     staging.add_argument("--caller", type=Path, required=True)
     staging.add_argument("--factory", required=True)
     staging.add_argument("--workspace", default=".")
+    staging.add_argument("--target", action="store_true")
+    staging.add_argument("--base-repository", required=True)
+    staging.add_argument("--base-commit", required=True)
+    requesting = commands.add_parser("request")
+    requesting.add_argument("--file", required=True)
+    auditing = commands.add_parser("credentials")
+    auditing.add_argument("--log", type=Path, required=True)
+    auditing.add_argument("--caller", type=Path, required=True)
+    auditing.add_argument("--target", action="store_true")
     installing = commands.add_parser("requirements")
     installing.add_argument("--file", required=True)
     checking = commands.add_parser("verify")
@@ -163,12 +226,21 @@ def main(argv: list[str] | None = None) -> int:
     temp = Path(os.environ["RUNNER_TEMP"])
     try:
         if args.command == "stage":
-            values = stage(args.caller, args.factory, args.workspace, temp)
+            values = stage(args.caller, args.factory, args.workspace, temp, args.target)
+            values.update(base(args.base_repository, args.base_commit))
             _env(**values)
             kind = (
                 "package " + values["APMX_FACTORY_REF"] if values["APMX_FACTORY_REF"] else "local"
             )
             print(f"Factory: {kind}; running in {values['APMX_RUN_ROOT']}")
+            print(f"Base: {values['APMX_BASE_REPOSITORY']}@{values['APMX_BASE_COMMIT']}")
+        elif args.command == "credentials":
+            count = credentials(args.log, args.caller, Path.home(), args.target)
+            print(f"[+] the agent saw no credential in {count} invocations; no .git, no Git token")
+        elif args.command == "request":
+            root = Path(os.environ["APMX_RUN_ROOT"])
+            written = request(root, args.file, os.environ.get("REQUEST", ""))
+            print(f"Wrote the request to {written.relative_to(root.resolve())}")
         elif args.command == "requirements":
             root = Path(os.environ["APMX_RUN_ROOT"])
             installed = requirements(root, os.environ.get("APMX_FACTORY_REF", ""), args.file, temp)

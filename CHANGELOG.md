@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- Run factories from one platform repository against many repositories.
+  `run.yml` takes `target-repository` (plus `target-ref`, `target-branch`,
+  `deliver`: `pull-request`, `branch` or `bundle`) and a GitHub App
+  (`target-app-client-id`, `target-app-private-key`) or a `target-token`. A new `target` job fetches
+  the target at its base commit and hands the tree to produce and check as an
+  artifact, so the agent's job never receives a target credential. A new
+  `deliver` job, with no agent and no candidate code, pushes the delivered
+  files onto that commit as a branch of the target and opens or updates its
+  pull request, linking the run, the attestation and the factory definition
+  digest. Each job mints its own App token scoped to the one target
+  repository. In hermetic CI runs the produce job proves the agent saw no
+  credential. Produce and check export `APMX_BASE_REPOSITORY` and
+  `APMX_BASE_COMMIT` for the provenance, and a `request` input writes the
+  request text into the run root. Without `target-repository` nothing
+  changes. See `examples/factory-platform` (platform workflows, organization
+  policy, required-workflow ruleset, App permissions) and docs/audit.md.
+
 ### Security
 
 - Pin a receipt signer to immutable workflow code. A `factories.signers` entry

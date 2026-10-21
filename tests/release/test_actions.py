@@ -182,10 +182,10 @@ def test_run_workflow_keeps_the_agent_away_from_checks_and_signing() -> None:
         "id-token": "write",
         "attestations": "write",
     }
-    assert jobs["check"]["needs"] == "produce" and jobs["attest"]["needs"] == "check"
+    assert jobs["check"]["needs"] == ["target", "produce"] and jobs["attest"]["needs"] == "check"
     text = (ROOT / ".github/workflows/run.yml").read_text()
     # Only the produce job sees the agent token or runs the factory with an agent.
-    for name in ("check", "attest"):
+    for name in ("target", "check", "attest", "deliver"):
         job = str(jobs[name])
         assert "agent-token" not in job and "copilot" not in job.lower()
     assert text.count("secrets.agent-token") == 1
@@ -199,6 +199,124 @@ def test_run_workflow_keeps_the_agent_away_from_checks_and_signing() -> None:
         and step["with"]["checks"] == "separate-job"
         for step in jobs["attest"]["steps"]
     )
+
+
+def _secrets(job: dict) -> set[str]:
+    return set(re.findall(r"secrets\.([\w-]+)", str(job)))
+
+
+def test_target_credentials_never_reach_the_agent() -> None:
+    """Platform mode: the target credential lives only in jobs that run no agent and no candidate code."""
+    run = _workflow("run.yml")
+    jobs = run["jobs"]
+    declared = (run.get("on") or run[True])["workflow_call"]["secrets"]
+    assert set(declared) == {"agent-token", "target-app-private-key", "target-token"}
+    assert {name: _secrets(job) for name, job in jobs.items()} == {
+        "target": {"target-app-private-key", "target-token"},
+        "produce": {"agent-token"},
+        "check": set(),
+        "attest": set(),
+        "deliver": {"target-app-private-key", "target-token"},
+    }
+    # The agent's job gets the target tree as an artifact: no target checkout, no token.
+    produce = jobs["produce"]
+    assert produce["needs"] == "target" and produce["permissions"] == {"contents": "read"}
+    for step in produce["steps"]:
+        uses = str(step.get("uses", ""))
+        if uses.startswith("actions/checkout@"):
+            assert "token" not in step["with"] and step["with"]["persist-credentials"] is False
+            assert step["with"].get("repository") in (None, "danielmeppiel/apmx")
+    assert "target-repository" not in str(produce.get("env", {}))
+    assert "run_stage.py credentials" in str(produce["steps"])
+    # The target job fetches without persisting credentials and runs no apmx and no agent.
+    target = jobs["target"]
+    (checkout,) = [
+        s for s in target["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")
+    ]
+    assert checkout["with"]["persist-credentials"] is False
+    assert "tar --exclude=./.git" in str(target["steps"])
+    for name in ("target", "deliver"):
+        steps = str(jobs[name]["steps"])
+        assert "apmx " not in steps.replace("apmx/", "") and "copilot" not in steps.lower()
+        assert "setup" not in steps and "requirements" not in steps
+        assert jobs[name]["permissions"] == {"contents": "read"}
+    # App tokens are minted per job and scoped to the one target repository.
+    minted = {
+        name: step["with"]
+        for name in ("target", "deliver")
+        for step in jobs[name]["steps"]
+        if str(step.get("uses", "")).startswith("actions/create-github-app-token@")
+    }
+    assert minted["target"]["permission-contents"] == "read"
+    assert "permission-pull-requests" not in minted["target"]
+    assert minted["deliver"]["permission-contents"] == "write"
+    assert minted["deliver"]["permission-pull-requests"] == "write"
+    for values in minted.values():
+        assert values["repositories"] == "${{ steps.split.outputs.name }}"
+        assert not any(key.startswith("permission-workflows") for key in values)
+    deliver = jobs["deliver"]
+    assert deliver["needs"] == ["target", "check", "attest"]
+    assert "inputs.target-repository != ''" in deliver["if"]
+    assert "run_deliver.py deliver" in str(deliver["steps"])
+
+
+def _job_text(name: str) -> str:
+    """The raw run.yml text of one job (env, with: and run: included)."""
+    text = (ROOT / ".github/workflows/run.yml").read_text()
+    start = text.index(f"\n  {name}:\n")
+    following = re.search(r"\n  [\w-]+:\n", text[start + 1 :])
+    return text[start : start + 1 + following.start()] if following else text[start:]
+
+
+def test_produce_and_check_never_reference_target_secrets() -> None:
+    """The agent's job and the replay job hold no App key and no target token, anywhere."""
+    for name in ("produce", "check"):
+        text = _job_text(name)
+        assert "secrets.target-" not in text and "target-app-private-key" not in text, name
+        assert "create-github-app-token" not in text and "target-token" not in text, name
+    assert "secrets.agent-token" in _job_text("produce")
+    assert "secrets.agent-token" not in _job_text("check")
+    # Each secret is referenced only by the steps that use it.
+    jobs = _workflow("run.yml")["jobs"]
+    users = {
+        name: [
+            step.get("uses", step.get("name", "")).split("@")[0]
+            for step in job["steps"]
+            if "secrets." in str(step)
+        ]
+        for name, job in jobs.items()
+    }
+    assert users == {
+        "target": ["actions/create-github-app-token", "actions/checkout"],
+        "produce": ["Run the factory (agent; untrusted outputs)"],
+        "check": [],
+        "attest": [],
+        "deliver": [
+            "actions/create-github-app-token",
+            "Push the delivered files and open or update the pull request (runs no candidate code)",
+        ],
+    }
+
+
+def test_deliver_never_executes_candidate_code() -> None:
+    """Deliver checks out only apmx's own scripts, installs nothing and runs only run_deliver.py."""
+    deliver = _workflow("run.yml")["jobs"]["deliver"]
+    actions = {str(step["uses"]).split("@")[0] for step in deliver["steps"] if "uses" in step}
+    assert actions == {
+        "actions/checkout",
+        "actions/create-github-app-token",
+        "actions/download-artifact",
+        "actions/upload-artifact",
+    }
+    for step in deliver["steps"]:
+        if str(step.get("uses", "")).startswith("actions/checkout@"):
+            assert step["with"]["repository"] == "danielmeppiel/apmx"
+            assert step["with"]["ref"] == "${{ inputs.apmx-ref }}"
+    runs = [step["run"] for step in deliver["steps"] if "run" in step]
+    assert len(runs) == 2 and runs[0].lstrip().startswith("{ echo")
+    assert runs[1].strip().startswith("python3 apmx/scripts/run_deliver.py deliver")
+    for word in ("pip", "npm", "uv ", "make", "setup", "apmx check", "apmx audit", "bash ", "sh "):
+        assert word not in " ".join(runs), word
 
 
 def test_workflows_pin_every_third_party_action() -> None:
@@ -228,6 +346,7 @@ def test_published_action_refs_and_defaults_name_this_release() -> None:
         ROOT / "README.md",
         *(ROOT / "docs").glob("*.md"),
         *(ROOT / "examples/accept-factory-prs").iterdir(),
+        *(ROOT / "examples/factory-platform").iterdir(),
     ]
     refs = set()
     for path in documents:

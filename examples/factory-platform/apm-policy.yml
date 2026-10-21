@@ -1,0 +1,14 @@
+# apm-policy.yml in the organization's policy repository (acme/.github), which
+# every target inherits. Repositories may only tighten it (`extends: org`).
+factories:
+  allow:
+    # The definition digest of each factory the platform team approved.
+    - "acme/checkout-factory@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  require_signed: true
+  signers:
+    - workflow: danielmeppiel/apmx/.github/workflows/run.yml
+      # The reviewed run.yml: `git rev-parse v0.6.0^{commit}` in danielmeppiel/apmx.
+      # The annotated tag object's SHA (`git rev-parse v0.6.0`) works too.
+      workflow_sha: cadfa207e4645306199ddb85271c5f3e13340924
+      repo: acme/factory-platform   # the only repository whose runs are trusted
+  revoked: []
