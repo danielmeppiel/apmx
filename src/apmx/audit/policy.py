@@ -41,6 +41,7 @@ POLICY_FILE = "apm-policy.yml"
 FACTORY_ENFORCEMENT = ("warn", "block")
 _TOP_ENFORCEMENT = ("off", "warn", "block")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_GIT_SHA = re.compile(r"[0-9a-fA-F]{40}")
 _ALLOW = re.compile(r"(?:(?P<name>[^@\s]+)@)?sha256:(?P<digest>[0-9a-f]{64})|(?P<pattern>[^@\s]+)")
 _WORKFLOW = re.compile(
     r"(?P<workflow>(?:[A-Za-z0-9.-]+/)?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.github/workflows/"
@@ -48,6 +49,7 @@ _WORKFLOW = re.compile(
 )
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _FACTORY_KEYS = {"allow", "require_signed", "signers", "revoked", "enforcement"}
+_SIGNER_KEYS = {"workflow", "repo", "workflow_sha"}
 _LOADED = {"found", "empty"}
 _ABSENT = {"absent", "no_git_remote"}
 _RAW_BYTES = 1024 * 1024
@@ -63,12 +65,24 @@ class Signer:
     """A workflow allowed to sign receipts, optionally pinned to a ref (``x.yml@refs/tags/v1``).
 
     ``repo`` is the repository the factory ran in, where its attestations are
-    stored; it defaults to the repository being audited.
+    stored; it defaults to the repository being audited. ``workflow_sha`` pins
+    the signer workflow's immutable Git object: the certificate's Build Signer
+    Digest (``job_workflow_sha``). A ref alone is mutable: a tag or branch can move.
     """
 
     workflow: str
     ref: str | None = None
     repo: str | None = None
+    workflow_sha: str | None = None
+
+    def allows(self, other: Signer) -> bool:
+        """True when every receipt ``other`` accepts is also accepted by this entry."""
+        return (
+            self.workflow == other.workflow
+            and self.repo == other.repo
+            and self.ref in (None, other.ref)
+            and self.workflow_sha in (None, other.workflow_sha)
+        )
 
 
 @dataclass(frozen=True)
@@ -205,9 +219,11 @@ def factories_section(value: object, label: str) -> dict:
             if (
                 not isinstance(item, dict)
                 or "workflow" not in item
-                or set(map(str, item)) - {"workflow", "repo"}
+                or set(map(str, item)) - _SIGNER_KEYS
             ):
-                raise PolicyError(f"{where} must be a mapping of workflow and optional repo")
+                raise PolicyError(
+                    f"{where} must be a mapping of workflow and optional repo and workflow_sha"
+                )
             match = _WORKFLOW.fullmatch(str(item["workflow"]))
             if not isinstance(item["workflow"], str) or match is None:
                 raise PolicyError(
@@ -216,7 +232,16 @@ def factories_section(value: object, label: str) -> dict:
             repo = item.get("repo")
             if repo is not None and (not isinstance(repo, str) or not _REPO.fullmatch(repo)):
                 raise PolicyError(f"{where}.repo must be owner/repo")
-            signers.append(Signer(match.group("workflow"), match.group("ref"), repo))
+            ref, sha = match.group("ref"), item.get("workflow_sha")
+            if sha is not None and (not isinstance(sha, str) or not _GIT_SHA.fullmatch(sha)):
+                raise PolicyError(f"{where}.workflow_sha must be a 40-hex Git SHA")
+            # `x.yml@<40-hex>` is the same pin as `workflow_sha`, so both spellings merge as one.
+            if ref is not None and _GIT_SHA.fullmatch(ref):
+                if sha is not None and sha.lower() != ref.lower():
+                    raise PolicyError(f"{where}: workflow @{ref} and workflow_sha differ")
+                ref, sha = None, ref
+            sha = None if sha is None else sha.lower()
+            signers.append(Signer(match.group("workflow"), ref, repo, sha))
         result["signers"] = tuple(signers)
     if value.get("revoked") is not None:
         if not isinstance(value["revoked"], list):
@@ -242,13 +267,16 @@ def merge(documents: Iterable[dict], *, source: str) -> FactoryPolicy:
 
     ``allow`` and ``signers`` intersect across the levels that set them,
     ``require_signed`` ORs, ``revoked`` unions, and ``factories.enforcement``
-    is ``block`` unless every level that sets it says ``warn``. Top-level
+    is ``block`` unless every level that sets it says ``warn``. A signer entry
+    is kept only if every level has an entry that allows it (same workflow and
+    repo, and no ref or ``workflow_sha`` it lacks), so a child can pin a signer
+    its parent lists unpinned but never unpin one. Top-level
     ``enforcement: off`` (APM's switch) disables the rules only when no level
     sets a stricter top-level enforcement.
     """
     allow: dict[str, str | None] | None = None
     unpinned: list[str] = []
-    signers: set[Signer] | None = None
+    signer_levels: list[set[Signer]] = []
     revoked: list[Revoked] = []
     require_signed = present = False
     levels: list[str] = []
@@ -268,10 +296,17 @@ def merge(documents: Iterable[dict], *, source: str) -> FactoryPolicy:
             )
             unpinned += [p for p in document.get("unpinned", ()) if p not in unpinned]
         if "signers" in document:
-            listed = set(document["signers"])
-            signers = listed if signers is None else signers & listed
+            signer_levels.append(set(document["signers"]))
         require_signed = require_signed or bool(document.get("require_signed"))
         revoked += [r for r in document.get("revoked", ()) if r not in revoked]
+    signers: set[Signer] | None = None
+    if signer_levels:
+        candidates = set().union(*signer_levels)
+        signers = {
+            entry
+            for entry in candidates
+            if all(any(rule.allows(entry) for rule in level) for level in signer_levels)
+        }
     enforcement = "block" if not levels or "block" in levels else "warn"
     if top and max(top, key=_TOP_ENFORCEMENT.index) == "off":
         enforcement = "off"
@@ -283,7 +318,12 @@ def merge(documents: Iterable[dict], *, source: str) -> FactoryPolicy:
         require_signed=require_signed,
         signers=None
         if signers is None
-        else tuple(sorted(signers, key=lambda s: (s.workflow, s.ref or "", s.repo or ""))),
+        else tuple(
+            sorted(
+                signers,
+                key=lambda s: (s.workflow, s.ref or "", s.repo or "", s.workflow_sha or ""),
+            )
+        ),
         revoked=tuple(revoked),
         present=present,
     )
@@ -645,4 +685,9 @@ def evaluate_unsigned(
     """An unsigned receipt against ``factories.require_signed``."""
     if not policy.require_signed:
         return None
+    return _violation(policy, detail)
+
+
+def evaluate_signer_sha(policy: FactoryPolicy, detail: str) -> Verdict:
+    """Signed by an allowed workflow, but not at the ``workflow_sha`` the policy pins."""
     return _violation(policy, detail)

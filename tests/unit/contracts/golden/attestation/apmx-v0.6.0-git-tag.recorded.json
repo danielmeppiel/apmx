@@ -1,0 +1,11 @@
+{
+  "sha": "367ca846435d34f2e89f870335eeb709f3954c49",
+  "url": "https://api.github.com/repos/danielmeppiel/apmx/git/tags/367ca846435d34f2e89f870335eeb709f3954c49",
+  "object": {
+    "sha": "cadfa207e4645306199ddb85271c5f3e13340924",
+    "type": "commit",
+    "url": "https://api.github.com/repos/danielmeppiel/apmx/git/commits/cadfa207e4645306199ddb85271c5f3e13340924"
+  },
+  "tag": "v0.6.0",
+  "message": "apmx 0.6.0\n"
+}

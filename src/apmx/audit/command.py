@@ -286,7 +286,9 @@ def _identity(
             audit.rows["Identity"] = Row("Identity", "warn", _ascii(result.detail), notes)
         else:
             audit.verdict("Identity", verdict, notes)
-    elif rules.require_signed:
+    elif result.status == "mismatch":
+        audit.verdict("Identity", policies.evaluate_signer_sha(rules, result.detail), notes)
+    elif result.status == "unresolved" or rules.require_signed:
         audit.incomplete("Identity", _ascii(result.detail), notes)
     else:
         audit.rows["Identity"] = Row("Identity", "warn", _ascii(result.detail), notes)

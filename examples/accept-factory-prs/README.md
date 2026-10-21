@@ -28,7 +28,7 @@ An excerpt of the gate's output:
 [+] Factory       definition sha256:0311c27f3d7b.. on factories.allow (acme/checkout-factory)
 [+] Revocation    0 of 1 capability revoked; factories.revoked is empty
 [+] Outputs       PR #42: changes.diff + documentation.diff applied to base reproduce head (5 files)
-[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.6.0
+[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.6.0 at cadfa207e464 (tag object 367ca846435d)
                   checks: separate job
 
 [+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
