@@ -4,6 +4,13 @@
 
 ### Added
 
+- `run.yml` runs factory packages: `factory` accepts a pinned APM package
+  reference (`owner/repo[/path]#ref`) run against the caller's `workspace`,
+  like `apmx --from`. `apmx check PRODUCER_RECEIPT --from PACKAGE_REF`
+  re-checks a package run against the current directory; the definition digest
+  binds the package's repository, commit and content, so a moved ref withdraws
+  the receipt. The check job verifies the installed `checks-requirements` file
+  is the one the definition records.
 - `run.yml` input `checks-requirements`: a requirements file inside the
   factory, installed into a fresh virtual environment whose `python3` runs the
   checks in the produce and check jobs (never in attest), with

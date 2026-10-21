@@ -278,7 +278,7 @@ keeps the agent away from both:
 | Job | Permissions | Runs |
 | --- | --- | --- |
 | produce | `contents: read` | `apmx FACTORY`: the agent. Its own checks are only a fast fail; its receipt is untrusted and is uploaded as data. |
-| check | `contents: read` | A fresh runner and the same commit, no agent: `apmx check PRODUCER_RECEIPT FACTORY`. |
+| check | `contents: read` | A fresh runner and the same commit, no agent: `apmx check PRODUCER_RECEIPT FACTORY` (or `--from PACKAGE_REF`). |
 | attest | `id-token: write`, `attestations: write` | No checkout of the caller's code: `apmx audit --offline`, then the [attest action](#signed-receipts) with `checks: separate-job`. |
 
 ```yaml
@@ -293,7 +293,22 @@ jobs:
       agent-token: ${{ secrets.COPILOT_TOKEN }}   # seen only by the produce job
 ```
 
-`apmx check PRODUCER_RECEIPT [FACTORY]` takes only the producer receipt's
+`factory` can also be an APM package reference pinned to a tag or commit,
+`owner/repo[/path]#ref`. The package runs against the caller's `workspace`
+directory (default: the repository root), exactly like `apmx --from`. The
+workspace is its input and evidence root, and the delivery overlay is laid
+out under it. The check job resolves the same reference again. The definition
+digest records the package's repository, resolved commit and content, so if
+the reference moved between the jobs, the receipt is withdrawn. An unpinned
+reference is refused.
+
+```yaml
+    with:
+      factory: "acme/checkout-factory#v1.0.0"   # reviewed once, versioned on its own
+      checks-requirements: checks/requirements.txt  # inside the package
+```
+
+`apmx check PRODUCER_RECEIPT [FACTORY] [--from PACKAGE_REF]` takes only the producer receipt's
 output bytes, matched to contracts by SHA-256, and ignores its checks,
 records and claims. It runs FACTORY (default: the current directory) from this
 checkout with a `replay` producer that writes those bytes instead of running an
@@ -301,23 +316,28 @@ agent. The factory's own checks run on them, and a new receipt of record is
 written. That receipt records the harness as `replay`, never the producer's
 model. It must have the producer's factory definition digest; otherwise it is
 withdrawn and the command exits 1. A self-consistent forged producer receipt
-whose outputs fail the checks is REJECTED there. `check` is a reserved word,
-like `audit`.
+whose outputs fail the checks is REJECTED there. With `--from`, the package
+runs against the current directory and the receipt is written under `./.apm/`.
+`check` is a reserved word, like `audit`.
 
 Checks run with `python3` from `PATH`. A factory whose checks need Python
 packages names its own approved requirements file in `checks-requirements`
-(a path inside the factory). `run.yml` installs it into a fresh virtual
+(a path inside the factory or factory package). `run.yml` installs it into a fresh virtual
 environment and puts that environment's `python3` first on `PATH`, in the
 produce and check jobs only; the attest job runs no factory code. When the
 file contains any `--hash`, pip runs with `--require-hashes`. The file is part
 of the factory directory, so changing it is a change to the factory you review.
+The check job also requires the installed file to be the `checks/` resource
+that the receipt's factory definition records.
 
 `run.yml` uploads `apmx-receipt` (the receipt of record) and `apmx-delivery`
-(the outputs at their paths plus the receipt under `FACTORY/.apm/`), ready to
+(the outputs at their paths plus the receipt under `FACTORY/.apm/`, or under
+`WORKSPACE/.apm/` for a package), ready to
 commit as a pull request that `apmx audit` accepts by proof. apmx's own CI
 runs it end to end with the hermetic protocol actor (no model calls) in
 `.github/workflows/run-selftest.yml`, signs with this repository's OIDC
 identity, and verifies that signature with `apmx audit`.
+`run-selftest-package.yml` runs a fixture package pinned to the tested commit.
 
 ## Ingredients: APM owns dependency trust
 

@@ -30,6 +30,11 @@ CHECK_HELP = (
     "checkout with the replay producer: no agent runs, the factory's own checks run on the "
     "replayed outputs, and a new receipt is written under FACTORY/.apm/. The new receipt "
     "must have the same factory definition digest as the producer's.\n\n"
+    "With --from PACKAGE_REF, the factory is that APM package (FACTORY then selects an "
+    "optional package-relative entry) run against the current directory, as in "
+    "`apmx --from PACKAGE_REF`; the receipt is written under ./.apm/. The definition digest "
+    "covers the package's resolved commit and content, so a different package, ref or "
+    "commit withdraws the receipt.\n\n"
     "Checks run with host access, as in `apmx FACTORY --allow-host-access`. "
     "Exit codes are those of a factory run; 1 also means the producer receipt is invalid "
     "or its definition differs."
@@ -83,15 +88,28 @@ def _newest_receipt(root: Path, before: set[Path]) -> Path | None:
 )
 @click.argument("producer", type=click.Path(path_type=Path), metavar="PRODUCER_RECEIPT")
 @click.argument("factory", required=False, default=".", metavar="[FACTORY]")
+@click.option(
+    "--from",
+    "package_ref",
+    metavar="PACKAGE_REF",
+    help="Check an APM source package's outputs against the current directory.",
+)
 @click.option("--verbose", "-v", is_flag=True, help="Stream native debug logs.")
-def check_command(producer: Path, factory: str, verbose: bool) -> None:
+def check_command(producer: Path, factory: str, package_ref: str | None, verbose: bool) -> None:
     from apmx.cli import main as run
 
     if not (producer / "index.json").is_file():
         raise click.UsageError(f"No receipt at {producer}: expected a directory with index.json.")
-    root = Path(factory).expanduser().absolute()
-    if not root.is_dir():
-        raise click.UsageError("FACTORY must be a local factory directory.")
+    if package_ref is not None:
+        root = Path.cwd().absolute()
+        selection = ([] if factory == "." else [factory]) + ["--from", package_ref]
+    else:
+        root = Path(factory).expanduser().absolute()
+        if not root.is_dir():
+            raise click.UsageError(
+                "FACTORY must be a local factory directory; use --from PACKAGE_REF for a package."
+            )
+        selection = [factory if factory != "." else "./"]
     before = {
         path.parent
         for kind in ("runs", "chains", "controllers")
@@ -108,7 +126,7 @@ def check_command(producer: Path, factory: str, verbose: bool) -> None:
         previous = os.environ.get(ENV_BUNDLE)
         os.environ[ENV_BUNDLE] = str(bundle)
         try:
-            arguments = [factory if factory != "." else "./", "--on", "replay"]
+            arguments = [*selection, "--on", "replay"]
             # Handoffs between contracts are checked by this run before they are used.
             arguments += ["--allow-host-access", "--allow-unproven-inputs"]
             arguments += ["--verbose"] if verbose else []
@@ -131,6 +149,7 @@ def check_command(producer: Path, factory: str, verbose: bool) -> None:
         raise CheckError(
             f"This checkout's factory definition sha256:{actual[:12]}.. differs from the "
             f"producer's sha256:{definition[:12]}..; the receipt was withdrawn. Check out the "
-            "commit the producer ran."
+            "commit the producer ran"
+            + (", with the same package ref and commit." if package_ref else ".")
         )
     click.echo(f"[+] Checked here: receipt of record {receipt}")
