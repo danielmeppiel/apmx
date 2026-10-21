@@ -1,0 +1,26 @@
+# .github/workflows/factory.yml in the platform repository (acme/factory-platform).
+# Anyone with write access to this repository can dispatch it; the App's
+# installation list is the set of repositories it can reach.
+name: factory
+on:
+  workflow_dispatch:
+    inputs:
+      target-repository: { description: "Repository to change (owner/name)", required: true, type: string }
+      request: { description: "What the factory should build", required: true, type: string }
+      factory:
+        description: Approved factory (a pinned package)
+        type: choice
+        options: ["acme/checkout-factory#v1.0.0"]
+permissions: {}
+jobs:
+  run:
+    uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.6.0
+    permissions: { contents: read, id-token: write, attestations: write }
+    with:
+      factory: ${{ inputs.factory }}
+      request: ${{ inputs.request }}
+      target-repository: ${{ inputs.target-repository }}
+      target-app-client-id: ${{ vars.FACTORY_APP_CLIENT_ID }}
+    secrets:
+      agent-token: ${{ secrets.COPILOT_TOKEN }}                  # produce job only
+      target-app-private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}  # target and deliver jobs only

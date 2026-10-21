@@ -1,0 +1,25 @@
+# .github/workflows/apmx-audit.yml in acme/factory-platform: the gate an
+# organization ruleset requires on every repository (see README). It runs
+# from this file at the ruleset's pinned ref, never from the pull request.
+name: apmx audit
+on: pull_request
+permissions: { contents: read }
+jobs:
+  audit:
+    if: startsWith(github.head_ref, 'apmx/')   # factory branches; other PRs follow normal review
+    runs-on: ubuntu-latest
+    steps:
+      - id: token   # read-only: the platform's attestations and the org policy
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.APMX_AUDIT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.APMX_AUDIT_APP_PRIVATE_KEY }}
+          owner: acme
+          repositories: factory-platform,.github
+          permission-attestations: read
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: danielmeppiel/apmx/.github/actions/setup@v0.6.0
+      - run: apmx audit
+        env: { GH_TOKEN: "${{ steps.token.outputs.token }}" }

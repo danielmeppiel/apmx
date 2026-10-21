@@ -1,0 +1,147 @@
+name: run.yml platform self-test
+
+# Drives .github/workflows/run.yml in the central factory platform model with
+# this repository as both the platform and the target, and the hermetic
+# protocol actor (no model calls). The target job fetches this repository at
+# the tested commit, the fixture package runs against
+# tests/fixtures/run-workflow-workspace, the receipt is signed, and the deliver
+# job pushes the delivered files to a throwaway branch here. The verify job
+# then runs the target's gate (`apmx audit` in pull request mode, signature
+# required) over that branch, and an extra edit must fail it.
+#
+# Real platforms pass a GitHub App (target-app-client-id and
+# target-app-private-key, see examples/factory-platform). Here the target is
+# this repository, so this workflow's own GITHUB_TOKEN is the target-token.
+# Fork pull requests have no write token and skip this workflow.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  BRANCH: apmx-selftest/${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  platform:
+    if: >-
+      ${{ github.event_name != 'pull_request'
+      || (github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]') }}
+    uses: ./.github/workflows/run.yml
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      factory: danielmeppiel/apmx/tests/fixtures/run-workflow-package#${{ github.event.pull_request.head.sha || github.sha }}
+      workspace: tests/fixtures/run-workflow-workspace
+      checks-requirements: checks/requirements.txt
+      apmx-version: source
+      apmx-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      hermetic-actor: true
+      request: "Platform self-test request: copy notes.md to handoff.json."
+      target-repository: ${{ github.repository }}
+      target-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      target-branch: apmx-selftest/${{ github.run_id }}-${{ github.run_attempt }}
+      pull-request: false
+    secrets:
+      target-token: ${{ secrets.GITHUB_TOKEN }}
+
+  verify:
+    needs: platform
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      WORKSPACE: tests/fixtures/run-workflow-workspace
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      BASE: ${{ needs.platform.outputs.base-commit }}
+      DELIVERED: ${{ needs.platform.outputs.delivered-commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: apmx
+          persist-credentials: false
+      - uses: ./apmx/.github/actions/setup-from-source
+        with:
+          path: apmx
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 2
+          path: target
+          persist-credentials: false
+      - name: The branch is one commit on the requested base and carries only the delivery
+        run: |
+          test "$BASE" = "$SHA"
+          test "$(git -C target rev-parse HEAD)" = "$DELIVERED"
+          test "$(git -C target rev-parse HEAD^)" = "$BASE"
+          git -C target diff --name-only HEAD^ HEAD | tee changed.txt
+          grep -qx "$WORKSPACE/handoff.json" changed.txt
+          if grep -v "^$WORKSPACE/" changed.txt; then exit 1; fi
+          if grep -qx "$WORKSPACE/request.md" changed.txt; then exit 1; fi
+      - name: The target's gate accepts the delivered branch (PR mode, signature required)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFINITION: ${{ needs.platform.outputs.definition-sha256 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/gate"
+          cat > "$RUNNER_TEMP/gate/apm-policy.yml" <<EOF
+          factories:
+            allow: ["sha256:$DEFINITION"]
+            require_signed: true
+            signers:
+              - workflow: ${GITHUB_REPOSITORY}/.github/workflows/run.yml
+                repo: ${GITHUB_REPOSITORY}
+          EOF
+          printf '{"pull_request": {"base": {"sha": "%s"}, "head": {"sha": "%s"}}}\n' \
+            "$BASE" "$DELIVERED" > "$RUNNER_TEMP/gate/event.json"
+          cd target
+          GITHUB_EVENT_NAME=pull_request GITHUB_EVENT_PATH="$RUNNER_TEMP/gate/event.json" \
+            apmx audit --policy "$RUNNER_TEMP/gate/apm-policy.yml" | tee "$RUNNER_TEMP/gate/audit.txt"
+          grep -q "^\[+\] Outputs       PR: " "$RUNNER_TEMP/gate/audit.txt"
+          grep -q "^\[+\] Identity      signed by ${GITHUB_REPOSITORY}/.github/workflows/run.yml@" "$RUNNER_TEMP/gate/audit.txt"
+          grep -q "^\[+\] VALID   (authenticated: " "$RUNNER_TEMP/gate/audit.txt"
+      - name: An edit on top of the delivery fails the gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd target
+          echo '{"edited": true}' > "$WORKSPACE/handoff.json"
+          git -c user.name=selftest -c user.email=selftest@example.invalid commit -qam "edit"
+          printf '{"pull_request": {"base": {"sha": "%s"}, "head": {"sha": "%s"}}}\n' \
+            "$BASE" "$(git rev-parse HEAD)" > "$RUNNER_TEMP/gate/edited.json"
+          set +e
+          GITHUB_EVENT_NAME=pull_request GITHUB_EVENT_PATH="$RUNNER_TEMP/gate/edited.json" \
+            apmx audit --policy "$RUNNER_TEMP/gate/apm-policy.yml" > "$RUNNER_TEMP/gate/edited.txt"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/gate/edited.txt"
+          test "$code" = 1
+
+  cleanup:
+    needs: [platform, verify]
+    if: ${{ always() && needs.platform.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Delete the self-test branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" 2>/dev/null; then
+            echo "Deleted $BRANCH"
+          else
+            echo "No branch $BRANCH to delete"
+          fi

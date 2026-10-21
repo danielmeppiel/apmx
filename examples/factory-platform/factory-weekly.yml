@@ -1,0 +1,18 @@
+# .github/workflows/factory-weekly.yml in the platform repository: run one
+# factory over a list of repositories every Monday. It dispatches factory.yml
+# once per target (one run, and one set of artifacts, per target).
+name: factory weekly
+on:
+  schedule: [{ cron: "0 6 * * 1" }]
+permissions: { actions: write }
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - env: { GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" }
+        run: |
+          for target in acme/shop acme/billing acme/web; do
+            gh workflow run factory.yml -f target-repository="$target" \
+              -f factory="acme/checkout-factory#v1.0.0" \
+              -f request="Apply this week's checkout pricing rules."
+          done

@@ -106,3 +106,50 @@ def test_verify_requires_the_definition_to_record_the_installed_file(caller, tmp
         run_stage.verify(_receipt(tmp_path / "b", "0" * 64), "checks/requirements.txt", installed)
     with pytest.raises(run_stage.StageError, match="not a checker resource"):
         run_stage.verify(_receipt(tmp_path / "c", digest), "requirements.txt", installed)
+
+
+def test_a_target_run_requires_a_pinned_package_factory(caller, tmp_path) -> None:
+    with pytest.raises(run_stage.StageError, match="must be a pinned package reference"):
+        run_stage.stage(caller, "factory", ".", tmp_path / "temp", target=True)
+    values = run_stage.stage(caller, "owner/factory#v1", "app", tmp_path / "temp", target=True)
+    assert values["APMX_FACTORY_REF"] == "owner/factory#v1"
+
+
+def test_the_base_is_a_repository_and_a_full_commit() -> None:
+    sha = "a" * 40
+    assert run_stage.base("acme/shop", sha) == {
+        "APMX_BASE_REPOSITORY": "acme/shop",
+        "APMX_BASE_COMMIT": sha,
+    }
+    for repository, commit in [
+        ("acme", sha),
+        ("acme/../x", sha),
+        ("acme/shop\nAPMX_X=1", sha),
+        ("acme/shop", "main"),
+        ("acme/shop", sha[:12]),
+    ]:
+        with pytest.raises(run_stage.StageError):
+            run_stage.base(repository, commit)
+
+
+def test_stage_exports_the_base_for_the_provenance(caller, tmp_path, monkeypatch) -> None:
+    env = tmp_path / "github_env"
+    monkeypatch.setenv("GITHUB_ENV", str(env))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "temp"))
+    argv = ["stage", "--caller", str(caller), "--factory", "owner/factory#v1", "--workspace", "app"]
+    sha = "b" * 40
+    assert run_stage.main([*argv, "--base-repository", "acme/shop", "--base-commit", sha]) == 0
+    lines = env.read_text().splitlines()
+    assert "APMX_BASE_REPOSITORY=acme/shop" in lines and f"APMX_BASE_COMMIT={sha}" in lines
+    assert run_stage.main([*argv, "--target", "--base-repository", "x", "--base-commit", sha]) == 1
+
+
+def test_the_request_is_written_inside_the_run_root(tmp_path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    written = run_stage.request(root, "request.md", "Add free shipping")
+    assert written.read_text() == "Add free shipping\n"
+    assert run_stage.request(root, "inbox/request.md", "x\n").read_text() == "x\n"
+    for relative in ("../request.md", "/tmp/request.md"):
+        with pytest.raises(run_stage.StageError, match="inside the factory"):
+            run_stage.request(root, relative, "x")

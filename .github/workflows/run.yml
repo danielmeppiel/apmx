@@ -1,8 +1,12 @@
 name: apmx run
 
 # Run a factory in CI and sign its receipt, with the agent kept away from the
-# checks of record and from the signing identity:
+# checks of record, from the signing identity and from any write token:
 #
+#   target   no agent: resolves the base commit. With target-repository (the
+#            central factory platform model) it fetches that repository at
+#            its base with the target credential and hands the tree on as
+#            an artifact, so the agent's job never receives the credential.
 #   produce  the agent runs (`apmx FACTORY`). No id-token, read-only token.
 #            Its own checks are only a fast fail; its receipt is untrusted.
 #   check    a fresh runner, no agent: `apmx check` replays only the output
@@ -11,6 +15,10 @@ name: apmx run
 #   attest   id-token + attestations: write, no caller checkout, no candidate
 #            code: `apmx audit --offline`, then a GitHub artifact attestation
 #            over the receipt's index.json.
+#   deliver  only with target-repository; no agent, no candidate code: pushes
+#            the delivered files onto the base commit as a branch of the
+#            target repository and opens or updates its pull request, using
+#            a GitHub App token scoped to that one repository.
 #
 # Caller:
 #   jobs:
@@ -21,6 +29,11 @@ name: apmx run
 #       with: { factory: "owner/factory#v1", checks-requirements: checks/requirements.txt }
 #       permissions: { contents: read, id-token: write, attestations: write }
 #       secrets: { agent-token: ${{ secrets.COPILOT_TOKEN }} }
+#   or, from a factory platform repository, against another repository
+#   (examples/factory-platform):
+#       with: { factory: "acme/checkout-factory#v1.0.0", target-repository: acme/shop,
+#               target-app-client-id: "${{ vars.FACTORY_APP_CLIENT_ID }}" }
+#       secrets: { agent-token: ..., target-app-private-key: ${{ secrets.FACTORY_APP_KEY }} }
 
 on:
   workflow_call:
@@ -73,9 +86,64 @@ on:
         description: apmx CI only. Replace the agent CLI with the hermetic protocol fixture.
         type: boolean
         default: false
+      request:
+        description: >
+          Optional request text written to `request-file` in the run root (the
+          factory directory or package workspace) before the factory runs, in
+          the produce and check jobs. It is prompt input: treat it as untrusted.
+        type: string
+        default: ""
+      request-file:
+        description: Path, inside the run root, that `request` is written to.
+        type: string
+        default: request.md
+      target-repository:
+        description: >
+          Central factory platform: owner/name of the repository the factory runs
+          against and delivers a pull request to. `factory` must then be a pinned
+          package reference and `workspace` a directory of that repository. Empty
+          (the default): the caller's own repository, no deliver job.
+        type: string
+        default: ""
+      target-ref:
+        description: >
+          Branch, tag or commit of target-repository to build on; empty for its
+          default branch. The pull request targets this branch, or the default
+          branch when it is a tag or commit.
+        type: string
+        default: ""
+      target-branch:
+        description: >
+          Branch the deliver job force-pushes in target-repository; an open pull
+          request from it is updated. Never the base or default branch. Empty:
+          apmx/run-<run id>.
+        type: string
+        default: ""
+      pull-request:
+        description: Open or update a pull request from target-branch; false pushes the branch only.
+        type: boolean
+        default: true
+      target-app-client-id:
+        description: >
+          Client ID of the GitHub App installed on target-repository. The target
+          and deliver jobs mint their own installation tokens, scoped to that one
+          repository: contents read (target), contents and pull-requests write
+          (deliver).
+        type: string
+        default: ""
     secrets:
       agent-token:
         description: Token for the agent CLI (COPILOT_GITHUB_TOKEN). Seen only by the produce job.
+        required: false
+      target-app-private-key:
+        description: Private key of that GitHub App. Seen only by the target and deliver jobs.
+        required: false
+      target-token:
+        description: >
+          Alternative to the App: a token for target-repository (contents and
+          pull-requests write), for example the caller's GITHUB_TOKEN when the
+          target is the caller's own repository. Seen only by the target and
+          deliver jobs.
         required: false
     outputs:
       definition-sha256:
@@ -87,11 +155,84 @@ on:
       attestation-url:
         description: URL of the receipt attestation.
         value: ${{ jobs.attest.outputs.url }}
+      base-commit:
+        description: Commit of the base repository the factory ran against.
+        value: ${{ jobs.target.outputs.commit }}
+      delivered-commit:
+        description: Commit the deliver job pushed to target-branch (platform mode).
+        value: ${{ jobs.deliver.outputs.commit }}
+      pull-request-url:
+        description: Pull request the deliver job opened or updated (platform mode).
+        value: ${{ jobs.deliver.outputs.pull-request-url }}
 
 permissions: {}
 
 jobs:
+  target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      repository: ${{ steps.base.outputs.repository }}
+      commit: ${{ steps.base.outputs.commit }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - id: split
+        name: Validate the target repository
+        if: inputs.target-repository != ''
+        env:
+          TARGET: ${{ inputs.target-repository }}
+        run: |
+          if [[ ! "$TARGET" =~ ^([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9._-]+)$ || "$TARGET" == *..* ]]; then
+            echo "::error::target-repository must be owner/name: $TARGET"
+            exit 1
+          fi
+          { echo "owner=${BASH_REMATCH[1]}"; echo "name=${BASH_REMATCH[2]}"; } >> "$GITHUB_OUTPUT"
+      - id: app
+        name: Read-only token for the target repository
+        if: inputs.target-repository != '' && inputs.target-app-client-id != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.target-app-client-id }}
+          private-key: ${{ secrets.target-app-private-key }}
+          owner: ${{ steps.split.outputs.owner }}
+          repositories: ${{ steps.split.outputs.name }}
+          permission-contents: read
+      - if: inputs.target-repository != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ inputs.target-repository }}
+          ref: ${{ inputs.target-ref }}
+          token: ${{ steps.app.outputs.token || secrets.target-token || github.token }}
+          path: target
+          persist-credentials: false
+      - id: base
+        name: Resolve the base commit (and ship the target tree, without credentials)
+        env:
+          TARGET: ${{ inputs.target-repository }}
+        run: |
+          if [[ -n "$TARGET" ]]; then
+            commit=$(git -C target rev-parse HEAD)
+            tar --exclude=./.git -cf "$RUNNER_TEMP/target.tar" -C target .
+          else
+            TARGET=$GITHUB_REPOSITORY
+            commit=$GITHUB_SHA
+          fi
+          { echo "repository=$TARGET"; echo "commit=$commit"; } >> "$GITHUB_OUTPUT"
+          echo "Base: $TARGET@$commit"
+      - if: inputs.target-repository != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apmx-target
+          path: ${{ runner.temp }}/target.tar
+          if-no-files-found: error
+          retention-days: 1
+
   produce:
+    needs: target
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -100,10 +241,19 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: inputs.target-repository == ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: caller
           persist-credentials: false
+      - if: inputs.target-repository != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apmx-target
+          path: ${{ runner.temp }}/target
+      - name: Unpack the target repository at its base commit (no .git, no credentials)
+        if: inputs.target-repository != ''
+        run: mkdir caller && tar -xf "$RUNNER_TEMP/target/target.tar" -C caller
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: danielmeppiel/apmx
@@ -129,7 +279,9 @@ jobs:
           {
             echo "APMX_ACTOR_LOG=$RUNNER_TEMP/actor.jsonl"
             echo "APMX_ACTOR_MODE=pass"
+            echo "APMX_ACTOR_ENV_DIGESTS=$RUNNER_TEMP/agent-env/sha256.txt"
           } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/agent-env"
       - name: Install the Copilot CLI
         if: ${{ !inputs.hermetic-actor && inputs.harness == 'copilot' }}
         run: npm install --global --no-fund --no-audit @github/copilot
@@ -140,7 +292,19 @@ jobs:
         env:
           FACTORY: ${{ inputs.factory }}
           WORKSPACE: ${{ inputs.workspace }}
-        run: python3 apmx/scripts/run_stage.py stage --caller caller --factory "$FACTORY" --workspace "$WORKSPACE"
+          TARGET: ${{ inputs.target-repository }}
+          BASE_REPOSITORY: ${{ needs.target.outputs.repository }}
+          BASE_COMMIT: ${{ needs.target.outputs.commit }}
+        run: |
+          python3 apmx/scripts/run_stage.py stage --caller caller --factory "$FACTORY" \
+            --workspace "$WORKSPACE" --base-repository "$BASE_REPOSITORY" \
+            --base-commit "$BASE_COMMIT" ${TARGET:+--target}
+      - name: Write the request into the run root
+        if: inputs.request != ''
+        env:
+          REQUEST: ${{ inputs.request }}
+          REQUEST_FILE: ${{ inputs.request-file }}
+        run: python3 apmx/scripts/run_stage.py request --file "$REQUEST_FILE"
       - if: inputs.checks-requirements != '' && inputs.apmx-version != 'source'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -177,6 +341,14 @@ jobs:
               raise SystemExit("The factory run delivered no receipt")
           shutil.copytree(found[-1].parent, Path(os.environ["RUNNER_TEMP"]) / "producer-receipt")
           PY
+      - name: Self-test evidence of what the agent's environment held (digests only)
+        if: inputs.hermetic-actor
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apmx-agent-env
+          path: ${{ runner.temp }}/agent-env
+          if-no-files-found: error
+          retention-days: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: apmx-producer-receipt
@@ -185,7 +357,7 @@ jobs:
           retention-days: 7
 
   check:
-    needs: produce
+    needs: [target, produce]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -196,10 +368,19 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: inputs.target-repository == ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: caller
           persist-credentials: false
+      - if: inputs.target-repository != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apmx-target
+          path: ${{ runner.temp }}/target
+      - name: Unpack the target repository at its base commit (no .git, no credentials)
+        if: inputs.target-repository != ''
+        run: mkdir caller && tar -xf "$RUNNER_TEMP/target/target.tar" -C caller
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: danielmeppiel/apmx
@@ -225,7 +406,19 @@ jobs:
         env:
           FACTORY: ${{ inputs.factory }}
           WORKSPACE: ${{ inputs.workspace }}
-        run: python3 apmx/scripts/run_stage.py stage --caller caller --factory "$FACTORY" --workspace "$WORKSPACE"
+          TARGET: ${{ inputs.target-repository }}
+          BASE_REPOSITORY: ${{ needs.target.outputs.repository }}
+          BASE_COMMIT: ${{ needs.target.outputs.commit }}
+        run: |
+          python3 apmx/scripts/run_stage.py stage --caller caller --factory "$FACTORY" \
+            --workspace "$WORKSPACE" --base-repository "$BASE_REPOSITORY" \
+            --base-commit "$BASE_COMMIT" ${TARGET:+--target}
+      - name: Write the request into the run root
+        if: inputs.request != ''
+        env:
+          REQUEST: ${{ inputs.request }}
+          REQUEST_FILE: ${{ inputs.request-file }}
+        run: python3 apmx/scripts/run_stage.py request --file "$REQUEST_FILE"
       - if: inputs.checks-requirements != '' && inputs.apmx-version != 'source'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -324,3 +517,71 @@ jobs:
         with:
           receipt: ${{ runner.temp }}/receipt
           checks: separate-job
+
+  deliver:
+    needs: [target, check, attest]
+    if: >-
+      ${{ inputs.target-repository != '' && !cancelled() && needs.check.result == 'success'
+      && (needs.attest.result == 'success' || !inputs.attest) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.deliver.outputs.commit }}
+      pull-request-url: ${{ steps.deliver.outputs.pull-request-url }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: danielmeppiel/apmx
+          ref: ${{ inputs.apmx-ref }}
+          path: apmx
+          persist-credentials: false
+      - id: split
+        name: Split the target repository
+        env:
+          TARGET: ${{ needs.target.outputs.repository }}
+        run: |
+          { echo "owner=${TARGET%%/*}"; echo "name=${TARGET#*/}"; } >> "$GITHUB_OUTPUT"
+      - id: app
+        name: Write token for the target repository only
+        if: inputs.target-app-client-id != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.target-app-client-id }}
+          private-key: ${{ secrets.target-app-private-key }}
+          owner: ${{ steps.split.outputs.owner }}
+          repositories: ${{ steps.split.outputs.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apmx-delivery
+          path: ${{ runner.temp }}/delivery
+      - if: inputs.hermetic-actor
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apmx-agent-env
+          path: ${{ runner.temp }}/agent-env
+      - name: Self-test, the agent never held the target token
+        if: inputs.hermetic-actor
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.target-token }}
+        run: python3 apmx/scripts/run_deliver.py assert-agent-env --digests "$RUNNER_TEMP/agent-env/sha256.txt"
+      - id: deliver
+        name: Push the delivered files and open or update the pull request (runs no candidate code)
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.target-token }}
+          TARGET: ${{ needs.target.outputs.repository }}
+          TARGET_REF: ${{ inputs.target-ref }}
+          BASE_COMMIT: ${{ needs.target.outputs.commit }}
+          BRANCH: ${{ inputs.target-branch }}
+          PULL_REQUEST: ${{ inputs.pull-request }}
+          FACTORY: ${{ inputs.factory }}
+          DEFINITION: ${{ needs.check.outputs.definition }}
+          ATTESTATION_URL: ${{ needs.attest.outputs.url }}
+          RECEIPT_SHA256: ${{ needs.attest.outputs.receipt }}
+        run: python3 apmx/scripts/run_deliver.py deliver --delivery "$RUNNER_TEMP/delivery"

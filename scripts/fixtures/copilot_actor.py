@@ -42,6 +42,12 @@ def main():
         return 97
     with Path(os.environ["APMX_ACTOR_LOG"]).open("a", encoding="utf-8") as stream:
         stream.write(json.dumps({"argv": sys.argv[1:], "cwd": str(Path.cwd())}) + "\n")
+    if os.environ.get("APMX_ACTOR_ENV_DIGESTS"):
+        # run.yml self-test: which values the agent could read, without revealing them.
+        with Path(os.environ["APMX_ACTOR_ENV_DIGESTS"]).open("a", encoding="ascii") as stream:
+            stream.writelines(
+                hashlib.sha256(value.encode()).hexdigest() + "\n" for value in os.environ.values()
+            )
     if sys.argv[1:] == ["--fixture-child"]:
         return child()
     if sys.argv[1:] == ["--version"]:
