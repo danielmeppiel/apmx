@@ -227,6 +227,7 @@ def test_target_credentials_never_reach_the_agent() -> None:
             assert "token" not in step["with"] and step["with"]["persist-credentials"] is False
             assert step["with"].get("repository") in (None, "danielmeppiel/apmx")
     assert "target-repository" not in str(produce.get("env", {}))
+    assert "run_stage.py credentials" in str(produce["steps"])
     # The target job fetches without persisting credentials and runs no apmx and no agent.
     target = jobs["target"]
     (checkout,) = [

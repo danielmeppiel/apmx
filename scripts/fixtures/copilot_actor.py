@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -42,12 +43,12 @@ def main():
         return 97
     with Path(os.environ["APMX_ACTOR_LOG"]).open("a", encoding="utf-8") as stream:
         stream.write(json.dumps({"argv": sys.argv[1:], "cwd": str(Path.cwd())}) + "\n")
-    if os.environ.get("APMX_ACTOR_ENV_DIGESTS"):
-        # run.yml self-test: which values the agent could read, without revealing them.
-        with Path(os.environ["APMX_ACTOR_ENV_DIGESTS"]).open("a", encoding="ascii") as stream:
-            stream.writelines(
-                hashlib.sha256(value.encode()).hexdigest() + "\n" for value in os.environ.values()
-            )
+    if os.environ.get("APMX_ACTOR_CREDENTIALS"):
+        # run.yml self-test: name (never value) every credential-shaped variable the agent sees.
+        shapes = re.compile(r"(gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY")
+        with Path(os.environ["APMX_ACTOR_CREDENTIALS"]).open("a", encoding="ascii") as stream:
+            stream.write(json.dumps(sorted(k for k, v in os.environ.items() if shapes.search(v))))
+            stream.write("\n")
     if sys.argv[1:] == ["--fixture-child"]:
         return child()
     if sys.argv[1:] == ["--version"]:

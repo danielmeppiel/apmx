@@ -119,10 +119,14 @@ on:
           apmx/run-<run id>.
         type: string
         default: ""
-      pull-request:
-        description: Open or update a pull request from target-branch; false pushes the branch only.
-        type: boolean
-        default: true
+      deliver:
+        description: >
+          pull-request (push target-branch, open or update its pull request),
+          branch (push only) or bundle (no push, no token: the delivered commit
+          is only uploaded as the apmx-delivered git bundle, for a caller job
+          that pushes it itself). Every mode uploads that bundle.
+        type: string
+        default: pull-request
       target-app-client-id:
         description: >
           Client ID of the GitHub App installed on target-repository. The target
@@ -159,7 +163,7 @@ on:
         description: Commit of the base repository the factory ran against.
         value: ${{ jobs.target.outputs.commit }}
       delivered-commit:
-        description: Commit the deliver job pushed to target-branch (platform mode).
+        description: Commit the deliver job built on the base (platform mode; pushed unless deliver is bundle).
         value: ${{ jobs.deliver.outputs.commit }}
       pull-request-url:
         description: Pull request the deliver job opened or updated (platform mode).
@@ -279,9 +283,8 @@ jobs:
           {
             echo "APMX_ACTOR_LOG=$RUNNER_TEMP/actor.jsonl"
             echo "APMX_ACTOR_MODE=pass"
-            echo "APMX_ACTOR_ENV_DIGESTS=$RUNNER_TEMP/agent-env/sha256.txt"
+            echo "APMX_ACTOR_CREDENTIALS=$RUNNER_TEMP/agent-credentials.jsonl"
           } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/agent-env"
       - name: Install the Copilot CLI
         if: ${{ !inputs.hermetic-actor && inputs.harness == 'copilot' }}
         run: npm install --global --no-fund --no-audit @github/copilot
@@ -341,14 +344,13 @@ jobs:
               raise SystemExit("The factory run delivered no receipt")
           shutil.copytree(found[-1].parent, Path(os.environ["RUNNER_TEMP"]) / "producer-receipt")
           PY
-      - name: Self-test evidence of what the agent's environment held (digests only)
+      - name: Self-test, the agent saw no credential besides the model token
         if: inputs.hermetic-actor
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: apmx-agent-env
-          path: ${{ runner.temp }}/agent-env
-          if-no-files-found: error
-          retention-days: 1
+        env:
+          TARGET: ${{ inputs.target-repository }}
+        run: |
+          python3 apmx/scripts/run_stage.py credentials --log "$APMX_ACTOR_CREDENTIALS" \
+            --caller caller ${TARGET:+--target}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: apmx-producer-receipt
@@ -561,16 +563,6 @@ jobs:
         with:
           name: apmx-delivery
           path: ${{ runner.temp }}/delivery
-      - if: inputs.hermetic-actor
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: apmx-agent-env
-          path: ${{ runner.temp }}/agent-env
-      - name: Self-test, the agent never held the target token
-        if: inputs.hermetic-actor
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token || secrets.target-token }}
-        run: python3 apmx/scripts/run_deliver.py assert-agent-env --digests "$RUNNER_TEMP/agent-env/sha256.txt"
       - id: deliver
         name: Push the delivered files and open or update the pull request (runs no candidate code)
         env:
@@ -579,9 +571,16 @@ jobs:
           TARGET_REF: ${{ inputs.target-ref }}
           BASE_COMMIT: ${{ needs.target.outputs.commit }}
           BRANCH: ${{ inputs.target-branch }}
-          PULL_REQUEST: ${{ inputs.pull-request }}
+          DELIVER: ${{ inputs.deliver }}
           FACTORY: ${{ inputs.factory }}
           DEFINITION: ${{ needs.check.outputs.definition }}
           ATTESTATION_URL: ${{ needs.attest.outputs.url }}
           RECEIPT_SHA256: ${{ needs.attest.outputs.receipt }}
-        run: python3 apmx/scripts/run_deliver.py deliver --delivery "$RUNNER_TEMP/delivery"
+        run: |
+          python3 apmx/scripts/run_deliver.py deliver --delivery "$RUNNER_TEMP/delivery" \
+            --bundle "$RUNNER_TEMP/delivered/delivered.bundle"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apmx-delivered
+          path: ${{ runner.temp }}/delivered
+          if-no-files-found: error

@@ -4,15 +4,19 @@ name: run.yml platform self-test
 # this repository as both the platform and the target, and the hermetic
 # protocol actor (no model calls). The target job fetches this repository at
 # the tested commit, the fixture package runs against
-# tests/fixtures/run-workflow-workspace, the receipt is signed, and the deliver
-# job pushes the delivered files to a throwaway branch here. The verify job
-# then runs the target's gate (`apmx audit` in pull request mode, signature
-# required) over that branch, and an extra edit must fail it.
+# tests/fixtures/run-workflow-workspace, the produce job proves the agent saw
+# no credential, the receipt is signed, and the deliver job builds the
+# delivered commit on the base. The publish job pushes it to a throwaway
+# branch here, and the verify job runs the target's gate (`apmx audit` in
+# pull request mode, signature required) over that branch; an extra edit
+# must fail it.
 #
 # Real platforms pass a GitHub App (target-app-client-id and
-# target-app-private-key, see examples/factory-platform). Here the target is
-# this repository, so this workflow's own GITHUB_TOKEN is the target-token.
-# Fork pull requests have no write token and skip this workflow.
+# target-app-private-key, see examples/factory-platform) and deliver opens the
+# pull request itself. There is no App here, and GitHub rebinds a passed
+# GITHUB_TOKEN to each called job's own read-only token, so deliver runs in
+# `bundle` mode (no token) and this workflow's publish job, the only one with
+# contents: write, pushes the bundle. Fork pull requests skip this workflow.
 on:
   pull_request:
   push:
@@ -32,7 +36,7 @@ jobs:
       && github.actor != 'dependabot[bot]') }}
     uses: ./.github/workflows/run.yml
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
     with:
@@ -46,12 +50,33 @@ jobs:
       target-repository: ${{ github.repository }}
       target-ref: ${{ github.event.pull_request.head.sha || github.sha }}
       target-branch: apmx-selftest/${{ github.run_id }}-${{ github.run_attempt }}
-      pull-request: false
-    secrets:
-      target-token: ${{ secrets.GITHUB_TOKEN }}
+      deliver: bundle
+
+  publish:
+    needs: platform
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apmx-delivered
+          path: ${{ runner.temp }}/delivered
+      - name: Push the delivered commit (git only; runs nothing it delivers)
+        env:
+          DELIVERED: ${{ needs.platform.outputs.delivered-commit }}
+        run: |
+          git fetch --quiet "$RUNNER_TEMP/delivered/delivered.bundle" "refs/heads/$BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$DELIVERED"
+          git push --quiet origin "FETCH_HEAD:refs/heads/$BRANCH"
 
   verify:
-    needs: platform
+    needs: [platform, publish]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -129,7 +154,7 @@ jobs:
           test "$code" = 1
 
   cleanup:
-    needs: [platform, verify]
+    needs: [platform, publish, verify]
     if: ${{ always() && needs.platform.result != 'skipped' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5

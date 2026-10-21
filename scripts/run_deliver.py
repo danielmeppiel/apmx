@@ -2,12 +2,10 @@
 
 Standard library only, like run_stage.py. It runs no candidate code: it
 copies the delivered bytes onto the target's base commit with git (no hooks,
-no filters, no global or system configuration), pushes one branch and opens
-or updates one pull request through the GitHub REST API.
-
-    deliver           Push the branch and open or update the pull request.
-    assert-agent-env  apmx CI only: the digests of every environment value the
-                      hermetic agent saw never include the target token.
+no filters, no global or system configuration) and writes that commit as a
+git bundle. Depending on the mode it then pushes one branch (`branch`) and
+opens or updates one pull request through the GitHub REST API
+(`pull-request`), or stops at the bundle (`bundle`, no token needed).
 
 The delivery directory mirrors the target repository's root. An optional
 `.apmx-deleted` file at its root lists paths to delete, one per line; it is
@@ -21,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import os
 import re
@@ -38,7 +35,7 @@ DELETED = ".apmx-deleted"
 MARKER = "<!-- apmx-deliver -->"
 _REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
-_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+MODES = ("pull-request", "branch", "bundle")
 _AUTHOR = ("apmx factory platform", "apmx-factory-platform@users.noreply.github.com")
 
 
@@ -299,50 +296,49 @@ def summary(
 
 def deliver(
     *,
-    api: Api,
+    api: Api | None,
     env: dict[str, str],
     remote: str,
     work: Path,
     delivery: Path,
+    bundle: Path,
     target: str,
     target_ref: str,
     base: str,
     branch: str,
-    pull_request: bool,
+    mode: str,
     title: str,
     body: str,
     message: str,
 ) -> dict[str, str]:
+    if mode not in MODES:
+        raise DeliverError(f"deliver must be one of {', '.join(MODES)}: {mode!r}")
     files, deleted = delivered_files(delivery), deleted_files(delivery)
     if not files and not deleted:
         raise DeliverError("the delivery is empty")
     _git(env, work.parent, "check-ref-format", "--branch", branch)
-    into, default = base_branch(api, target, target_ref)
-    if branch in {into, default}:
-        raise DeliverError(f"refusing to push to {branch}: it is the base or default branch")
+    into = ""
+    if mode != "bundle":
+        if api is None:
+            raise DeliverError(f"deliver: {mode} needs a token for the target repository")
+        into, default = base_branch(api, target, target_ref)
+        if branch in {into, default}:
+            raise DeliverError(f"refusing to push to {branch}: it is the base or default branch")
     commit = build_commit(env, work, remote, base, files, deleted, message)
-    _git(env, work, "push", "--quiet", "--force", remote, f"HEAD:refs/heads/{branch}")
+    _git(env, work, "branch", "--force", branch, "HEAD")
+    bundle.parent.mkdir(parents=True, exist_ok=True)
+    _git(env, work, "bundle", "create", "--quiet", str(bundle), f"refs/heads/{branch}", f"^{base}")
     result = {"commit": commit, "branch": branch, "base-branch": into, "pull-request-url": ""}
-    if pull_request:
+    if mode == "bundle":
+        print(f"Wrote {commit} on {target}@{base[:12]} as refs/heads/{branch} in {bundle.name}")
+        return result
+    _git(env, work, "push", "--quiet", "--force", remote, f"HEAD:refs/heads/{branch}")
+    print(f"Pushed {commit} to {target}:{branch} (base {base[:12]} on {into})")
+    if mode == "pull-request":
         action, url = open_or_update(api, target, branch, into, title, body)
         result["pull-request-url"] = url
         print(f"{action.capitalize()} {url}")
-    print(f"Pushed {commit} to {target}:{branch} (base {base[:12]} on {into})")
     return result
-
-
-def assert_agent_env(digests: Path, token: str) -> None:
-    """apmx CI: the hermetic agent's environment never held the target token."""
-    if not token:
-        raise DeliverError("no target token to look for")
-    seen = {line.strip() for line in digests.read_text(encoding="ascii").splitlines()}
-    if not seen or not all(_DIGEST.fullmatch(line) for line in seen):
-        raise DeliverError(f"{digests} is not a list of SHA-256 digests")
-    if hashlib.sha256(b"pass").hexdigest() not in seen:
-        raise DeliverError(f"{digests} is not the hermetic agent's environment (APMX_ACTOR_MODE)")
-    if hashlib.sha256(token.encode()).hexdigest() in seen:
-        raise DeliverError("the agent's environment held the target token")
-    print(f"[+] none of the {len(seen)} environment values the agent saw is the target token")
 
 
 def _outputs(values: dict[str, str]) -> None:
@@ -357,19 +353,16 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     delivering = commands.add_parser("deliver")
     delivering.add_argument("--delivery", type=Path, required=True)
-    checking = commands.add_parser("assert-agent-env")
-    checking.add_argument("--digests", type=Path, required=True)
+    delivering.add_argument("--bundle", type=Path, required=True)
     args = parser.parse_args(argv)
     env = os.environ
     try:
         token = env.get("GH_TOKEN", "")
-        if args.command == "assert-agent-env":
-            assert_agent_env(args.digests, token)
-            return 0
-        if not token:
+        mode = env.get("DELIVER", "pull-request")
+        if mode != "bundle" and not token:
             raise DeliverError(
                 "no token for the target repository: pass target-app-client-id and the "
-                "target-app-private-key secret (or the target-token secret)"
+                "target-app-private-key secret (or the target-token secret), or deliver: bundle"
             )
         target = repository(env["TARGET"])
         server = env.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
@@ -397,16 +390,19 @@ def main(argv: list[str] | None = None) -> int:
             home = Path(scratch) / "home"
             home.mkdir()
             result = deliver(
-                api=GitHub(token, env.get("GITHUB_API_URL", "https://api.github.com")),
+                api=GitHub(token, env.get("GITHUB_API_URL", "https://api.github.com"))
+                if token
+                else None,
                 env=git_env(home, server, token),
                 remote=f"{server}/{target}.git",
                 work=Path(scratch) / "target",
                 delivery=args.delivery,
+                bundle=args.bundle,
                 target=target,
                 target_ref=env.get("TARGET_REF", ""),
                 base=base,
                 branch=env.get("BRANCH") or f"apmx/run-{env.get('GITHUB_RUN_ID', 'local')}",
-                pull_request=env.get("PULL_REQUEST", "true") == "true",
+                mode=mode,
                 title=env.get("TITLE") or f"apmx: {factory}",
                 body=body,
                 message=message,
@@ -415,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         summary_path = env.get("GITHUB_STEP_SUMMARY")
         if summary_path:
             with open(summary_path, "a", encoding="utf-8") as stream:
-                link = result["pull-request-url"] or f"branch `{result['branch']}`"
+                link = result["pull-request-url"] or f"`{result['branch']}` ({mode})"
                 stream.write(f"{body}\nDelivered to {target}: {link}\n")
     except (DeliverError, KeyError, OSError) as exc:
         print(f"::error::{exc}", file=sys.stderr)

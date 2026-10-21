@@ -153,3 +153,52 @@ def test_the_request_is_written_inside_the_run_root(tmp_path) -> None:
     for relative in ("../request.md", "/tmp/request.md"):
         with pytest.raises(run_stage.StageError, match="inside the factory"):
             run_stage.request(root, relative, "x")
+
+
+def _credentials_log(tmp_path, *records) -> Path:
+    log = tmp_path / "agent-credentials.jsonl"
+    log.write_text("".join(json.dumps(record) + "\n" for record in records))
+    return log
+
+
+def test_the_hermetic_agent_must_have_seen_no_credential(caller, tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    assert run_stage.credentials(_credentials_log(tmp_path, [], []), tree, home, target=True) == 2
+    with pytest.raises(run_stage.StageError, match="held credentials: GH_TOKEN"):
+        run_stage.credentials(_credentials_log(tmp_path, [], ["GH_TOKEN"]), tree, home)
+    with pytest.raises(run_stage.StageError, match="recorded no environment"):
+        run_stage.credentials(tmp_path / "missing.jsonl", tree, home)
+    # In platform mode the target is a plain tree; an in-repo checkout keeps no token.
+    with pytest.raises(run_stage.StageError, match="must be a plain tree"):
+        run_stage.credentials(_credentials_log(tmp_path, []), caller, home, target=True)
+    (caller / ".git/config").write_text("[core]\n")
+    assert run_stage.credentials(_credentials_log(tmp_path, []), caller, home) == 1
+    (caller / ".git/config").write_text("[http]\n  extraheader = AUTHORIZATION: basic x\n")
+    with pytest.raises(run_stage.StageError, match="holds a GitHub credential"):
+        run_stage.credentials(_credentials_log(tmp_path, []), caller, home)
+    (home / ".git-credentials").write_text("https://x-access-token:ghs_x@github.com\n")
+    with pytest.raises(run_stage.StageError, match="holds a GitHub credential"):
+        run_stage.credentials(_credentials_log(tmp_path, []), tree, home)
+
+
+def test_the_hermetic_actor_names_credential_shaped_variables(tmp_path) -> None:
+    import subprocess
+    import sys
+
+    log = tmp_path / "credentials.jsonl"
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "APMX_ACTOR_LOG": str(tmp_path / "actor.jsonl"),
+        "APMX_ACTOR_CREDENTIALS": str(log),
+        "LEAKED": "ghs_" + "a" * 36,
+        "KEY": "-----BEGIN RSA PRIVATE KEY-----",
+        "HARMLESS": "ghs_short",
+    }
+    actor = ROOT / "scripts/fixtures/copilot_actor.py"
+    subprocess.run(
+        [sys.executable, str(actor), "--version"], env=env, check=True, capture_output=True
+    )
+    assert json.loads(log.read_text()) == ["KEY", "LEAKED"]

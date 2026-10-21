@@ -443,7 +443,7 @@ branch; `request`, the request text written into the run root):
 | target | App token, *Contents: read*, this repository only | Fetches the target at its base commit without persisting credentials and passes the tree (no `.git`) on as an artifact. |
 | produce, check | none for the target | Run on that tree. `APMX_BASE_REPOSITORY` and `APMX_BASE_COMMIT` name the base for the provenance. |
 | attest | OIDC | Unchanged: attestations are stored in the platform repository. |
-| deliver | App token, *Contents* and *Pull requests: write*, this repository only | No agent and no apmx: commits the `apmx-delivery` files onto the base commit, force-pushes `target-branch` (default `apmx/run-<run id>`, never the base or default branch) and opens or updates its pull request, linking the run, the attestation and the factory definition digest. |
+| deliver | App token, *Contents* and *Pull requests: write*, this repository only | No agent and no apmx: commits the `apmx-delivery` files onto the base commit, force-pushes `target-branch` (default `apmx/run-<run id>`, never the base or default branch) and opens or updates its pull request, linking the run, the attestation and the factory definition digest. `deliver: branch` only pushes; `deliver: bundle` needs no token and only uploads the commit as the `apmx-delivered` git bundle, which every mode uploads. |
 
 The App's private key is a secret only the target and deliver jobs reference,
 and each mints its own token, so the agent's job never receives a target
@@ -463,7 +463,9 @@ the target. Each target's gate pins the platform as the signer:
 
 Without `target-repository`, `run.yml` behaves as before: the caller's
 repository, no deliver job. `run-selftest-platform.yml` exercises the
-platform model with this repository as both platform and target.
+platform model with this repository as both platform and target. It uses
+`deliver: bundle` and pushes from its own job, because a `GITHUB_TOKEN` passed
+to `run.yml` becomes each called job's own read-only token.
 
 ## Ingredients: APM owns dependency trust
 

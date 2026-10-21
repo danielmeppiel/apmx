@@ -1,6 +1,5 @@
 """scripts/run_deliver.py: how run.yml's deliver job pushes a factory's files to a target."""
 
-import hashlib
 import importlib.util
 import json
 import os
@@ -70,7 +69,7 @@ class FakeGitHub:
         return 404, {"message": "Not Found"}
 
 
-def _deliver(tmp_path, remote, delivery, api, branch="apmx/run-1", pull_request=True, ref=""):
+def _deliver(tmp_path, remote, delivery, api, branch="apmx/run-1", mode="pull-request", ref=""):
     url, base = remote
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -80,11 +79,12 @@ def _deliver(tmp_path, remote, delivery, api, branch="apmx/run-1", pull_request=
         remote=url,
         work=tmp_path / "work",
         delivery=delivery,
+        bundle=tmp_path / "delivered/delivered.bundle",
         target="acme/shop",
         target_ref=ref,
         base=base,
         branch=branch,
-        pull_request=pull_request,
+        mode=mode,
         title="apmx: acme/factory#v1",
         body="body",
         message="apmx: deliver",
@@ -126,8 +126,34 @@ def test_an_open_pr_from_the_branch_is_updated_and_its_base_follows_target_ref(
 
 def test_branch_only_delivery_opens_no_pr(tmp_path, remote, delivery) -> None:
     api = FakeGitHub()
-    result = _deliver(tmp_path, remote, delivery, api, pull_request=False)
+    result = _deliver(tmp_path, remote, delivery, api, mode="branch")
     assert result["pull-request-url"] == "" and not [c for c in api.calls if c[0] != "GET"]
+
+
+def test_bundle_delivery_needs_no_token_and_pushes_nothing(tmp_path, remote, delivery) -> None:
+    url, base = remote
+    result = _deliver(tmp_path, remote, delivery, None, mode="bundle")
+    bare = f"--git-dir={url.removeprefix('file://')}"
+    assert _run(tmp_path, bare, "for-each-ref", "refs/heads/apmx") == ""
+    # The bundle carries exactly the delivered commit on top of the base.
+    _run(
+        tmp_path,
+        bare,
+        "fetch",
+        "--quiet",
+        str(tmp_path / "delivered/delivered.bundle"),
+        "refs/heads/apmx/run-1",
+    )
+    assert _run(tmp_path, bare, "rev-parse", "FETCH_HEAD") == result["commit"]
+    assert _run(tmp_path, bare, "rev-parse", "FETCH_HEAD^") == base
+
+
+@pytest.mark.parametrize("mode", ["pull-request", "branch"])
+def test_pushing_modes_need_a_token(tmp_path, remote, delivery, mode) -> None:
+    with pytest.raises(run_deliver.DeliverError, match="needs a token"):
+        _deliver(tmp_path, remote, delivery, None, mode=mode)
+    with pytest.raises(run_deliver.DeliverError, match="deliver must be one of"):
+        _deliver(tmp_path, remote, delivery, FakeGitHub(), mode="merge")
 
 
 @pytest.mark.parametrize("branch", ["main", "release/1"])
@@ -234,27 +260,13 @@ def test_the_pr_body_links_the_run_attestation_and_definition() -> None:
     assert "not signed" in unsigned and "`x'y`" in unsigned
 
 
-def test_agent_env_assertion_detects_the_target_token(tmp_path) -> None:
-    digests = tmp_path / "sha256.txt"
-    seen = [hashlib.sha256(value.encode()).hexdigest() for value in ("pass", "/usr/bin")]
-    digests.write_text("\n".join(seen) + "\n")
-    run_deliver.assert_agent_env(digests, "ghs_target")
-    digests.write_text("\n".join([*seen, hashlib.sha256(b"ghs_target").hexdigest()]) + "\n")
-    with pytest.raises(run_deliver.DeliverError, match="held the target token"):
-        run_deliver.assert_agent_env(digests, "ghs_target")
-    digests.write_text(seen[1] + "\n")
-    with pytest.raises(run_deliver.DeliverError, match="hermetic agent"):
-        run_deliver.assert_agent_env(digests, "ghs_target")
-    with pytest.raises(run_deliver.DeliverError, match="no target token"):
-        run_deliver.assert_agent_env(digests, "")
-
-
 def test_main_needs_a_token_and_a_valid_target(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setenv("TARGET", "acme/shop")
-    assert run_deliver.main(["deliver", "--delivery", str(tmp_path)]) == 1
+    args = ["deliver", "--delivery", str(tmp_path), "--bundle", str(tmp_path / "b")]
+    assert run_deliver.main(args) == 1
     assert "no token for the target repository" in capsys.readouterr().err
     monkeypatch.setenv("GH_TOKEN", "x")
     monkeypatch.setenv("TARGET", "acme/../shop")
-    assert run_deliver.main(["deliver", "--delivery", str(tmp_path)]) == 1
+    assert run_deliver.main(args) == 1
     assert "owner/name" in capsys.readouterr().err

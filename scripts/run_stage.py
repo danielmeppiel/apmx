@@ -11,6 +11,8 @@ has no importable apmx package.
                   the base the run builds on (APMX_BASE_REPOSITORY and
                   APMX_BASE_COMMIT) for the receipt's provenance.
     request       Write the run's request text (REQUEST) into the run root.
+    credentials   apmx CI only: the hermetic agent saw no credential-shaped
+                  environment value, no Git credential and no .git directory.
     requirements  Install the factory's checks-requirements file into a fresh
                   virtualenv and put its python3 first on PATH.
     verify        Require the installed requirements file to be the one the
@@ -110,6 +112,26 @@ def request(root: Path, relative: str, text: str) -> Path:
     return path
 
 
+def credentials(log: Path, caller: Path, home: Path, target: bool = False) -> int:
+    """The hermetic agent's record: every invocation saw no credential; nothing to borrow on disk."""
+    lines = log.read_text(encoding="ascii").splitlines() if log.is_file() else []
+    if not lines:
+        raise StageError(f"the hermetic agent recorded no environment in {log}")
+    seen = sorted({name for line in lines for name in json.loads(line)})
+    if seen:
+        raise StageError(f"the agent's environment held credentials: {', '.join(seen)}")
+    if target and (caller / ".git").exists():
+        raise StageError(f"{caller} is a Git checkout of the target; it must be a plain tree")
+    for config in (caller / ".git/config", home / ".gitconfig", home / ".git-credentials"):
+        if config.is_file() and re.search(
+            r"extraheader|x-access-token|gh[pousr]_",
+            config.read_text(encoding="utf-8"),
+            re.IGNORECASE,
+        ):
+            raise StageError(f"{config} holds a GitHub credential")
+    return len(lines)
+
+
 def _git(*args: str, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, stdout=subprocess.DEVNULL)
 
@@ -191,6 +213,10 @@ def main(argv: list[str] | None = None) -> int:
     staging.add_argument("--base-commit", required=True)
     requesting = commands.add_parser("request")
     requesting.add_argument("--file", required=True)
+    auditing = commands.add_parser("credentials")
+    auditing.add_argument("--log", type=Path, required=True)
+    auditing.add_argument("--caller", type=Path, required=True)
+    auditing.add_argument("--target", action="store_true")
     installing = commands.add_parser("requirements")
     installing.add_argument("--file", required=True)
     checking = commands.add_parser("verify")
@@ -208,6 +234,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"Factory: {kind}; running in {values['APMX_RUN_ROOT']}")
             print(f"Base: {values['APMX_BASE_REPOSITORY']}@{values['APMX_BASE_COMMIT']}")
+        elif args.command == "credentials":
+            count = credentials(args.log, args.caller, Path.home(), args.target)
+            print(f"[+] the agent saw no credential in {count} invocations; no .git, no Git token")
         elif args.command == "request":
             root = Path(os.environ["APMX_RUN_ROOT"])
             written = request(root, args.file, os.environ.get("REQUEST", ""))
