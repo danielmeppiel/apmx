@@ -160,3 +160,47 @@ def test_check_is_a_reserved_word(tmp_path) -> None:
     )
     assert "PRODUCER_RECEIPT" in CliRunner().invoke(main, ["check", "--help"]).output
     assert _check(tmp_path / "missing").exit_code == 2
+
+
+@pytest.fixture
+def packaged(caller, tmp_path, monkeypatch):
+    """A producer job that ran a factory package against the caller, plus a fresh workspace."""
+    (tmp_path / "source").mkdir()
+    package = _package(tmp_path / "source/factory")
+    _fake_agent(monkeypatch)
+    run = CliRunner().invoke(
+        main, ["--from", str(package), "--on", "copilot", "--allow-host-access"]
+    )
+    assert run.exit_code == 0, run.output
+    (receipt,) = _receipts(caller)
+    workspace = tmp_path / "workspace"
+    shutil.copytree(caller, workspace, ignore=shutil.ignore_patterns(".apm"))
+    monkeypatch.chdir(workspace)
+    return receipt, package, workspace
+
+
+def test_check_from_a_package_writes_the_receipt_of_record_in_the_workspace(packaged) -> None:
+    producer, package, workspace = packaged
+    result = _check(producer, "--from", package)
+    assert result.exit_code == 0, result.output
+    (receipt,) = _receipts(workspace)
+    assert f"[+] Checked here: receipt of record {receipt}" in result.output
+    assert _definition(receipt) == _definition(producer)
+    assert (receipt / "attempts").is_dir()
+
+
+def test_check_from_a_different_package_withdraws_the_receipt(packaged, tmp_path) -> None:
+    producer, package, workspace = packaged
+    other = tmp_path / "other/factory"
+    shutil.copytree(package, other)
+    (other / "checks/check.py").write_text((other / "checks/check.py").read_text() + "# drift\n")
+    result = _check(producer, "--from", other)
+    assert result.exit_code == 1, result.output
+    assert "differs from the producer's" in result.output and "same package ref" in result.output
+    assert not _receipts(workspace)
+
+
+def test_check_without_from_refuses_a_package_reference(produced) -> None:
+    producer, _ = produced
+    result = _check(producer, "owner/factory@v1")
+    assert result.exit_code == 2 and "--from PACKAGE_REF" in result.output

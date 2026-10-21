@@ -17,6 +17,8 @@ name: apmx run
 #     factory:
 #       uses: danielmeppiel/apmx/.github/workflows/run.yml@<sha>
 #       with: { factory: path/to/factory, checks-requirements: checks/requirements.txt }
+#   or, for a factory package run against the caller's repository:
+#       with: { factory: "owner/factory#v1", checks-requirements: checks/requirements.txt }
 #       permissions: { contents: read, id-token: write, attestations: write }
 #       secrets: { agent-token: ${{ secrets.COPILOT_TOKEN }} }
 
@@ -24,7 +26,16 @@ on:
   workflow_call:
     inputs:
       factory:
-        description: Factory directory in the caller's repository.
+        description: >
+          Factory directory in the caller's repository, or an APM package
+          reference pinned to a tag or commit (owner/repo[/path]#ref), run
+          against `workspace` like `apmx --from`.
+        type: string
+        default: "."
+      workspace:
+        description: >
+          Caller directory a package factory runs against: its inputs and
+          evidence root. Ignored for a local factory directory.
         type: string
         default: "."
       harness:
@@ -49,8 +60,8 @@ on:
         default: true
       checks-requirements:
         description: >
-          Optional pip requirements file inside the factory (for example
-          checks/requirements.txt): the factory's own approved checker
+          Optional pip requirements file inside the factory or factory package
+          (for example checks/requirements.txt): the factory's own approved checker
           dependencies. Installed into a fresh virtualenv whose python3 runs
           the checks, in the produce and check jobs only, never in attest.
           Hashes are required when the file has any.
@@ -120,53 +131,45 @@ jobs:
       - name: Install the Copilot CLI
         if: ${{ !inputs.hermetic-actor && inputs.harness == 'copilot' }}
         run: npm install --global --no-fund --no-audit @github/copilot
-      - name: Copy the factory out of the Git checkout
+      - name: Stage the factory out of the Git checkout
         # apmx refuses native runs inside a Git repository with remotes (fail-closed
-        # no-policy prerequisite), so the factory runs from a plain copy.
+        # no-policy prerequisite), so it runs from a plain copy: the factory
+        # directory, or the workspace a package factory runs against.
         env:
-          FACTORY: caller/${{ inputs.factory }}
-        run: |
-          python3 -c 'import os, shutil; shutil.copytree(os.environ["FACTORY"], os.environ["RUNNER_TEMP"] + "/factory", ignore=shutil.ignore_patterns(".git", ".apm"))'
+          FACTORY: ${{ inputs.factory }}
+          WORKSPACE: ${{ inputs.workspace }}
+        run: python3 apmx/scripts/run_stage.py stage --caller caller --factory "$FACTORY" --workspace "$WORKSPACE"
+      - if: inputs.checks-requirements != '' && inputs.apmx-version != 'source'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
       - name: Install the factory's check requirements
         if: inputs.checks-requirements != ''
         env:
-          FACTORY: ${{ runner.temp }}/factory
           REQUIREMENTS: ${{ inputs.checks-requirements }}
-        run: |
-          file=$(python3 - <<'PY'
-          import os
-          from pathlib import Path
-          factory = Path(os.environ["FACTORY"]).resolve()
-          path = (factory / os.environ["REQUIREMENTS"]).resolve()
-          if not path.is_relative_to(factory) or not path.is_file():
-              raise SystemExit(f"checks-requirements must be a file inside the factory: {os.environ['REQUIREMENTS']}")
-          print(path)
-          PY
-          )
-          python3 -m venv "$RUNNER_TEMP/checks-python"
-          args=(--disable-pip-version-check --no-input --quiet -r "$file")
-          if grep -q -- '--hash=' "$file"; then args+=(--require-hashes); fi
-          "$RUNNER_TEMP/checks-python/bin/python" -m pip install "${args[@]}"
-          echo "$RUNNER_TEMP/checks-python/bin" >> "$GITHUB_PATH"
+        run: python3 apmx/scripts/run_stage.py requirements --file "$REQUIREMENTS"
       - name: Run the factory (agent; untrusted outputs)
         working-directory: ${{ runner.temp }}
         env:
-          FACTORY: ${{ runner.temp }}/factory
           HARNESS: ${{ inputs.harness }}
           MODEL: ${{ inputs.model }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.agent-token }}
         run: |
-          args=("$FACTORY" --on "$HARNESS" --allow-host-access --allow-unproven-inputs)
+          if [[ -n "$APMX_FACTORY_REF" ]]; then
+            cd "$APMX_RUN_ROOT"
+            args=(--from "$APMX_FACTORY_REF")
+          else
+            args=("$APMX_RUN_ROOT")
+          fi
+          args+=(--on "$HARNESS" --allow-host-access --allow-unproven-inputs)
           if [[ -n "$MODEL" ]]; then args+=(--model "$MODEL"); fi
           apmx "${args[@]}"
       - name: Collect the producer receipt
-        env:
-          FACTORY: ${{ runner.temp }}/factory
         run: |
           python3 - <<'PY'
           import os, shutil
           from pathlib import Path
-          found = sorted(Path(os.environ["FACTORY"], ".apm").glob("*/*/receipt/index.json"),
+          found = sorted(Path(os.environ["APMX_RUN_ROOT"], ".apm").glob("*/*/receipt/index.json"),
                          key=lambda p: p.parent.parent.name)
           if not found:
               raise SystemExit("The factory run delivered no receipt")
@@ -213,52 +216,52 @@ jobs:
         with:
           name: apmx-producer-receipt
           path: ${{ runner.temp }}/producer-receipt
-      - name: Copy the factory out of the Git checkout
+      - name: Stage the factory out of the Git checkout
         # apmx refuses native runs inside a Git repository with remotes (fail-closed
-        # no-policy prerequisite), so the factory runs from a plain copy.
+        # no-policy prerequisite), so it runs from a plain copy: the factory
+        # directory, or the workspace a package factory runs against.
         env:
-          FACTORY: caller/${{ inputs.factory }}
-        run: |
-          python3 -c 'import os, shutil; shutil.copytree(os.environ["FACTORY"], os.environ["RUNNER_TEMP"] + "/factory", ignore=shutil.ignore_patterns(".git", ".apm"))'
+          FACTORY: ${{ inputs.factory }}
+          WORKSPACE: ${{ inputs.workspace }}
+        run: python3 apmx/scripts/run_stage.py stage --caller caller --factory "$FACTORY" --workspace "$WORKSPACE"
+      - if: inputs.checks-requirements != '' && inputs.apmx-version != 'source'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
       - name: Install the factory's check requirements
         if: inputs.checks-requirements != ''
         env:
-          FACTORY: ${{ runner.temp }}/factory
           REQUIREMENTS: ${{ inputs.checks-requirements }}
-        run: |
-          file=$(python3 - <<'PY'
-          import os
-          from pathlib import Path
-          factory = Path(os.environ["FACTORY"]).resolve()
-          path = (factory / os.environ["REQUIREMENTS"]).resolve()
-          if not path.is_relative_to(factory) or not path.is_file():
-              raise SystemExit(f"checks-requirements must be a file inside the factory: {os.environ['REQUIREMENTS']}")
-          print(path)
-          PY
-          )
-          python3 -m venv "$RUNNER_TEMP/checks-python"
-          args=(--disable-pip-version-check --no-input --quiet -r "$file")
-          if grep -q -- '--hash=' "$file"; then args+=(--require-hashes); fi
-          "$RUNNER_TEMP/checks-python/bin/python" -m pip install "${args[@]}"
-          echo "$RUNNER_TEMP/checks-python/bin" >> "$GITHUB_PATH"
+        run: python3 apmx/scripts/run_stage.py requirements --file "$REQUIREMENTS"
       - name: Re-check the outputs here (no agent) and write the receipt of record
         working-directory: ${{ runner.temp }}
-        run: apmx check "$RUNNER_TEMP/producer-receipt" "$RUNNER_TEMP/factory"
+        run: |
+          if [[ -n "$APMX_FACTORY_REF" ]]; then
+            cd "$APMX_RUN_ROOT"
+            apmx check "$RUNNER_TEMP/producer-receipt" --from "$APMX_FACTORY_REF"
+          else
+            apmx check "$RUNNER_TEMP/producer-receipt" "$APMX_RUN_ROOT"
+          fi
+      - name: The installed check requirements are the factory definition's own
+        if: inputs.checks-requirements != ''
+        env:
+          REQUIREMENTS: ${{ inputs.checks-requirements }}
+        run: |
+          receipt=$(ls -d "$APMX_RUN_ROOT"/.apm/*/*/receipt)
+          python3 apmx/scripts/run_stage.py verify --receipt "$receipt" --file "$REQUIREMENTS"
       - id: record
         name: Package the receipt of record and a delivery overlay
-        env:
-          FACTORY: ${{ inputs.factory }}
         run: |
           python3 - <<'PY'
           import json, os, shutil
           from pathlib import Path, PurePosixPath
           temp = Path(os.environ["RUNNER_TEMP"])
-          factory = temp / "factory"
+          factory = Path(os.environ["APMX_RUN_ROOT"])
           (index,) = [p for p in factory.glob(".apm/*/*/receipt/index.json")]
           receipt = index.parent
           shutil.copytree(receipt, temp / "receipt")
           data = json.loads(index.read_bytes())
-          root = temp / "delivery" / PurePosixPath(os.environ["FACTORY"])
+          root = temp / "delivery" / PurePosixPath(os.environ["APMX_DELIVERY"])
           shutil.copytree(receipt, root / receipt.relative_to(factory))
           for attempt in data["attempts"]:
               if attempt["selected"]:

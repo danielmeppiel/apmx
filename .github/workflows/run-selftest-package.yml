@@ -1,0 +1,76 @@
+name: run.yml package self-test
+
+# Drives .github/workflows/run.yml with a factory *package*: the fixture
+# package in tests/fixtures/run-workflow-package, pinned to this commit, runs
+# against tests/fixtures/run-workflow-workspace with the hermetic protocol
+# actor (no model calls). The check job re-resolves the same package ref; the
+# receipt of record's definition must pin the package commit.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  package:
+    uses: ./.github/workflows/run.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      factory: danielmeppiel/apmx/tests/fixtures/run-workflow-package#${{ github.event.pull_request.head.sha || github.sha }}
+      workspace: tests/fixtures/run-workflow-workspace
+      checks-requirements: checks/requirements.txt
+      apmx-version: source
+      apmx-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      hermetic-actor: true
+      attest: false
+
+  verify-package:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      WORKSPACE: tests/fixtures/run-workflow-workspace
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: apmx
+          persist-credentials: false
+      - uses: ./apmx/.github/actions/setup-from-source
+        with:
+          path: apmx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apmx-delivery
+          path: delivery
+      - name: The package factory's receipt of record is VALID and pins the package commit
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DEFINITION: ${{ needs.package.outputs.definition-sha256 }}
+        run: |
+          receipt=$(ls -d delivery/"$WORKSPACE"/.apm/*/*/receipt)
+          env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH \
+            apmx audit "$receipt" --offline --outputs "delivery/$WORKSPACE" --format json > audit.json
+          python3 - "$receipt" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          report = json.load(open("audit.json"))
+          assert report["result"] == "valid", report
+          definition = json.loads((Path(sys.argv[1]) / "definition.json").read_bytes())
+          (package,) = [d for d in definition["resolvedDependencies"] if d["name"] == "run-workflow-package"]
+          assert package["commit"] == os.environ["SHA"], package
+          assert report["facts"]["definitionSha256"] == os.environ["DEFINITION"], report["facts"]
+          print("[+] package receipt of record VALID; definition pins", package["repository"], package["commit"][:12])
+          PY
+          grep -h '"harness"' delivery/"$WORKSPACE"/.apm/*/*/receipt/attempts/*/execution.json \
+            | grep -q '"replay"'
