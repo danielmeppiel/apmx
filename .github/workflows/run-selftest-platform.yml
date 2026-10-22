@@ -19,6 +19,7 @@ name: run.yml platform self-test
 # contents: write, pushes the bundle. Fork pull requests skip this workflow.
 on:
   pull_request:
+    paths-ignore: ["site/**", ".github/workflows/site.yml"]
   push:
     branches: [main]
   workflow_dispatch:

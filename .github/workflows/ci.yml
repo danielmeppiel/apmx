@@ -2,8 +2,9 @@ name: Native CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+    paths-ignore: ["site/**", ".github/workflows/site.yml"]
   workflow_call:
     inputs:
       candidate:
