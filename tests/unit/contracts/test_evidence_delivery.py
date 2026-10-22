@@ -41,9 +41,8 @@ def test_both_cli_completion_paths_keep_delivery_separate(
             raise OSError("private filesystem error")
         if failure == "interrupt":
             raise KeyboardInterrupt
-        destination = result.run_directory / "receipt"
-        destination.mkdir()
-        (destination / "summary.md").write_text("fixture delivered")
+        destination = result.run_directory / "receipt.intoto.jsonl"
+        destination.write_text("")
         return destination
 
     monkeypatch.setattr("apmx.contracts.evidence.export_completed", export)
@@ -77,17 +76,16 @@ def test_ordinary_run_without_dependencies_delivers_a_receipt(tmp_path, monkeypa
         main, ["job.contract.md", "--on", "copilot", "--allow-host-access"]
     )
     assert response.exit_code == 0, response.output
-    receipts = list(tmp_path.glob(".apm/runs/*/receipt"))
+    receipts = list(tmp_path.glob(".apm/runs/*/receipt.intoto.jsonl"))
     assert len(receipts) == 1
     relative = receipts[0].relative_to(tmp_path).as_posix()
-    assert f"\nReceipt   {relative}/\n" in response.output
+    assert f"\nReceipt   {relative}\n" in response.output
     assert "          inventory   CycloneDX 1.5 (0 components)\n" in response.output
+    assert "          outputs     1 delivered file in outputs/\n" in response.output
     assert f"\nNext      apmx audit {relative}\n" in response.output
-    assert not list(tmp_path.glob(".apm/runs/*/evidence"))
-    bom = json.loads((receipts[0] / "abom.cdx.json").read_bytes())
-    assert bom["components"] == []
-    index = json.loads((receipts[0] / "index.json").read_bytes())
-    assert index["schema"] == "apmx-evidence-package/1"
+    assert not list(tmp_path.glob(".apm/runs/*/receipt/"))
+    assert (receipts[0].parent / "outputs/result.txt").is_file()
+    assert list((receipts[0].parent / "evidence/sha256").iterdir())
 
 
 def test_rejected_run_gets_no_receipt_but_keeps_its_saved_attempt(tmp_path, monkeypatch) -> None:

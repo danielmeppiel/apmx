@@ -1,5 +1,6 @@
 """The demo helper prepares environments; it never substitutes agent execution."""
 
+import base64
 import json
 import os
 import shlex
@@ -77,26 +78,36 @@ def test_reset_preserves_evidence_and_recreates_identical_consumers(kit: Path) -
 
 
 def recorded_package(kit: Path, run: str = "20261007T120000Z-abcdef123456") -> Path:
-    package = kit / "checkout-copilot/.apm/chains" / run / "receipt"
-    package.mkdir(parents=True)
-    definition = {"name": "definition.json", "digest": {"sha256": "d" * 64}}
-    documents = {
-        "index.json": {
-            "definition": definition,
-            "inventory": {"name": "abom.cdx.json", "digest": {"sha256": "b" * 64}},
-            "production": [{"name": "provenance/producer.intoto.json"}],
-            "checks": [{"name": "checks/check.intoto.json"}],
-        },
-        "provenance.intoto.json": {
+    directory = kit / "checkout-copilot/.apm/chains" / run
+    directory.mkdir(parents=True)
+    subject = [{"name": "src/app.py", "digest": {"sha256": "c" * 64}}]
+    statements = [
+        {
             "_type": "https://in-toto.io/Statement/v1",
             "predicateType": "https://slsa.dev/provenance/v1",
-            "predicate": {"buildDefinition": {"externalParameters": {"definition": definition}}},
-            "subject": [{"name": "code.patch", "digest": {"sha256": "c" * 64}}],
+            "predicate": {
+                "buildDefinition": {
+                    "externalParameters": {
+                        "factory": {
+                            "package": "acme/factory#v1",
+                            "commit": "e" * 40,
+                            "definition": {"sha256": "d" * 64},
+                        }
+                    }
+                }
+            },
+            "subject": subject,
         },
-        "abom.cdx.json": {"specVersion": "1.5"},
-    }
-    for name, value in documents.items():
-        (package / name).write_text(json.dumps(value))
+        {"predicateType": "https://in-toto.io/attestation/test-result/v0.1", "subject": subject},
+        {"predicateType": "https://cyclonedx.org/bom", "predicate": {"specVersion": "1.5"}},
+    ]
+    package = directory / "receipt.intoto.jsonl"
+    package.write_text(
+        "".join(
+            json.dumps({"payload": base64.b64encode(json.dumps(item).encode()).decode()}) + "\n"
+            for item in statements
+        )
+    )
     return package
 
 
@@ -109,7 +120,8 @@ def test_proof_shows_real_fields_but_does_not_claim_verification(kit, monkeypatc
         package.parent.name,
         "d" * 64,
         "c" * 64,
-        "code.patch",
+        "src/app.py",
+        "acme/factory#v1",
         "CycloneDX",
         "ABOM",
         "not yet independently verified",
@@ -178,7 +190,7 @@ def test_verification_executes_pinned_independent_consumer_offline(
         assert str(tools / script) in argv and str(package) in argv
         report = {
             "status": "passed",
-            "files": 17,
+            "outputs": 4,
             "statements": 3,
             "capabilities": 1,
             "definitionSha256": "d" * 64,
@@ -205,7 +217,7 @@ def test_verification_executes_pinned_independent_consumer_offline(
     else:
         demo.verify(kit, "copilot", None, controls=controls)
         output = capsys.readouterr().out
-        assert "Independent verification passed: 17 files" in output
+        assert "Independent verification passed: 3 statements, 4 delivered files" in output
         assert ("artifact-corruption" in output) is controls
     assert len(calls) == 1
 

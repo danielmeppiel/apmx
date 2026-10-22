@@ -1,5 +1,6 @@
 """scripts/run_stage.py: how run.yml stages a local or package factory and its check requirements."""
 
+import base64
 import hashlib
 import importlib.util
 import json
@@ -89,13 +90,54 @@ def test_requirements_must_stay_inside_the_factory(caller) -> None:
         run_stage.package_file("https://example.com/x/y#v1", "checks/requirements.txt", caller)
 
 
-def _receipt(tmp_path: Path, digest: str) -> Path:
+def _receipt(tmp_path: Path, digest: str, deleted: tuple[str, ...] = ()) -> Path:
+    """A minimal receipt of record: a bundle, its definition evidence and outputs."""
     receipt = tmp_path / "receipt"
-    receipt.mkdir(parents=True)
+    (receipt / "evidence/sha256").mkdir(parents=True)
     resource = {"relative_path": "checks/requirements.txt", "sha256": digest, "size": 1}
-    definition = {"stages": [{"resources": [resource]}, {"resources": [resource]}]}
-    (receipt / "definition.json").write_text(json.dumps(definition))
-    return receipt
+    definition = json.dumps({"stages": [{"resources": [resource]}, {"resources": [resource]}]})
+    name = hashlib.sha256(definition.encode()).hexdigest()
+    (receipt / "evidence/sha256" / name).write_text(definition)
+    (receipt / "outputs/src").mkdir(parents=True)
+    (receipt / "outputs/src/app.py").write_text("new\n")
+    base = {
+        "name": "base",
+        "digest": {"gitTree": "a" * 40},
+        "annotations": {
+            "apmx.role": "base",
+            "created": [],
+            "deleted": [{"path": path, "beforeDigest": "b" * 64} for path in deleted],
+        },
+    }
+    statement = {
+        "predicate": {
+            "buildDefinition": {
+                "externalParameters": {"factory": {"definition": {"sha256": name}}},
+                "resolvedDependencies": [base],
+            }
+        }
+    }
+    line = {"payload": base64.b64encode(json.dumps(statement).encode()).decode()}
+    (receipt / "receipt.intoto.jsonl").write_text(json.dumps(line) + "\n" + json.dumps(line) + "\n")
+    return receipt / "receipt.intoto.jsonl"
+
+
+@pytest.mark.parametrize(("delivery", "prefix"), [(".", ""), ("app", "app/")])
+def test_package_writes_a_code_only_delivery(tmp_path, delivery, prefix) -> None:
+    bundle = _receipt(tmp_path / "root/.apm/runs/x", "0" * 64, deleted=("src/old.py",))
+    (bundle.parent.parent / "receipt").rename(tmp_path / "root/.apm/runs/r")
+    values = run_stage.package(tmp_path / "root", delivery, tmp_path / "out")
+    assert values["prefix"] == prefix and set(values) == {"definition", "receipt", "prefix"}
+    delivery_tree = tmp_path / "out/delivery"
+    assert sorted(
+        p.relative_to(delivery_tree).as_posix() for p in delivery_tree.rglob("*") if p.is_file()
+    ) == [
+        ".apmx-deleted",
+        f"{prefix}src/app.py",
+    ]
+    assert (delivery_tree / ".apmx-deleted").read_text() == f"{prefix}src/old.py\n"
+    assert (tmp_path / "out/receipt/receipt.intoto.jsonl").is_file()
+    assert (tmp_path / "out/receipt/evidence/sha256").is_dir()
 
 
 def test_verify_requires_the_definition_to_record_the_installed_file(caller, tmp_path) -> None:

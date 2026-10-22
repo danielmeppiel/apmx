@@ -1,5 +1,9 @@
 """Canonical lifecycle for one captured, assessed agent leaf."""
 
+import functools
+import os
+import re
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -181,6 +185,44 @@ def _admit(plan: LeafPlan, allow_advisory: bool) -> None:
         )
 
 
+_VERSION = re.compile(r"\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?")
+
+
+@functools.lru_cache(maxsize=16)
+def _probe(executable: str, harness: str, signature: tuple[int, int]) -> str | None:
+    if harness == "replay":
+        from ..version import get_version
+
+        return get_version()
+    try:
+        completed = subprocess.run(
+            [executable, "--version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if completed.returncode != 0:
+        return None
+    text = (completed.stdout or completed.stderr)[:4096].decode("utf-8", "replace")
+    match = _VERSION.search(text)
+    return match.group(0)[:64] if match else None
+
+
+def harness_version(plan: LeafPlan) -> str | None:
+    """``<harness> --version``, probed once per executable at run start; None if unknown.
+
+    Never fails a run: the version is an informational self-report of the harness.
+    """
+    try:
+        info = os.stat(plan.executable)
+    except OSError:
+        return None
+    return _probe(str(plan.executable), plan.harness, (info.st_size, info.st_mtime_ns))
+
+
 def run_attempt(
     plan: LeafPlan,
     *,
@@ -195,6 +237,7 @@ def run_attempt(
 ) -> RunResult:
     """Admit, execute, capture, assess and atomically record one fresh run."""
     _admit(plan, allow_advisory)
+    plan = replace(plan, executable_version=harness_version(plan))
     policy = (
         records.handoff_policy(allow_unproven_inputs) if allow_unproven_inputs is not None else None
     )

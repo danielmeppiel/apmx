@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+Receipts v2: one standard in-toto bundle per run, and pull requests that carry
+code only. There are no compatibility readers: v1 receipt folders are not
+accepted by this release.
+
+### Changed
+
+- **Receipt format (breaking).** Every COMPLETE run now writes, next to its
+  record, `receipt.intoto.jsonl` (one unsigned DSSE envelope per line: a SLSA
+  Provenance v1, one in-toto Test Result v0.1 per check of the final
+  candidate, and the CycloneDX 1.5 inventory inline), `outputs/` (the delivered
+  files) and `evidence/sha256/<hex>` (content-addressed definition, inputs,
+  stage outputs, transcripts, rejected attempts and raw check reports). It
+  replaces the `receipt/` folder (`definition.json`, `index.json`,
+  `summary.md`, `abom.cdx.json`, `capability-bindings.json`, `provenance/`,
+  `checks/`, `attempts/`, `candidates/`). On the five-stage example: 232 files
+  (1.3 MB) become 1 bundle (37 KB) plus 31 evidence blobs (188 KB).
+- Every statement names the same subjects: the delivered files at their
+  project paths. For patch outputs those are the files the patches produce
+  (`src/pricing.py`), not `changes.diff`.
+- The provenance records `externalParameters.factory` (package, commit and the
+  definition digest, computed exactly as before so `factories.allow` pins keep
+  working), `internalParameters.stages[]` (contract, harness, reported harness
+  version, requested and observed models, attempts, budget, checks, outputs),
+  the base tree (and commit in CI), before-image digests of every touched file,
+  recorded deletions, inputs, capabilities and the APM manifest and lock.
+- `apmx check` replays each stage's outputs from a producer bundle and its
+  evidence. Its receipt of record carries the producer's harness and models
+  with `reportedBy: producer` and names the producer bundle's digest.
+- `run.yml` signs a SLSA Verification Summary v1 (subjects: the delivered
+  files; `verifier.id`: the signing workflow at its commit; `policy`: the
+  factory definition digest; `inputAttestations`: every bundle line;
+  `verifiedLevels: []`) and attests the bundle over the same files
+  (`.../attestation/receipt-bundle/v2`). The `apmx-delivery` artifact holds
+  code only, plus `.apmx-deleted`.
+- The attest action takes `receipt` (the bundle) and `prefix`; `checks` is gone.
+
 ### Added
 
 - Run factories from one platform repository against many repositories.
@@ -20,6 +56,21 @@
   request text into the run root. Without `target-repository` nothing
   changes. See `examples/factory-platform` (platform workflows, organization
   policy, required-workflow ruleset, App permissions) and docs/audit.md.
+- The PR gate: in a pull request, `apmx audit` looks the changed files up by
+  SHA-256 in the attestation store of `factories.signers`, requires each to be
+  a subject of one PASSED verification summary from an allowed signer, binds
+  the statements it names, checks freshness against the PR base
+  (before-images, recorded base commit) and recorded deletions. No receipt
+  file in the PR. Offline: `apmx audit receipt.intoto.jsonl --outputs DIR`.
+- `apmx audit --explain [factory|stages|checks|ingredients|outputs]` (replaces
+  `summary.md`) and `apmx audit --export abom` (the standalone CycloneDX file).
+- Runs probe `<harness> --version` once at start and record it; it never
+  fails a run.
+
+### Removed
+
+- Applying patch outputs in the PR gate (#35): patches are applied once, at
+  export, and the PR carries the resulting files.
 
 ### Security
 

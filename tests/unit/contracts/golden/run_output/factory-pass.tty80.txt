@@ -16,10 +16,11 @@ Factory  factory   2 contracts   copilot / fixture-model
 
 Outputs   factory/.apm/chains/chain-1/artifacts/
           first.json  second.json  final.json
-Receipt   factory/.apm/chains/chain-1/receipt/
+Receipt   factory/.apm/chains/chain-1/receipt.intoto.jsonl
           provenance  in-toto + SLSA v1
           checks      in-toto test-result (2)
           inventory   CycloneDX 1.5 (0 components)
+          outputs     1 delivered file in outputs/
           unsigned: binds content, not identity; review before sharing
 
-Next      apmx audit factory/.apm/chains/chain-1/receipt
+Next      apmx audit factory/.apm/chains/chain-1/receipt.intoto.jsonl

@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 from test_apmx import _package, caller
-from test_audit import _no_ambient_policy_or_pull_request, _rewrite
+from test_audit import _lines, _no_ambient_policy_or_pull_request
 
+from apmx.audit import verifier
 from apmx.cli import main
 from apmx.contracts.models import ProcessRequest
 
@@ -59,7 +60,7 @@ def produced(caller, tmp_path, monkeypatch):
 
 
 def _receipts(root: Path) -> list[Path]:
-    return [path.parent for path in (root / ".apm").glob("*/*/receipt/index.json")]
+    return list((root / ".apm").glob("*/*/receipt.intoto.jsonl"))
 
 
 def _check(*args):
@@ -67,7 +68,9 @@ def _check(*args):
 
 
 def _definition(receipt: Path) -> str:
-    return json.loads((receipt / "index.json").read_bytes())["definition"]["digest"]["sha256"]
+    parsed, failure = verifier.inspect(receipt)
+    assert failure is None, failure
+    return parsed.definition_sha256
 
 
 def test_check_replays_outputs_and_writes_the_receipt_of_record(produced) -> None:
@@ -78,52 +81,51 @@ def test_check_replays_outputs_and_writes_the_receipt_of_record(produced) -> Non
     (receipt,) = _receipts(checkout)
     assert f"[+] Checked here: receipt of record {receipt}" in result.output
     assert _definition(receipt) == _definition(producer)
-    (execution,) = list(receipt.glob("attempts/*/execution.json"))
-    record = json.loads(execution.read_bytes())
-    assert record["harness"] == "replay" and record["observedModels"] == []
-    assert record["checks"][0]["normalized"] == 0
-    (output,) = list(receipt.glob("attempts/*/artifacts/result.txt"))
+    (run,) = list((checkout / ".apm/runs").glob("*/record.json"))
+    assert json.loads(run.read_bytes())["harness"] == "replay"
+    provenance = _lines(receipt)[0]["predicate"]["buildDefinition"]
+    (stage,) = provenance["internalParameters"]["stages"]
+    (reported,) = _lines(producer)[0]["predicate"]["buildDefinition"]["internalParameters"][
+        "stages"
+    ]
+    assert stage["harness"] == reported["harness"] == "copilot"
+    assert stage["observedModels"] == reported["observedModels"]
+    assert stage["harnessVersion"] == reported["harnessVersion"]
+    assert (stage["reportedBy"], stage["checkedBy"]) == ("producer", "apmx check (replay)")
+    (dependency,) = [
+        item
+        for item in provenance["resolvedDependencies"]
+        if verifier.role(item) == "producer-receipt"
+    ]
+    assert dependency["digest"]["sha256"] == hashlib.sha256(producer.read_bytes()).hexdigest()
+    output = receipt.parent / "outputs/result.txt"
     assert output.read_bytes() == (checkout / "notes.md").read_bytes()
     audit = CliRunner().invoke(main, ["audit", str(receipt)])
     assert audit.exit_code == 0, audit.output
+    stages = CliRunner().invoke(main, ["audit", str(receipt), "--explain", "stages"])
+    assert "reported by the producer" in stages.output
 
 
 def test_check_reruns_the_checks_instead_of_trusting_the_producer(produced) -> None:
-    """A producer receipt claiming a pass for wrong bytes is rejected by the check of record."""
+    """A self-consistent producer receipt claiming a pass for wrong bytes is rejected."""
     producer, checkout = produced
-    (name,) = [
-        n
-        for n in json.loads((producer / "index.json").read_bytes())["files"]
-        if n.endswith("/artifacts/result.txt")
-    ]
-    _forge_output(producer, name, b"forged by a compromised agent job\n")
+    _forge_output(producer, b"forged by a compromised agent job\n")
+    assert verifier.inspect(producer)[1] is None
     result = _check(producer, checkout)
     assert result.exit_code != 0, result.output
     assert "REJECTED" in result.output
     assert not _receipts(checkout)
 
 
-def _forge_output(receipt: Path, name: str, raw: bytes) -> None:
-    """Rewrite an output and its statement subjects so the receipt stays self-consistent."""
+def _forge_output(bundle: Path, raw: bytes) -> None:
+    """Replace result.txt everywhere the producer bundle names it, keeping it consistent."""
     new = hashlib.sha256(raw).hexdigest()
-    _rewrite(receipt, name, raw)
-
-    def visit(node):
-        if isinstance(node, dict):
-            if node.get("name") == name and isinstance(node.get("digest"), dict):
-                node["digest"]["sha256"] = new
-            for value in node.values():
-                visit(value)
-        elif isinstance(node, list):
-            for value in node:
-                visit(value)
-
-    for path in sorted(receipt.rglob("*.intoto.json")):
-        document = json.loads(path.read_bytes())
-        before = json.dumps(document)
-        visit(document)
-        if json.dumps(document) != before:
-            _rewrite(receipt, path.relative_to(receipt).as_posix(), json.dumps(document).encode())
+    old = (bundle.parent / "outputs/result.txt").read_bytes()
+    before = hashlib.sha256(old).hexdigest()
+    (bundle.parent / "evidence/sha256" / new).write_bytes(raw)
+    statements = json.loads(json.dumps(_lines(bundle)).replace(before, new))
+    bundle.chmod(0o600)
+    bundle.write_bytes(verifier.bundle_bytes(statements))
 
 
 def test_a_different_factory_definition_withdraws_the_receipt(produced) -> None:
@@ -138,7 +140,8 @@ def test_a_different_factory_definition_withdraws_the_receipt(produced) -> None:
 
 def test_invalid_producer_receipt_is_refused(produced) -> None:
     producer, checkout = produced
-    (producer / "smuggled.txt").write_text("x")
+    producer.chmod(0o600)
+    producer.write_bytes(producer.read_bytes() + b"not json\n")
     result = _check(producer, checkout)
     assert result.exit_code == 1 and "producer receipt is invalid (Integrity" in result.output
     assert not (checkout / ".apm").exists()
@@ -186,7 +189,8 @@ def test_check_from_a_package_writes_the_receipt_of_record_in_the_workspace(pack
     (receipt,) = _receipts(workspace)
     assert f"[+] Checked here: receipt of record {receipt}" in result.output
     assert _definition(receipt) == _definition(producer)
-    assert (receipt / "attempts").is_dir()
+    stage = _lines(receipt)[0]["predicate"]["buildDefinition"]["internalParameters"]["stages"][0]
+    assert stage["reportedBy"] == "producer"
 
 
 def test_check_from_a_different_package_withdraws_the_receipt(packaged, tmp_path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import os
@@ -2388,31 +2389,30 @@ class ContractLogger:
 
     @staticmethod
     def _receipt_facts(path: Path) -> list[str]:
-        """Name only the standards whose documents the export actually wrote."""
+        """Name only the standards whose statements the bundle actually holds."""
+        kinds: list[str] = []
+        components = None
+        try:
+            raw = path.read_bytes()
+            for line in raw.splitlines()[:4096]:
+                statement = json.loads(base64.b64decode(json.loads(line)["payload"]))
+                kinds.append(str(statement.get("predicateType", "")))
+                if "cyclonedx.org/bom" in kinds[-1]:
+                    found = statement.get("predicate", {}).get("components", [])
+                    components = len(found) if isinstance(found, list) else None
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return []
         facts = []
-        try:
-            provenance = json.loads((path / "provenance.intoto.json").read_bytes())
-            kind = str(provenance.get("predicateType", ""))
-            facts.append(
-                "provenance  in-toto" + (" + SLSA v1" if "slsa.dev/provenance/v1" in kind else "")
-            )
-        except (OSError, ValueError, AttributeError):
-            pass
-        checks = (
-            sorted((path / "checks").glob("*.intoto.json")) if (path / "checks").is_dir() else []
-        )
+        if any("slsa.dev/provenance/v1" in kind for kind in kinds):
+            facts.append("provenance  in-toto + SLSA v1")
+        checks = sum(1 for kind in kinds if "attestation/test-result" in kind)
         if checks:
-            facts.append(f"checks      in-toto test-result ({len(checks)})")
-        try:
-            inventory = json.loads((path / "abom.cdx.json").read_bytes())
-            version = inventory.get("specVersion")
-            components = inventory.get("components", [])
-            text = "inventory   CycloneDX" + (f" {version}" if isinstance(version, str) else "")
-            if isinstance(components, list):
-                text += f" ({_plural(len(components), 'component')})"
+            facts.append(f"checks      in-toto test-result ({checks})")
+        if any("cyclonedx.org/bom" in kind for kind in kinds):
+            text = "inventory   CycloneDX 1.5"
+            if components is not None:
+                text += f" ({_plural(components, 'component')})"
             facts.append(text)
-        except (OSError, ValueError, AttributeError):
-            pass
         return [safe_text(item) for item in facts]
 
     @staticmethod
@@ -2421,7 +2421,7 @@ class ContractLogger:
         return importlib.util.find_spec("apmx.audit") is not None
 
     def evidence_package(self, path: Path | None) -> None:
-        """Report a delivered standards receipt without changing recorded execution."""
+        """Report a delivered receipt bundle without changing recorded execution."""
         if path is None:
             self._write(
                 "Receipt: not exported.",
@@ -2430,11 +2430,14 @@ class ContractLogger:
                 indent=0,
             )
             return
+        outputs = path.parent / "outputs"
+        count = sum(1 for item in outputs.rglob("*") if item.is_file()) if outputs.is_dir() else 0
         self._labelled(
             "Receipt",
             [
-                self._directory(path),
+                self._path(path),
                 *self._receipt_facts(path),
+                f"outputs     {_plural(count, 'delivered file')} in outputs/",
                 "unsigned: binds content, not identity; review before sharing",
             ],
             prose=True,
@@ -2442,19 +2445,12 @@ class ContractLogger:
         self._display.gap()
         if self._audit_available():
             self._labelled("Next", [f"apmx audit {shlex.quote(self._path(path))}"])
-        elif (path / "summary.md").is_file():
-            self._labelled("Next", [f"read {self._path(path / 'summary.md')}"])
         for label, name in (
-            ("Summary", "summary.md"),
-            ("Factory definition", "definition.json"),
-            ("Production (in-toto / SLSA v1)", "provenance.intoto.json"),
-            ("Dependency ABOM (CycloneDX 1.5)", "abom.cdx.json"),
-            ("Check results (in-toto)", "checks"),
-            ("SHA-256 file index", "index.json"),
+            ("Receipt bundle (in-toto JSON Lines)", path),
+            ("Delivered files", outputs),
+            ("Content-addressed blobs", path.parent / "evidence"),
         ):
-            self._write(
-                f"{label}: {self._path(path / name)}", severity="detail", detail=True, indent=0
-            )
+            self._write(f"{label}: {self._path(name)}", severity="detail", detail=True, indent=0)
 
     def evidence_delivery_failed(self, reason: str) -> None:
         """A failed export cannot relabel an already finalized COMPLETE record."""

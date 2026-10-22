@@ -1,7 +1,9 @@
 """Thin wrapper over the single receipt verifier owned by ``src/apmx/audit/verifier.py``.
 
-The verifier is loaded by file path, never as part of the ``apmx`` package, so
-this script still validates a receipt without importing APMX. A copy placed
+It validates a ``receipt.intoto.jsonl`` bundle (or the run directory holding it,
+with its optional ``evidence/``). The verifier is loaded by file path, never as
+part of the ``apmx`` package, so this script validates a receipt without
+importing APMX. A copy placed
 next to this script as ``receipt_verifier.py`` (as the demo kit does) wins
 over the source checkout. ``apmx audit`` uses the same module.
 """

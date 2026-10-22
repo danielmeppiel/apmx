@@ -22,13 +22,14 @@ Factory  factory   2 contracts   copilot / fixture-model
 
 Outputs   factory/.apm/chains/<id>/artifacts/
           first.json  second.json  final.json
-Receipt   factory/.apm/chains/<id>/receipt/
+Receipt   factory/.apm/chains/<id>/receipt.intoto.jsonl
           provenance  in-toto + SLSA v1
           checks      in-toto test-result (2)
           inventory   CycloneDX 1.5 (0 components)
+          outputs     3 delivered files in outputs/
           unsigned: binds content, not identity; review before sharing
 
-Next      apmx audit factory/.apm/chains/<id>/receipt
+Next      apmx audit factory/.apm/chains/<id>/receipt.intoto.jsonl
 ```
 
 When checks reject an output, the block shows every attempt, a short excerpt
@@ -195,9 +196,10 @@ the normal diagnostic path. Neither stream can decide a run or check outcome.
 spending cap. `attempt 1/3` does not imply a retry happened. `--verbose` adds
 the full bound (`Attempts: up to 3 ... 600s total`) and `Accepted on attempt 1`.
 
-After automatic delivery, `Receipt` names the actual `receipt/` directory and the
-standards documents it contains; `--verbose` adds each file, including the
-factory definition and the SHA-256 file index. Hashes bind the recorded bytes;
+After automatic delivery, `Receipt` names the actual `receipt.intoto.jsonl`
+bundle, the standards statements it contains and the delivered files in
+`outputs/`; `--verbose` adds the bundle, `outputs/` and the content-addressed
+`evidence/` paths. Hashes bind the recorded bytes;
 the receipt is unsigned and does not authenticate the builder. See
 [evidence verification](evidence.md) and the [live demo](demo.md).
 

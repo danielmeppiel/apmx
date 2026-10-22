@@ -1,5 +1,6 @@
 """`apmx audit`: row-by-row receipt verification with APM-owned ingredient trust."""
 
+import base64
 import hashlib
 import json
 import os
@@ -52,6 +53,21 @@ def plain_receipt(tmp_path, monkeypatch) -> Path:
     return evidence.export_package(result.run_directory / "record.json", tmp_path / "receipt")
 
 
+def _lines(bundle: Path) -> list[dict]:
+    return [
+        json.loads(base64.b64decode(json.loads(line)["payload"]))
+        for line in bundle.read_bytes().splitlines()
+    ]
+
+
+def _edit_line(bundle: Path, index: int, change) -> None:
+    """Change one statement and re-encode it canonically, so only semantics can fail."""
+    statements = _lines(bundle)
+    change(statements[index])
+    bundle.chmod(0o600)
+    bundle.write_bytes(verifier.bundle_bytes(statements))
+
+
 @pytest.fixture
 def deps_receipt(caller, tmp_path, producer) -> Path:
     """A real COMPLETE run that imported a local-path skill through the pinned APM."""
@@ -63,37 +79,12 @@ def deps_receipt(caller, tmp_path, producer) -> Path:
     )
     result = CliRunner().invoke(main, ["job.contract.md", "--on", "copilot", "--allow-host-access"])
     assert result.exit_code == Outcome.COMPLETE, result.output
-    (receipt,) = list((caller / ".apm/runs").glob("*/receipt"))
+    (receipt,) = list((caller / ".apm/runs").glob("*/receipt.intoto.jsonl"))
     return receipt
 
 
 def _audit(*args: str):
     return CliRunner().invoke(main, ["audit", *map(str, args)])
-
-
-def _rewrite(receipt: Path, name: str, raw: bytes) -> None:
-    """Change one file and refresh every declared hash, so only semantics can fail."""
-    path = receipt / name
-    path.chmod(0o600)
-    path.write_bytes(raw)
-    index = json.loads((receipt / "index.json").read_bytes())
-    digest = hashlib.sha256(raw).hexdigest()
-    index["files"][name] = {"sha256": digest, "size": len(raw)}
-    for group in ("production", "checks"):
-        for item in index[group]:
-            if item["name"] == name:
-                item["digest"]["sha256"] = digest
-    for key in ("definition", "inventory"):
-        if index[key]["name"] == name:
-            index[key]["digest"]["sha256"] = digest
-    (receipt / "index.json").chmod(0o600)
-    (receipt / "index.json").write_text(json.dumps(index))
-
-
-def _edit_json(receipt: Path, name: str, change) -> None:
-    data = json.loads((receipt / name).read_bytes())
-    change(data)
-    _rewrite(receipt, name, json.dumps(data).encode())
 
 
 def _rows(output: str) -> dict[str, str]:
@@ -115,8 +106,9 @@ def test_dependency_free_receipt_is_valid_offline_and_launches_nothing(
     assert result.exit_code == 0, result.output
     rows = _rows(result.output)
     assert list(rows) == list(command.DISPLAY)
-    assert rows["Integrity"].startswith("[+] Integrity") and "match index.json" in rows["Integrity"]
-    assert "in-toto Statement v1, SLSA Provenance v1, CycloneDX 1.5" in rows["Standards"]
+    assert rows["Integrity"].startswith("[+] Integrity") and "3 statements" in rows["Integrity"]
+    assert "evidence" in rows["Integrity"]
+    assert "in-toto Statement v1, SLSA Provenance v1, in-toto Test Result" in rows["Standards"]
     assert "1 contract, 1 check" in rows["Factory"]
     assert "1/1 passed (in-toto test-result)" in rows["Checks"]
     assert rows["Ingredients"].startswith("[+]") and "0 APM dependencies" in rows["Ingredients"]
@@ -195,7 +187,12 @@ def test_no_policy_audit_reports_only_baseline_checks(deps_receipt, tmp_path) ->
     """A new no-policy check name would otherwise be mistaken for an enforced policy."""
     from apmx.audit.ingredients import _BASELINE_CHECKS
 
-    (source,) = list(deps_receipt.glob("attempts/*/source"))
+    receipt, failure = verifier.inspect(deps_receipt)
+    assert failure is None, failure
+    source = tmp_path / "source"
+    source.mkdir()
+    for name, raw in receipt.apm_files.items():
+        (source / name).write_bytes(raw)
     manifest = source / "imports-apm.yml"
     manifest = manifest if manifest.is_file() else source / "apm.yml"
     executable = str(apm_backend.locate_backend())
@@ -276,88 +273,160 @@ def test_policy_and_offline_are_exclusive(plain_receipt) -> None:
     assert "--offline can only read a local --policy file" in result.output
 
 
-def test_tampered_output_fails_integrity(plain_receipt) -> None:
-    (artifact,) = list(plain_receipt.glob("attempts/*/artifacts/result.txt"))
-    artifact.chmod(0o600)
-    artifact.write_bytes(b"forged\n")
+def test_tampered_evidence_fails_integrity(plain_receipt) -> None:
+    blob = next((plain_receipt.parent / "evidence/sha256").iterdir())
+    blob.chmod(0o600)
+    blob.write_bytes(b"forged\n")
     result = _audit(plain_receipt)
     assert result.exit_code == 1
-    assert "[x] Integrity     File hash mismatch: attempts/" in result.output
+    assert "[x] Integrity     Evidence blob" in result.output
     assert "[i] Standards     not evaluated (earlier failure)" in result.output
     assert "[i] Ingredients   not evaluated (receipt invalid; APM not launched)" in result.output
-    assert "[x] INVALID   Integrity: File hash mismatch" in result.output
+    assert "[x] INVALID   Integrity: Evidence blob" in result.output
 
 
-def test_tampered_index_fails_integrity(plain_receipt) -> None:
-    index = json.loads((plain_receipt / "index.json").read_bytes())
-    index["files"]["summary.md"]["sha256"] = "0" * 64
-    (plain_receipt / "index.json").chmod(0o600)
-    (plain_receipt / "index.json").write_text(json.dumps(index))
+def test_evidence_is_optional(plain_receipt) -> None:
+    import shutil as _shutil
+
+    _shutil.rmtree(plain_receipt.parent / "evidence")
+    result = _audit(plain_receipt, "--format", "json")
+    report = json.loads(result.output)
+    assert report["result"] == "valid", result.output
+    assert report["facts"]["evidence"] == "absent"
+
+
+def test_noncanonical_line_fails_integrity(plain_receipt) -> None:
+    raw = plain_receipt.read_bytes().splitlines()
+    envelope = json.loads(raw[0])
+    raw[0] = json.dumps(envelope, indent=1).replace("\n", "").encode()
+    plain_receipt.chmod(0o600)
+    plain_receipt.write_bytes(b"\n".join(raw) + b"\n")
     result = _audit(plain_receipt)
     assert result.exit_code == 1
-    assert "File hash mismatch: summary.md" in result.output
-
-
-def test_unindexed_file_fails_integrity(plain_receipt) -> None:
-    (plain_receipt / "extra.txt").write_text("smuggled")
-    result = _audit(plain_receipt)
-    assert result.exit_code == 1
-    assert "Unindexed or missing files." in result.output
+    assert "not canonical bundle JSON" in result.output
 
 
 @pytest.mark.parametrize(
-    ("name", "change", "row", "reason"),
+    ("index", "change", "row", "reason"),
     [
         (
-            "provenance.intoto.json",
+            0,
             lambda data: data.update(_type="https://example.invalid/Statement"),
-            "Standards",
-            "Wrong statement type",
-        ),
-        (
-            "provenance.intoto.json",
-            lambda data: data.update(subject=[]),
             "Standards",
             "",
         ),
+        (0, lambda data: data.update(subject=[]), "Standards", ""),
         (
-            "abom.cdx.json",
-            lambda data: data.update(components=[{"name": "no-type"}]),
+            0,
+            lambda data: data["predicate"]["buildDefinition"].update(buildType="x"),
+            "Factory",
+            "Unsupported build type.",
+        ),
+        (
+            0,
+            lambda data: data["predicate"]["buildDefinition"]["internalParameters"]["stages"][0][
+                "checks"
+            ].append({"name": "invented", "command": "true"}),
+            "Factory",
+            "Recorded checks differ from the definition.",
+        ),
+        (
+            0,
+            lambda data: data["subject"][0]["digest"].update(sha256="0" * 64),
+            "Outputs",
+            "A Test Result names different subjects.",
+        ),
+        (
+            1,
+            lambda data: data["predicate"].update(result="FAILED"),
+            "Checks",
+            "Check acceptance of the final candidate did not pass (FAILED).",
+        ),
+        (
+            1,
+            lambda data: data["predicate"]["configuration"][0]["annotations"].update(
+                check="renamed"
+            ),
+            "Checks",
+            "Checker invocation omitted or invented",
+        ),
+        (
+            1,
+            lambda data: data["subject"][0].update(name="elsewhere.txt"),
+            "Outputs",
+            "A Test Result names different subjects.",
+        ),
+        (
+            2,
+            lambda data: data["predicate"].update(components=[{"name": "no-type"}]),
             "Standards",
             "CycloneDX 1.5 schema violation",
         ),
         (
-            "provenance.intoto.json",
-            lambda data: data["predicate"]["buildDefinition"].update(buildType="x"),
-            "Factory",
-            "Unsupported build-type mapping.",
+            2,
+            lambda data: data["subject"][0]["digest"].update(sha256="1" * 64),
+            "Outputs",
+            "The CycloneDX statement names different subjects.",
         ),
     ],
 )
-def test_semantically_invalid_documents_name_their_row(
-    plain_receipt, name, change, row, reason
-) -> None:
-    _edit_json(plain_receipt, name, change)
+def test_tampering_each_line_kind_names_its_row(plain_receipt, index, change, row, reason) -> None:
+    _edit_line(plain_receipt, index, change)
     result = _audit(plain_receipt)
     assert result.exit_code == 1, result.output
     assert f"[x] {row}" in result.output
     assert f"[x] INVALID   {row}: {reason}" in result.output
 
 
-def test_failed_check_statement_cannot_be_presented_as_complete(plain_receipt) -> None:
-    (check,) = [
-        p.relative_to(plain_receipt).as_posix() for p in plain_receipt.glob("checks/*.intoto.json")
-    ]
-    _edit_json(plain_receipt, check, lambda data: data["predicate"].update(result="FAILED"))
-    result = _audit(plain_receipt)
-    assert result.exit_code == 1
-    assert "[x] Checks" in result.output
+def test_verification_summary_must_bind_every_other_line(plain_receipt) -> None:
+    statements = _lines(plain_receipt)
+    subjects = statements[0]["subject"]
+    digest = statements[0]["predicate"]["buildDefinition"]["externalParameters"]["factory"][
+        "definition"
+    ]["sha256"]
+
+    def summary(lines: list[str]) -> dict:
+        return verifier.statement(
+            subjects,
+            verifier.VSA,
+            {
+                "verifier": {"id": "https://github.com/acme/platform/.github/workflows/run.yml@x"},
+                "timeVerified": "2026-10-21T18:52:30Z",
+                "resourceUri": "git+https://github.com/acme/shop@" + "a" * 40,
+                "policy": {"uri": f"apmx:factory/{digest}", "digest": {"sha256": digest}},
+                "inputAttestations": [
+                    {"uri": f"receipt.intoto.jsonl#{n}", "digest": {"sha256": value}}
+                    for n, value in enumerate(lines, 1)
+                ],
+                "verificationResult": "PASSED",
+                "verifiedLevels": [],
+            },
+        )
+
+    digests = [verifier.line_digest(item) for item in statements]
+    plain_receipt.chmod(0o600)
+    plain_receipt.write_bytes(verifier.bundle_bytes([*statements, summary(digests)]))
+    report = json.loads(_audit(plain_receipt, "--format", "json").output)
+    assert report["result"] == "valid", report
+    plain_receipt.write_bytes(verifier.bundle_bytes([*statements, summary(digests[:-1])]))
+    report = json.loads(_audit(plain_receipt, "--format", "json").output)
+    assert report["reason"].startswith("Integrity: The verification summary's inputAttestations")
+    for field, value, reason in (
+        ("verifiedLevels", "SLSA_BUILD_LEVEL_3", "verifiedLevels must be a list"),
+        ("timeVerified", "yesterday", "invalid timeVerified"),
+        ("verificationResult", "OK", "invalid verificationResult"),
+    ):
+        bad = summary(digests)
+        bad["predicate"][field] = value
+        plain_receipt.write_bytes(verifier.bundle_bytes([*statements, bad]))
+        report = json.loads(_audit(plain_receipt, "--format", "json").output)
+        assert report["reason"].startswith("Standards:") and reason in report["reason"], report
 
 
 def test_outputs_are_rehashed_only_when_requested(plain_receipt, tmp_path) -> None:
     delivered = tmp_path / "pr-checkout"
     delivered.mkdir()
-    (artifact,) = list(plain_receipt.glob("attempts/*/artifacts/result.txt"))
+    artifact = plain_receipt.parent / "outputs/result.txt"
     (delivered / "result.txt").write_bytes(artifact.read_bytes())
     result = _audit(plain_receipt, "--outputs", delivered)
     assert result.exit_code == 0, result.output
@@ -389,10 +458,13 @@ def test_json_format_is_machine_readable(plain_receipt) -> None:
     }
     assert report["facts"]["outputs"] == ["result.txt"]
     assert report["facts"]["apmDependencies"] == 0
-    (plain_receipt / "extra.txt").write_text("smuggled")
+    assert report["facts"]["stages"][0]["harness"] == "copilot"
+    _edit_line(plain_receipt, 1, lambda data: data["predicate"].update(result="FAILED"))
     report = json.loads(_audit(plain_receipt, "--format", "json").output)
     assert (report["result"], report["exitCode"]) == ("invalid", 1)
-    assert report["reason"] == "Integrity: Unindexed or missing files."
+    assert report["reason"].startswith(
+        "Checks: Check acceptance of the final candidate did not pass"
+    )
 
 
 def test_missing_receipt_is_a_usage_error(tmp_path) -> None:
@@ -422,10 +494,10 @@ def test_audit_is_reserved_but_dot_audit_runs_a_directory(tmp_path, monkeypatch)
     assert reserved.exit_code == 2
     assert "'audit' is reserved" in reserved.output and "./audit" in reserved.output
     routed = CliRunner().invoke(main, ["audit"])
-    assert routed.exit_code == 2 and "RECEIPT_DIR" in routed.output
-    assert "apmx audit RECEIPT_DIR" in CliRunner().invoke(main, ["--help"]).output
+    assert routed.exit_code == 2 and "RECEIPT" in routed.output
+    assert "apmx audit RECEIPT" in CliRunner().invoke(main, ["--help"]).output
     help_text = CliRunner().invoke(main, ["audit", "--help"]).output
-    for option in ("--outputs", "--policy", "--offline", "--format"):
+    for option in ("--outputs", "--policy", "--offline", "--format", "--explain", "--export"):
         assert option in help_text
 
 
@@ -474,3 +546,34 @@ def test_bundled_schemas_are_the_pinned_upstream_bytes() -> None:
         raw = (verifier.BUNDLED_SCHEMAS / name).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == expected
     assert (verifier.BUNDLED_SCHEMAS / "LICENSE-CycloneDX.txt").is_file()
+
+
+def test_explain_replaces_the_summary(plain_receipt) -> None:
+    result = _audit(plain_receipt, "--explain")
+    assert result.exit_code == 0, result.output
+    for heading in ("Factory", "Stages", "Checks", "Ingredients", "Outputs"):
+        assert f"\n{heading}\n" in f"\n{result.output}"
+    assert "copilot" in result.output and "result.txt" in result.output
+    stages = _audit(plain_receipt, "--explain", "stages")
+    assert stages.exit_code == 0 and stages.output.startswith("Stages\n")
+    assert "Checks" not in stages.output
+    assert result.output.isascii()
+
+
+def test_explain_refuses_an_invalid_receipt(plain_receipt) -> None:
+    _edit_line(plain_receipt, 1, lambda data: data["predicate"].update(result="FAILED"))
+    result = _audit(plain_receipt, "--explain", "factory")
+    assert result.exit_code == 1 and "Checks:" in result.output
+
+
+def test_export_abom_writes_the_standalone_cyclonedx(plain_receipt, tmp_path) -> None:
+    target = tmp_path / "abom.cdx.json"
+    result = _audit(plain_receipt, "--export", "abom", "-o", target)
+    assert result.exit_code == 0, result.output
+    bom = json.loads(target.read_bytes())
+    assert (bom["bomFormat"], bom["specVersion"]) == ("CycloneDX", "1.5")
+    verifier.schema_validator().validate(bom)
+    again = _audit(plain_receipt, "--export", "abom", "-o", target)
+    assert again.exit_code == 2 and "refusing to overwrite" in again.output
+    stdout = _audit(plain_receipt, "--export", "abom")
+    assert json.loads(stdout.output) == bom

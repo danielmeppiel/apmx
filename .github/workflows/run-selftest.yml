@@ -2,9 +2,11 @@ name: run.yml self-test
 
 # Drives .github/workflows/run.yml end to end on apmx's own CI with the
 # hermetic protocol actor (scripts/fixtures/copilot_actor.py): no model calls.
-# On pushes and same-repository pull requests the attest job signs the
-# receipt with this repository's OIDC identity, and the verify job checks
-# that signature with `apmx audit` against a policy that requires it.
+# On pushes and same-repository pull requests the attest jobs sign the
+# receipt's statements and a SLSA VSA with this repository's OIDC identity.
+# The verify job then proves the gate end to end: it commits the code-only
+# delivery onto this checkout as a pull request would, and `apmx audit`, with
+# no receipt file, finds and verifies everything by the changed file's digest.
 on:
   pull_request:
   push:
@@ -43,7 +45,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # The commit the factory ran against (for a pull request, its merge
+          # commit): the simulated PR below is built on it, like a real one.
+          ref: ${{ github.sha }}
           path: apmx
           persist-credentials: false
       - uses: ./apmx/.github/actions/setup-from-source
@@ -51,53 +55,91 @@ jobs:
           path: apmx
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          name: apmx-receipt
+          path: receipt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
           name: apmx-delivery
           path: delivery
-      - name: The receipt of record is VALID and binds the delivered outputs
+      - name: The receipt of record is VALID offline and binds the delivered files
         run: |
-          receipt=$(ls -d delivery/"$FACTORY"/.apm/*/*/receipt)
-          echo "RECEIPT=$PWD/$receipt" >> "$GITHUB_ENV"
           env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH \
-            apmx audit "$receipt" --offline --outputs "delivery/$FACTORY" --format json > audit.json
+            apmx audit receipt/receipt.intoto.jsonl --offline --outputs receipt/outputs \
+            --format json > audit.json
           python3 - <<'PY'
           import json
           report = json.load(open("audit.json"))
           rows = {row["name"]: row for row in report["rows"]}
           assert report["result"] == "valid", report
+          assert report["facts"]["evidence"] == "complete", report["facts"]
           assert rows["Outputs"]["detail"].startswith("1/1 delivered files match"), rows["Outputs"]
-          print("[+] receipt of record VALID; outputs re-hashed")
+          (stage,) = report["facts"]["stages"]
+          assert stage["harness"] == "copilot" and stage["reportedBy"] == "producer", stage
+          assert stage["checkedBy"] == "apmx check (replay)", stage
+          print("[+] receipt of record VALID; outputs re-hashed; harness reported by the producer")
           PY
-          grep -h '"harness"' delivery/"$FACTORY"/.apm/*/*/receipt/attempts/*/execution.json \
-            | grep -q '"replay"'
-      - name: Signed by this repository's run.yml (live GitHub artifact attestation)
-        if: needs.factory.outputs.receipt-sha256 != ''
+          test -f "delivery/$FACTORY/handoff.json"
+          test ! -s delivery/.apmx-deleted
+          test -z "$(find delivery -path '*/.apm/*' -print -quit)"
+      - name: A code-only PR is accepted from the attestation store (live)
+        if: needs.factory.outputs.attestation-url != ''
         env:
           GH_TOKEN: ${{ github.token }}
           DEFINITION: ${{ needs.factory.outputs.definition-sha256 }}
         run: |
-          mkdir consumer && cd consumer
-          cat > apm-policy.yml <<EOF
+          cd apmx
+          git config user.name apmx-selftest
+          git config user.email apmx-selftest@users.noreply.github.com
+          base=$(git rev-parse HEAD)
+          git switch -q -c selftest-delivery
+          rsync -a --exclude .apmx-deleted ../delivery/ ./
+          git add -A && git commit -qm "factory delivery (code only)"
+          head=$(git rev-parse HEAD)
+          git --no-pager show --stat --format=%s HEAD
+          printf '{"pull_request":{"number":1,"base":{"sha":"%s"},"head":{"sha":"%s"}}}' \
+            "$base" "$head" > "$RUNNER_TEMP/event.json"
+          cat > "$RUNNER_TEMP/policy.yml" <<EOF
           factories:
             allow: ["sha256:$DEFINITION"]
             require_signed: true
             signers:
               - workflow: ${GITHUB_REPOSITORY}/.github/workflows/run.yml
           EOF
-          env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH apmx audit "$RECEIPT" | tee audit.txt
-          grep -q "^\[+\] Identity      signed by ${GITHUB_REPOSITORY}/.github/workflows/run.yml@" audit.txt
-          grep -q "^\[+\] VALID   (authenticated: " audit.txt
-      - name: Unsigned or unknown signers are rejected
-        if: needs.factory.outputs.receipt-sha256 != ''
+          GITHUB_EVENT_NAME=pull_request GITHUB_EVENT_PATH="$RUNNER_TEMP/event.json" \
+            apmx audit --policy "$RUNNER_TEMP/policy.yml" | tee "$RUNNER_TEMP/gate.txt"
+          grep -q "^\[+\] Identity      signed by ${GITHUB_REPOSITORY}/.github/workflows/run.yml@" "$RUNNER_TEMP/gate.txt"
+          grep -q "^\[+\] Outputs       PR #1: 1 changed file = delivered files at head" "$RUNNER_TEMP/gate.txt"
+          grep -q "^\[+\] VALID   (authenticated: " "$RUNNER_TEMP/gate.txt"
+          echo "BASE=$base" >> "$GITHUB_ENV"
+      - name: Edited bytes, unknown signers and missing summaries are rejected (live)
+        if: needs.factory.outputs.attestation-url != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir other && cd other
+          cd apmx
+          expect() {
+            set +e
+            GITHUB_EVENT_NAME=pull_request GITHUB_EVENT_PATH="$RUNNER_TEMP/event.json" \
+              apmx audit --policy "$1" > "$RUNNER_TEMP/out.txt"
+            code=$?
+            set -e
+            cat "$RUNNER_TEMP/out.txt"
+            test "$code" = 1
+            grep -q "$2" "$RUNNER_TEMP/out.txt"
+          }
+          event() {
+            printf '{"pull_request":{"number":1,"base":{"sha":"%s"},"head":{"sha":"%s"}}}' \
+              "$BASE" "$(git rev-parse HEAD)" > "$RUNNER_TEMP/event.json"
+          }
           printf 'factories:\n  require_signed: true\n  signers:\n    - workflow: %s\n' \
-            "${GITHUB_REPOSITORY}/.github/workflows/not-the-signer.yml" > apm-policy.yml
-          set +e
-          env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH apmx audit "$RECEIPT" > audit.txt
-          code=$?
-          set -e
-          cat audit.txt
-          test "$code" = 1
-          grep -q "^\[x\] Identity      unsigned: no attestation from factories.signers" audit.txt
+            "${GITHUB_REPOSITORY}/.github/workflows/not-the-signer.yml" > "$RUNNER_TEMP/other.yml"
+          expect "$RUNNER_TEMP/other.yml" "^\[x\] Identity      no PASSED verification summary"
+          printf ' ' >> "$FACTORY/handoff.json"
+          git commit -qam "edit the delivered file"
+          event
+          expect "$RUNNER_TEMP/policy.yml" "^\[x\] Identity      no PASSED verification summary"
+          git reset -q --hard HEAD~1
+          echo "smuggled" > "$FACTORY/smuggled.txt"
+          git add -A && git commit -qm "smuggle a file"
+          event
+          expect "$RUNNER_TEMP/policy.yml" "^\[x\] Identity      no PASSED verification summary"

@@ -2,31 +2,37 @@
 
 The CI producer boundary. An agent runs as the runner user, so it could
 rewrite its own job's check scripts or results. ``apmx check`` therefore takes
-only the **output bytes** from the producer's receipt (untrusted data, keyed by
+only the **output bytes** from the producer's receipt (untrusted data: each
+stage's outputs, by digest, from the producer's ``evidence/``, keyed by
 contract digest) and runs the factory from *this* checkout: each contract's
 outputs are replayed into a fresh workspace, the factory's own checks run on
 them, and a new receipt of record is written. The producer's checks, record
-and claims are never reused.
+and claims are never reused. Only the harness, its version and the models the
+producer reported are carried into the receipt of record, labelled
+``reportedBy: producer``, with the producer bundle's digest as an input.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import click
 
 from apmx.audit import verifier
+from apmx.contracts.evidence import ENV_PRODUCER
 from apmx.runtime.replay import ENV_BUNDLE
 
 CHECK_HELP = (
     "Re-check a producer's outputs on this machine and write the receipt of record.\n\n"
-    "PRODUCER_RECEIPT is the receipt of a run made elsewhere, for example by an agent job in "
-    "CI. Only its output bytes are used, matched to contracts by SHA-256; its checks, records "
-    "and claims are ignored. FACTORY (default: the current directory) is run from this "
+    "PRODUCER_RECEIPT is the receipt.intoto.jsonl (or its run directory, with evidence/) of a "
+    "run made elsewhere, for example by an agent job in CI. Only its output bytes are used, "
+    "matched to contracts by SHA-256; its checks, records and claims are ignored, except the "
+    "harness and models it reports, which are recorded as reported by the producer. FACTORY (default: the current directory) is run from this "
     "checkout with the replay producer: no agent runs, the factory's own checks run on the "
     "replayed outputs, and a new receipt is written under FACTORY/.apm/. The new receipt "
     "must have the same factory definition digest as the producer's.\n\n"
@@ -45,41 +51,66 @@ class CheckError(click.ClickException):
     exit_code = 1
 
 
-def extract_outputs(receipt: Path, destination: Path) -> tuple[str, int]:
-    """Write each selected attempt's artifacts to ``destination/<contract sha256>/``."""
-    parsed, failure = verifier.inspect(receipt)
+def extract_outputs(receipt: Path, destination: Path) -> tuple[str, int, dict]:
+    """Write each stage's outputs to ``destination/<contract sha256>/``.
+
+    Returns the definition digest, the file count and the producer's stage record.
+    """
+    bundle = receipt / verifier.BUNDLE if receipt.is_dir() else receipt
+    parsed, failure = verifier.inspect(bundle)
     if failure is not None:
         raise CheckError(f"The producer receipt is invalid ({failure.row}: {failure}).")
     count = 0
     seen: set[str] = set()
-    for attempt in parsed.index["attempts"]:
-        if not attempt["selected"]:
-            continue
-        run_id = attempt["runId"]
-        statement = parsed.statements[f"provenance/{run_id}.intoto.json"]
-        digest = statement["predicate"]["buildDefinition"]["externalParameters"]["contractSha256"]
+    for stage in parsed.stages:
+        digest = stage["contractSha256"]
         if digest in seen:
             raise CheckError(
                 f"The producer receipt has two runs of contract sha256:{digest[:12]}.."
             )
         seen.add(digest)
-        prefix = f"attempts/{run_id}/artifacts/"
-        for name in parsed.index["files"]:
-            if name.startswith(prefix):
-                target = destination / digest / name[len(prefix) :]
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(verifier.read(parsed.root, name))
-                count += 1
-    return parsed.index["definition"]["digest"]["sha256"], count
+        for item in stage["outputs"]:
+            raw = parsed.blob(item["digest"]["sha256"])
+            if raw is None:
+                raise CheckError(
+                    f"The producer receipt's evidence/ lacks output {item['name']} of stage "
+                    f"{stage['contract']}; copy the run directory with its evidence."
+                )
+            target = destination / digest
+            for part in PurePosixPath(item["name"]).parts:
+                target = target / part
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+            count += 1
+    producer = {
+        "receiptSha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
+        "stages": [
+            {
+                key: stage.get(key)
+                for key in (
+                    "contractSha256",
+                    "harness",
+                    "harnessVersion",
+                    "requestedModel",
+                    "observedModels",
+                )
+            }
+            for stage in parsed.stages
+        ],
+    }
+    return parsed.definition_sha256, count, producer
+
+
+def _receipts(root: Path) -> set[Path]:
+    return {
+        path
+        for kind in ("runs", "chains", "controllers")
+        for path in (root / ".apm" / kind).glob(f"*/{verifier.BUNDLE}")
+    }
 
 
 def _newest_receipt(root: Path, before: set[Path]) -> Path | None:
-    found = {
-        path.parent
-        for kind in ("runs", "chains", "controllers")
-        for path in (root / ".apm" / kind).glob("*/receipt/index.json")
-    }
-    created = sorted(found - before, key=lambda path: path.parent.name)
+    created = sorted(_receipts(root) - before, key=lambda path: path.parent.name)
     return created[-1] if created else None
 
 
@@ -98,8 +129,9 @@ def _newest_receipt(root: Path, before: set[Path]) -> Path | None:
 def check_command(producer: Path, factory: str, package_ref: str | None, verbose: bool) -> None:
     from apmx.cli import main as run
 
-    if not (producer / "index.json").is_file():
-        raise click.UsageError(f"No receipt at {producer}: expected a directory with index.json.")
+    bundle = producer / verifier.BUNDLE if producer.is_dir() else producer
+    if not bundle.is_file():
+        raise click.UsageError(f"No receipt at {producer}: expected {verifier.BUNDLE}.")
     if package_ref is not None:
         root = Path.cwd().absolute()
         selection = ([] if factory == "." else [factory]) + ["--from", package_ref]
@@ -110,21 +142,20 @@ def check_command(producer: Path, factory: str, package_ref: str | None, verbose
                 "FACTORY must be a local factory directory; use --from PACKAGE_REF for a package."
             )
         selection = [factory if factory != "." else "./"]
-    before = {
-        path.parent
-        for kind in ("runs", "chains", "controllers")
-        for path in (root / ".apm" / kind).glob("*/receipt/index.json")
-    }
+    before = _receipts(root)
     with tempfile.TemporaryDirectory(prefix="apmx-check-") as temporary:
-        bundle = Path(temporary) / "outputs"
-        bundle.mkdir()
-        definition, count = extract_outputs(producer, bundle)
+        replayed = Path(temporary) / "outputs"
+        replayed.mkdir()
+        definition, count, reported = extract_outputs(producer, replayed)
+        record = Path(temporary) / "producer.json"
+        record.write_text(json.dumps(reported, sort_keys=True), encoding="ascii")
         click.echo(
             f"[i] Replaying {count} recorded output file{'s' if count != 1 else ''} from "
             f"{producer} (definition sha256:{definition[:12]}..); no agent runs here."
         )
-        previous = os.environ.get(ENV_BUNDLE)
-        os.environ[ENV_BUNDLE] = str(bundle)
+        previous = {name: os.environ.get(name) for name in (ENV_BUNDLE, ENV_PRODUCER)}
+        os.environ[ENV_BUNDLE] = str(replayed)
+        os.environ[ENV_PRODUCER] = str(record)
         try:
             arguments = [*selection, "--on", "replay"]
             # Handoffs between contracts are checked by this run before they are used.
@@ -132,20 +163,23 @@ def check_command(producer: Path, factory: str, package_ref: str | None, verbose
             arguments += ["--verbose"] if verbose else []
             code = run.main(arguments, prog_name="apmx", standalone_mode=False)
         finally:
-            if previous is None:
-                os.environ.pop(ENV_BUNDLE, None)
-            else:
-                os.environ[ENV_BUNDLE] = previous
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
     code = int(code or 0)
     if code != 0:
         raise SystemExit(code)
     receipt = _newest_receipt(root, before)
     if receipt is None:
         raise CheckError("The check run completed but delivered no receipt.")
-    index = json.loads((receipt / "index.json").read_bytes())
-    actual = index["definition"]["digest"]["sha256"]
+    parsed, failure = verifier.inspect(receipt)
+    actual = parsed.definition_sha256 if failure is None else "unverifiable"
     if actual != definition:
-        shutil.rmtree(receipt)
+        receipt.unlink()
+        for name in (verifier.OUTPUTS, verifier.EVIDENCE):
+            shutil.rmtree(receipt.parent / name, ignore_errors=True)
         raise CheckError(
             f"This checkout's factory definition sha256:{actual[:12]}.. differs from the "
             f"producer's sha256:{definition[:12]}..; the receipt was withdrawn. Check out the "

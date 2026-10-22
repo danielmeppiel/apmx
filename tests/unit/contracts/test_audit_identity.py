@@ -1,15 +1,16 @@
-"""Identity row: receipts signed in CI, verified against the policy's signer workflows.
+"""Identity row: a SLSA VSA signed in CI, verified against the policy's signer workflows.
 
 `gh attestation verify` is mocked. Its responses are derived from a real
 recorded `gh attestation verify --format json` result (cli/cli v2.62.0,
 golden/attestation/gh-attestation-verify.recorded.json): the certificate and
 envelope shape are real, and the statement and signer identity are rewritten
-to an apmx receipt. golden/attestation/apmx-demo-shop-run-v0.6.0.* is a real,
-unmodified apmx receipt index.json and its `gh attestation verify` output
-(gh 2.102.0), signed by run.yml@v0.6.0 in danielmeppiel/apmx-demo-shop run
-39651797454. No test performs live signing or verification.
+to an apmx verification summary. golden/attestation/apmx-demo-shop-run-v0.6.0.*
+keeps the real certificate of run.yml@v0.6.0 (danielmeppiel/apmx-demo-shop run
+39651797454), whose signer digest is an annotated tag object. No test performs
+live signing or verification.
 """
 
+import base64
 import copy
 import hashlib
 import importlib.util
@@ -23,7 +24,7 @@ from test_apmx import caller, producer
 from test_audit import _no_ambient_policy_or_pull_request, _rows, plain_receipt
 from test_audit_defaults import NEW, _audit, _copy_receipt, _definition, _fake_apm
 
-from apmx.audit import identity, policy
+from apmx.audit import command, identity, policy, verifier
 
 __all__ = ["_no_ambient_policy_or_pull_request", "caller", "plain_receipt", "producer"]
 pytestmark = pytest.mark.component
@@ -39,36 +40,73 @@ V060_COMMIT = "cadfa207e4645306199ddb85271c5f3e13340924"
 ACTION = Path(__file__).resolve().parents[3] / ".github/actions/attest/predicate.py"
 
 
-def _attestation(receipt: Path, **change) -> bytes:
-    """A real recorded verification result, rewritten to sign this receipt."""
-    (result,) = json.loads(RECORDED.read_bytes())
-    result = copy.deepcopy(result)
-    digest = hashlib.sha256((receipt / "index.json").read_bytes()).hexdigest()
-    verified = result["verificationResult"]
-    verified["statement"] = {
+def _summary(receipt: Path, *, signer: str = WORKFLOW, sha: str = RECORDED_SHA, **change) -> dict:
+    """A PASSED SLSA VSA v1 over this receipt's delivered files, binding its lines."""
+    parsed, failure = verifier.inspect(receipt)
+    assert failure is None, failure
+    subjects = [
+        {"name": name, "digest": {"sha256": digest}} for name, digest in parsed.subjects.items()
+    ]
+    if "subject" in change:
+        subjects = [{"name": "result.txt", "digest": {"sha256": change["subject"]}}]
+    lines = list(parsed.facts["lineDigests"])
+    if "lines" in change:
+        lines = change["lines"]
+    definition = change.get("definition", parsed.definition_sha256)
+    return {
         "_type": "https://in-toto.io/Statement/v1",
-        "subject": [{"name": "index.json", "digest": {"sha256": change.get("subject", digest)}}],
+        "subject": subjects,
         "predicateType": change.get("predicate_type", identity.PREDICATE_TYPE),
         "predicate": {
-            "receipt": {"name": "index.json", "sha256": change.get("receipt_sha", digest)},
-            "definitionSha256": change.get("definition", _definition(receipt)),
-            "checks": "separate-job",
+            "verifier": {"id": change.get("verifier", f"https://github.com/{signer}@{sha}")},
+            "timeVerified": "2026-10-21T18:52:30Z",
+            "resourceUri": "git+https://github.com/acme/app@" + "a" * 40,
+            "policy": {"uri": f"apmx:factory/{definition}", "digest": {"sha256": definition}},
+            "inputAttestations": [
+                {"uri": f"receipt.intoto.jsonl#{n}", "digest": {"sha256": digest}}
+                for n, digest in enumerate(lines, 1)
+            ],
+            "verificationResult": change.get("result", "PASSED"),
+            "verifiedLevels": [],
         },
     }
-    certificate = verified["signature"]["certificate"]
-    signer = change.get("workflow", WORKFLOW)
+
+
+def _signed(result: dict, statement: dict) -> dict:
+    result["verificationResult"]["statement"] = statement
+    envelope = result["attestation"]["bundle"]["dsseEnvelope"]
+    envelope["payload"] = base64.b64encode(json.dumps(statement).encode()).decode()
+    return result
+
+
+def _attestation(receipt: Path, **change) -> bytes:
+    """A real recorded verification result, rewritten to sign this receipt's summary."""
+    (result,) = json.loads(RECORDED.read_bytes())
+    result = copy.deepcopy(result)
+    signer = change.pop("workflow", WORKFLOW)
+    runner = change.pop("runner", "github-hosted")
+    issuer = change.pop("issuer", identity.ISSUER)
+    _signed(result, _summary(receipt, **change))
+    certificate = result["verificationResult"]["signature"]["certificate"]
     certificate["buildSignerURI"] = f"https://github.com/{signer}@refs/tags/v1"
     certificate["subjectAlternativeName"] = certificate["buildSignerURI"]
-    certificate["runnerEnvironment"] = change.get("runner", "github-hosted")
-    certificate["issuer"] = change.get("issuer", identity.ISSUER)
+    certificate["runnerEnvironment"] = runner
+    certificate["issuer"] = issuer
     return json.dumps([result]).encode()
 
 
+LISTED = (0, json.dumps({"attestations": [{"bundle": {"fixture": True}}]}).encode(), b"")
+
+
 class Gh:
-    def __init__(self, *responses) -> None:
-        self.responses, self.calls = list(responses), []
+    """Scripted gh: listing the store's bundles always answers; other calls are scripted."""
+
+    def __init__(self, *responses, listed=LISTED) -> None:
+        self.responses, self.calls, self.listed = list(responses), [], listed
 
     def __call__(self, argv):
+        if argv[:2] == ["gh", "api"] and "/attestations/" in argv[2]:
+            return self.listed
         self.calls.append(argv)
         response = self.responses.pop(0)
         if isinstance(response, BaseException):
@@ -77,9 +115,11 @@ class Gh:
 
 
 def _verify(receipt: Path, gh: Gh, signers=SIGNERS, repository="acme/app"):
+    parsed, failure = verifier.inspect(receipt)
+    assert failure is None, failure
     return identity.verify(
-        receipt / "index.json",
-        _definition(receipt),
+        receipt.parent / "outputs/result.txt",
+        command._bundle_binding(parsed),
         signers,
         default_repository=repository,
         run=gh,
@@ -99,10 +139,12 @@ def test_matching_attestation_from_an_allowed_workflow_is_signed(plain_receipt) 
     result = _verify(plain_receipt, gh, (policy.Signer(WORKFLOW, "refs/tags/v1"),))
     assert result.status == "signed" and result.signer == WORKFLOW
     assert result.detail == f"signed by {WORKFLOW}@refs/tags/v1 at {RECORDED_SHA[:12]}"
-    assert result.notes[0] == "checks: separate job"
     assert result.notes[-1] == "[!] signer pinned by mutable ref refs/tags/v1; pin workflow_sha"
+    assert result.summary["predicateType"] == verifier.VSA
     (argv,) = gh.calls
-    assert argv[:4] == ["gh", "attestation", "verify", str(plain_receipt / "index.json")]
+    artifact = str(plain_receipt.parent / "outputs/result.txt")
+    assert argv[:4] == ["gh", "attestation", "verify", artifact]
+    assert "--bundle" in argv
     flags = dict(zip(argv[4::2], argv[5::2], strict=False))
     assert flags["--repo"] == "acme/app" and flags["--signer-workflow"] == WORKFLOW
     assert flags["--predicate-type"] == identity.PREDICATE_TYPE
@@ -129,14 +171,29 @@ def test_real_run_yml_v0_6_0_pins_by_commit_or_tag_object() -> None:
     assert certificate["buildSignerURI"] == f"https://github.com/{run_yml}@refs/tags/v0.6.0"
     assert certificate["buildSignerDigest"] == V060_TAG_OBJECT
     index = SHOP.parent / f"{SHOP.name}.index.json"
-    definition = result["verificationResult"]["statement"]["predicate"]["definitionSha256"]
-    recorded = (SHOP.parent / f"{SHOP.name}.recorded.json").read_bytes()
+    summary = {
+        "_type": "https://in-toto.io/Statement/v1",
+        "subject": [
+            {
+                "name": "index.json",
+                "digest": {"sha256": hashlib.sha256(index.read_bytes()).hexdigest()},
+            }
+        ],
+        "predicateType": verifier.VSA,
+        "predicate": {
+            "verifier": {"id": f"https://github.com/{run_yml}@{V060_TAG_OBJECT}"},
+            "verificationResult": "PASSED",
+        },
+    }
+    recorded = json.dumps([_signed(result, summary)]).encode()
     tag = (SHOP.parent / "apmx-v0.6.0-git-tag.recorded.json").read_bytes()
 
     def check(sha, *api):
         signer = policy.Signer(run_yml, "refs/tags/v0.6.0", "danielmeppiel/apmx-demo-shop", sha)
         gh = Gh((0, recorded, b""), *api)
-        verified = identity.verify(index, definition, (signer,), default_repository=None, run=gh)
+        verified = identity.verify(
+            index, lambda _: None, (signer,), default_repository=None, run=gh
+        )
         return verified, gh
 
     by_commit, gh = check(V060_COMMIT, (0, tag, b""))
@@ -178,7 +235,7 @@ def test_workflow_sha_must_equal_the_certificate_build_signer_digest(plain_recei
     signed = _verify(plain_receipt, Gh((0, _attestation(plain_receipt), b"")), (pinned,))
     assert signed.status == "signed"
     assert signed.detail == f"signed by {WORKFLOW}@refs/tags/v1 at {RECORDED_SHA[:12]}"
-    assert signed.notes == ["checks: separate job", f"run {_run_uri()}"]
+    assert signed.notes == [f"run {_run_uri()}"]
     other = policy.Signer(WORKFLOW, workflow_sha="0" * 40)
     gh = Gh((0, _attestation(plain_receipt), b""), NOT_A_TAG)
     wrong = _verify(plain_receipt, gh, (other,))
@@ -213,9 +270,11 @@ def _run_uri() -> str:
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
-        ({"subject": "0" * 64}, "subject is not this receipt"),
-        ({"receipt_sha": "0" * 64}, "different receipt"),
+        ({"subject": "0" * 64}, "subject is not this file"),
+        ({"lines": ["0" * 64]}, "binds different statements"),
         ({"definition": "0" * 64}, "different factory definition"),
+        ({"result": "FAILED"}, "not PASSED"),
+        ({"verifier": "https://github.com/acme/x/.github/workflows/y.yml@1"}, "verifier.id"),
         ({"workflow": "acme/factories/.github/workflows/other.yml"}, "different workflow"),
         ({"runner": "self-hosted"}, "self-hosted"),
         ({"issuer": "https://example.invalid"}, "GitHub Actions OIDC"),
@@ -241,6 +300,10 @@ def test_no_attestation_is_unsigned_and_errors_are_unavailable(plain_receipt) ->
     assert no_gh.status == "unavailable" and "not installed" in no_gh.detail
     no_repo = _verify(plain_receipt, Gh(), repository=None)
     assert no_repo.status == "unavailable" and "no repository" in no_repo.notes[0]
+    empty = _verify(plain_receipt, Gh(listed=(1, b"", b"gh: Not Found (HTTP 404)\n")))
+    assert empty.status == "unsigned"
+    down = _verify(plain_receipt, Gh(listed=(1, b"", b"gh: HTTP 502: Bad Gateway\n")))
+    assert down.status == "unavailable" and "502" in down.notes[0]
 
 
 def test_a_signer_repo_names_where_the_factory_ran(plain_receipt) -> None:
@@ -292,7 +355,7 @@ def _signed_policy(
 
 def test_signed_receipt_is_valid_and_authenticated(plain_receipt, tmp_path, monkeypatch) -> None:
     _signed_policy(tmp_path, monkeypatch, plain_receipt)
-    receipt = tmp_path / "work/.apm/runs" / NEW / "receipt"
+    receipt = tmp_path / "work/.apm/runs" / NEW / "receipt.intoto.jsonl"
     monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b"")))
     result = _audit()
     assert result.exit_code == 0, result.output
@@ -314,7 +377,7 @@ def test_audit_workflow_sha_pin_passes_and_reports_facts(
     _signed_policy(
         tmp_path, monkeypatch, plain_receipt, signer=f"      workflow_sha: {RECORDED_SHA}\n"
     )
-    receipt = tmp_path / "work/.apm/runs" / NEW / "receipt"
+    receipt = tmp_path / "work/.apm/runs" / NEW / "receipt.intoto.jsonl"
     monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b"")))
     result = _audit()
     assert result.exit_code == 0, result.output
@@ -332,7 +395,7 @@ def test_audit_rejects_a_receipt_signed_at_another_workflow_sha(
     pin = f"      workflow_sha: {'a' * 40}\n"
     # Rejected even without require_signed: the trusted workflow signed at the wrong commit.
     _signed_policy(tmp_path, monkeypatch, plain_receipt, require=False, signer=pin)
-    receipt = tmp_path / "work/.apm/runs" / NEW / "receipt"
+    receipt = tmp_path / "work/.apm/runs" / NEW / "receipt.intoto.jsonl"
     monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b""), NOT_A_TAG))
     result = _audit()
     assert result.exit_code == 1, result.output
@@ -365,7 +428,7 @@ def test_audit_accepts_the_commit_of_a_tag_object_and_never_passes_unresolved(
         require=False,
         signer=f"      workflow_sha: {commit}\n",
     )
-    receipt = tmp_path / "work/.apm/runs" / NEW / "receipt"
+    receipt = tmp_path / "work/.apm/runs" / NEW / "receipt.intoto.jsonl"
     tag = json.loads((SHOP.parent / "apmx-v0.6.0-git-tag.recorded.json").read_bytes())
     tag["sha"], tag["object"]["sha"] = RECORDED_SHA, commit
     resolved = (0, json.dumps(tag).encode(), b"")
@@ -398,7 +461,7 @@ def test_audit_warns_when_a_signer_is_pinned_only_by_a_mutable_ref(
     monkeypatch.chdir(work)
     monkeypatch.setenv("GITHUB_REPOSITORY", "acme/app")
     _fake_apm(monkeypatch)
-    receipt = work / ".apm/runs" / NEW / "receipt"
+    receipt = work / ".apm/runs" / NEW / "receipt.intoto.jsonl"
     monkeypatch.setattr(identity, "_gh", Gh((0, _attestation(receipt), b"")))
     result = _audit()
     assert result.exit_code == 0, result.output
@@ -479,18 +542,27 @@ def test_attest_action_signs_only_a_valid_receipt_and_ignores_pr_context(
     plain_receipt, tmp_path, monkeypatch
 ) -> None:
     module = _load_predicate_module()
-    assert module.PREDICATE_TYPE == identity.PREDICATE_TYPE
+    assert module.VSA == identity.PREDICATE_TYPE
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(tmp_path / "missing-event.json"))
     shim = _apmx_shim(tmp_path)
-    predicate = module.build(plain_receipt, "separate-job", shim)
-    digest = hashlib.sha256((plain_receipt / "index.json").read_bytes()).hexdigest()
-    assert predicate["receipt"] == {"name": "index.json", "sha256": digest}
-    assert predicate["definitionSha256"] == _definition(plain_receipt)
-    assert predicate["outputs"] == ["result.txt"] and predicate["checks"] == "separate-job"
-    with pytest.raises(ValueError, match="checks must be"):
-        module.build(plain_receipt, "trust-me", shim)
-    (plain_receipt / "smuggled.txt").write_text("x")
+    report = module._audit(plain_receipt, shim)
+    assert report["facts"]["definitionSha256"] == _definition(plain_receipt)
+    assert report["facts"]["evidence"] == "complete"
+    document = module.summary(
+        plain_receipt,
+        prefix="",
+        verifier=f"https://github.com/{WORKFLOW}@{RECORDED_SHA}",
+        resource="git+https://github.com/acme/app@" + "a" * 40,
+        report=report,
+    )
+    assert [item["name"] for item in document["subject"]] == ["result.txt"]
+    blob = next((plain_receipt.parent / "evidence/sha256").iterdir())
+    blob.chmod(0o600)
+    blob.write_bytes(b"tampered")
     with pytest.raises(ValueError, match="refusing to sign"):
-        module.build(plain_receipt, "separate-job", shim)
+        module._audit(plain_receipt, shim)
+    blob.unlink()
+    with pytest.raises(ValueError, match="evidence is not complete"):
+        module._audit(plain_receipt, shim)

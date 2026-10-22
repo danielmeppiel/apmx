@@ -7,3 +7,6 @@ src/apmx/audit/schemas/* -text
 
 # A real receipt index.json whose SHA-256 is the recorded attestation's subject.
 tests/unit/contracts/golden/attestation/*.index.json -text
+
+# The real v0.6.0 run exported as a v2 bundle; the definition hash is a policy pin.
+tests/unit/contracts/golden/receipt-v2/* -text

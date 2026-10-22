@@ -1,5 +1,6 @@
 """Prove fixture behavior independently of the not-yet-built application."""
 
+import base64
 import contextlib
 import json
 import os
@@ -23,16 +24,33 @@ class SmokeFixtureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
             stdout = (
-                "Outputs   artifacts/\nReceipt   receipt/\n          provenance  in-toto\n\n"
-                "Next      apmx audit receipt"
+                "Outputs   artifacts/\nReceipt   receipt.intoto.jsonl\n"
+                "          provenance  in-toto\n\nNext      apmx audit receipt.intoto.jsonl"
             )
-            with self.assertRaisesRegex(AssertionError, "missing index.json"):
+            with self.assertRaisesRegex(AssertionError, "missing receipt.intoto.jsonl"):
                 smoke.require_standard_delivery(run, stdout, ambiguous_inventory=False)
-            package = run / "receipt"
-            package.mkdir()
-            (package / "index.json").write_text('{"schema":"apmx-evidence-package/1"}')
-            for name in ("summary.md", "abom.cdx.json", "provenance.intoto.json"):
-                (package / name).write_text("fixture")
+            kinds = (
+                "https://slsa.dev/provenance/v1",
+                "https://in-toto.io/attestation/test-result/v0.1",
+                "https://cyclonedx.org/bom",
+            )
+            (run / "receipt.intoto.jsonl").write_text(
+                "".join(
+                    json.dumps(
+                        {
+                            "payload": base64.b64encode(
+                                json.dumps({"predicateType": k}).encode()
+                            ).decode()
+                        }
+                    )
+                    + "\n"
+                    for k in kinds
+                )
+            )
+            with self.assertRaisesRegex(AssertionError, "missing outputs/"):
+                smoke.require_standard_delivery(run, stdout, ambiguous_inventory=False)
+            (run / "outputs").mkdir()
+            (run / "evidence").mkdir()
             self.assertEqual(
                 smoke.require_standard_delivery(run, stdout, ambiguous_inventory=False), "delivered"
             )
@@ -59,8 +77,8 @@ class SmokeFixtureTests(unittest.TestCase):
                     stdout.replace("duplicate component identities", "unexpected error"),
                     ambiguous_inventory=True,
                 )
-            (run / "receipt").mkdir()
-            with self.assertRaisesRegex(AssertionError, "published a package"):
+            (run / "evidence").mkdir()
+            with self.assertRaisesRegex(AssertionError, "published a receipt"):
                 smoke.require_standard_delivery(run, stdout, ambiguous_inventory=True)
 
     def test_factory_write_boundary_uses_real_path_flavor(self):

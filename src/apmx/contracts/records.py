@@ -555,12 +555,19 @@ def _assessed_inputs(
             "limits": _limit_identity(plan),
             "attempt_id": result.run_id + "/1",
             "evidence_root": str(plan.project_root / ".apm/runs"),
-            "executable_version": plan.executable_version,
             "apm_backend": plan.apm_backend,
             "advisory_consent": result.consent_source,
             "handoff_policy": result.handoff_policy,
             "policy_status": plan.policy_status,
         }
+        # The harness version is probed at run start, after planning: an informational
+        # self-report, compared only by a plan that carries it.
+        if plan.executable_version is not None:
+            expected_identity["executable_version"] = plan.executable_version
+        elif data.get("executable_version") is not None and not isinstance(
+            data["executable_version"], str
+        ):
+            raise ValueError("Recorded harness version is not text.")
         if any(
             not _same_json(data[key], value) for key, value in expected_identity.items()
         ) or not _same_json(data["source"]["package"], _package_identity(plan)):

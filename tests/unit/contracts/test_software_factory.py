@@ -135,13 +135,17 @@ def test_out_of_scope_build_attempt_is_repaired_and_the_receipt_audits(
     assert result.exit_code == 0, result.output
     assert len(builds) == 2
     assert "attempt 1/3" in result.output and "attempt 2/3" in result.output
-    (receipt,) = caller.glob(".apm/chains/*/receipt")
+    (receipt,) = caller.glob(".apm/chains/*/receipt.intoto.jsonl")
     audit = CliRunner().invoke(main, ["audit", str(receipt), "--offline", "--format", "json"])
     assert audit.exit_code == 0, audit.output
     report = json.loads(audit.output)
     assert report["result"] == "valid"
     assert report["facts"]["rejectedAttempts"] == 1
     assert report["facts"]["checksPassed"] == report["facts"]["checks"] == 9
+    # Hand-authored diffs without --full-index are ordinary outputs, not post-apply files.
+    assert "changes.diff" in report["facts"]["outputs"]
+    build = next(stage for stage in report["facts"]["stages"] if stage["contract"] == "build")
+    assert build["attempts"] == 2
 
 
 def test_factory_check_names_describe_the_proven_outcomes() -> None:

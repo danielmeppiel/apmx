@@ -17,6 +17,10 @@ has no importable apmx package.
                   virtualenv and put its python3 first on PATH.
     verify        Require the installed requirements file to be the one the
                   receipt's factory definition records.
+    package       Package the receipt of record (apmx-receipt: the bundle,
+                  evidence and outputs) and a code-only delivery (apmx-delivery:
+                  the delivered files at their repository paths, plus
+                  .apmx-deleted listing the files the factory deleted).
 
 apmx refuses native runs inside a Git repository with remotes (fail-closed
 no-policy prerequisite), so the factory or workspace runs from a plain copy.
@@ -25,6 +29,7 @@ no-policy prerequisite), so the factory or workspace runs from a plain copy.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -178,9 +183,28 @@ def requirements(root: Path, ref: str, relative: str, temp: Path) -> Path:
     return target
 
 
+def _statements(bundle: Path) -> list[dict]:
+    return [
+        json.loads(base64.b64decode(json.loads(line)["payload"]))
+        for line in bundle.read_bytes().splitlines()
+    ]
+
+
+def _definition(bundle: Path) -> tuple[str, dict]:
+    """The factory definition digest and document (from evidence/, checked by its name)."""
+    factory = _statements(bundle)[0]["predicate"]["buildDefinition"]["externalParameters"]
+    digest = factory["factory"]["definition"]["sha256"]
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise StageError("the receipt names no factory definition digest")
+    raw = (bundle.parent / "evidence/sha256" / digest).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise StageError("the receipt's definition evidence does not match its digest")
+    return digest, json.loads(raw)
+
+
 def verify(receipt: Path, relative: str, installed: Path) -> str:
     """The installed file must be the checker resource the definition records."""
-    definition = json.loads((receipt / "definition.json").read_bytes())
+    _, definition = _definition(receipt)
     recorded = {
         resource["sha256"]
         for stage_ in definition["stages"]
@@ -199,6 +223,51 @@ def verify(receipt: Path, relative: str, installed: Path) -> str:
             "factory definition records; the package ref moved during the run"
         )
     return actual
+
+
+def _prefix(delivery: str) -> str:
+    value = delivery.strip().strip("/")
+    if value in ("", "."):
+        return ""
+    if any(part in ("", ".", "..") for part in value.split("/")):
+        raise StageError(f"unsafe delivery directory: {delivery}")
+    return value + "/"
+
+
+def package(root: Path, delivery: str, output: Path) -> dict[str, str]:
+    """apmx-receipt and a code-only apmx-delivery from the receipt of record."""
+    found = sorted(root.glob(".apm/*/*/receipt.intoto.jsonl"))
+    if len(found) != 1:
+        raise StageError(f"expected one receipt of record under {root}/.apm, found {len(found)}")
+    bundle = found[0]
+    receipt = output / "receipt"
+    receipt.mkdir(parents=True)
+    shutil.copyfile(bundle, receipt / "receipt.intoto.jsonl")
+    for name in ("evidence", "outputs"):
+        shutil.copytree(bundle.parent / name, receipt / name)
+    statements = _statements(bundle)
+    provenance = statements[0]["predicate"]["buildDefinition"]
+    (base,) = [
+        item
+        for item in provenance["resolvedDependencies"]
+        if (item.get("annotations") or {}).get("apmx.role") == "base"
+    ]
+    prefix = _prefix(delivery)
+    tree = output / "delivery"
+    tree.mkdir(parents=True)
+    shutil.copytree(
+        bundle.parent / "outputs", tree / prefix if prefix else tree, dirs_exist_ok=True
+    )
+    deleted = [prefix + item["path"] for item in base["annotations"]["deleted"]]
+    if any("\n" in path for path in deleted):
+        raise StageError("a deleted path contains a newline")
+    (tree / ".apmx-deleted").write_text("".join(f"{path}\n" for path in deleted), encoding="utf-8")
+    digest, _ = _definition(bundle)
+    return {
+        "definition": digest,
+        "receipt": hashlib.sha256(bundle.read_bytes()).hexdigest(),
+        "prefix": prefix,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -222,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
     checking = commands.add_parser("verify")
     checking.add_argument("--receipt", type=Path, required=True)
     checking.add_argument("--file", required=True)
+    packaging = commands.add_parser("package")
+    packaging.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     temp = Path(os.environ["RUNNER_TEMP"])
     try:
@@ -246,10 +317,21 @@ def main(argv: list[str] | None = None) -> int:
             installed = requirements(root, os.environ.get("APMX_FACTORY_REF", ""), args.file, temp)
             _env(APMX_CHECKS_REQUIREMENTS=str(installed))
             print(f"Installed {args.file} into a fresh virtualenv for the checks")
-        else:
+        elif args.command == "verify":
             digest = verify(args.receipt, args.file, Path(os.environ["APMX_CHECKS_REQUIREMENTS"]))
             print(f"{args.file} sha256:{digest[:12]}.. is the factory definition's own file")
-    except (StageError, subprocess.CalledProcessError, OSError) as exc:
+        else:
+            values = package(
+                Path(os.environ["APMX_RUN_ROOT"]), os.environ.get("APMX_DELIVERY", "."), args.output
+            )
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+                for key, value in values.items():
+                    stream.write(f"{key}={value}\n")
+            print(
+                f"Receipt of record sha256:{values['receipt'][:12]}.. (definition "
+                f"sha256:{values['definition'][:12]}..); delivery under '{values['prefix'] or '.'}'"
+            )
+    except (StageError, subprocess.CalledProcessError, OSError, ValueError, KeyError) as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
     return 0
