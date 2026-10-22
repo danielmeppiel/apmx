@@ -37,6 +37,7 @@ export default defineConfig({
             { label: 'Run a factory on any harness', slug: 'docs/any-harness' },
             { label: 'Read the receipt', slug: 'docs/receipt' },
             { label: 'Auto-merge factory PRs on trusted evidence', slug: 'docs/accept-prs' },
+            { label: 'FAQ', slug: 'docs/faq' },
           ],
         },
         {
