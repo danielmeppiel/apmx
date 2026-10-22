@@ -71,7 +71,7 @@ apmx handoff.contract.md --on copilot --allow-host-access
 APMX runs each `verify:` command itself, against the saved output, outside
 the agent's conversation. Exit 0 passes. Exit 1 is an ordinary rejection,
 which a budget may retry. Exit 2 or any other failure stops the run. A
-passing check proves only what that check tests.
+passing check is evidence only of what that check tests.
 
 ## Add a budget
 
