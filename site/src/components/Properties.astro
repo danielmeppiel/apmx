@@ -5,7 +5,7 @@ interface Props { labelledby?: string }
 const { labelledby } = Astro.props;
 const docs = (path: string) => `${import.meta.env.BASE_URL}docs/${path}`;
 const items = [
-  ['Traceability', 'Every change names the exact factory and components that made it.', docs('receipt/')],
+  ['Traceability', 'Every delivered file is cryptographically bound to the factory that made it and the checks it passed.', docs('receipt/')],
   ['Portability', 'Same factory, skills and checks on your choice of coding agent and model.', docs('any-harness/')],
   ['Security', 'Agent, checks and signer run apart. The agent cannot sign or change its checks.', docs('accept-prs/#1-produce-in-ci')],
   ['Trust', 'Only factories you approved ship: signed provenance, intact files, your checks passed.', docs('accept-prs/#2-pin-what-you-accept')],
