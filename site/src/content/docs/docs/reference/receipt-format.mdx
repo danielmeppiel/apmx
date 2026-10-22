@@ -1,0 +1,179 @@
+---
+title: Receipt format
+description: Layout, encoding and predicates of receipt.intoto.jsonl, the factory definition digest, and how CI signing attaches to the delivered files.
+---
+
+import { Badge, FileTree } from '@astrojs/starlight/components';
+
+The format is the same in v0.7.1 and the next release. For what a receipt
+means, see [the receipt](/apmx/docs/receipt/).
+
+## Files and location
+
+A receipt is written only for a COMPLETE run, next to the run's record:
+
+| Run | Directory |
+| --- | --- |
+| a factory | `<root>/.apm/chains/<id>/` |
+| a single contract with a `budget` | `<root>/.apm/controllers/<id>/` |
+| a single contract, one attempt | `<root>/.apm/runs/<id>/` |
+
+`<root>` is the factory directory for a local factory, or the calling
+directory for `--from` and `apmx check --from`. `<id>` is
+`YYYYMMDDTHHMMSSZ-<12 hex>`. A real chain directory:
+
+<FileTree>
+- .apm/chains/20261022T180938Z-c5a4aaff9823/
+  - **receipt.intoto.jsonl** the bundle
+  - outputs/ the delivered files, at their project paths
+    - handoff.json
+  - evidence/ content-addressed blobs
+    - sha256/
+      - ...
+  - record.json the run record, not part of the receipt
+  - artifacts/ every stage's declared outputs, not part of the receipt
+    - ...
+  - project/ not part of the receipt
+    - ...
+  - transcript.log not part of the receipt
+</FileTree>
+
+`evidence/sha256/<hex>` holds the definition, inputs, before-images, stage
+outputs, transcripts, rejected attempts, checker files and raw check reports,
+each named by its SHA-256. It is optional for a structural `apmx audit`, but
+`apmx check` needs it, and the trusted signer refuses to sign unless the
+audit reports complete evidence (`facts.evidence` is `complete`).
+
+Receipts are never overwritten: an existing destination is refused.
+
+## Delivered files
+
+The subjects of every statement are the **delivered files**. If a stage
+output is a patch (a `.diff` from the `export_changes` tool), the patches are
+applied in stage order to the files the attempt started from, and the
+resulting files are delivered. For the demo checkout factory that is
+`docs/checkout.md`, `src/checkout.py`, `src/pricing.py` and
+`tests/test_free_shipping.py`, not `changes.diff`. Otherwise the declared
+outputs themselves are delivered.
+
+## Bundle encoding
+
+- One line per statement: an **unsigned DSSE envelope**,
+  `{"payload": <base64>, "payloadType": "application/vnd.in-toto+json", "signatures": []}`,
+  in canonical JSON (sorted keys, compact separators, ASCII), ending in a
+  newline.
+- The payload is an in-toto Statement v1 (`_type`
+  `https://in-toto.io/Statement/v1`). Subjects are sorted by name, and every
+  statement has the **same** subjects: the delivered files, with `sha256`
+  digests.
+- A **line digest** is the SHA-256 of the canonical unsigned line. It is what
+  a verification summary's `inputAttestations` name.
+- Line order: one SLSA Provenance v1; one in-toto Test Result v0.1 per check
+  of the final candidate, in stage order; one CycloneDX 1.5 BOM.
+- A local receipt has **no verification summary line**. The verifier accepts
+  at most one; the PR gate rebuilds "statements plus summary" from the
+  attestation store.
+- Verifier limits: at most 16 MiB, 1 to 4096 lines.
+
+## Provenance
+
+Predicate type `https://slsa.dev/provenance/v1`.
+
+| Field | Value |
+| --- | --- |
+| `buildDefinition.buildType` | `https://github.com/danielmeppiel/apmx/build/factory/v2` |
+| `buildDefinition.externalParameters.factory` | `package` (the package ref, or null for a local factory), `commit` (resolved, or null), `definition.sha256` (the definition digest) |
+| `buildDefinition.internalParameters.stages[]` | per contract: `contract`, `contractSha256`, `harness`, `harnessVersion` (null when unknown), `requestedModel` (null for the default), `observedModels[]` (across all attempts), `attempts`, `budget` (`max_attempts` and `max_seconds`, or null), `checks[]` (`name`, `command`), `outputs[]` (`name`, `digest`). `apmx check` adds `reportedBy: "producer"` and `checkedBy: "apmx check (replay)"`. |
+| `buildDefinition.resolvedDependencies[]` | each tagged with an `apmx.role` annotation: `base` (a `gitTree` digest; in CI also `gitCommit` and a `git+https://github.com/<repo>@<commit>` uri; created and deleted files); `before-image` per touched existing file; `input` (caller inputs no stage produced, such as `request.md`); `capability` (a selected skill or instruction: name, package purl, the SHA-256 of its body, lock identity, commit, package hashes, `bomRef`, resources); `apm-manifest` (`apm.yml`), `apm-lock` (`apm.lock.yaml`) and `apm-imports-manifest` (`imports-apm.yml`), inline as base64 `content`; `producer-receipt` (only from `apmx check`) |
+| `runDetails.builder` | `id` `https://github.com/danielmeppiel/apmx`, `version` with `apmx` and `apm` |
+| `runDetails.metadata` | `invocationId` (the run id), `startedOn`, `finishedOn` |
+| `runDetails.byproducts[]` | `definition.json`, `transcripts/<run>.log`, `attempts/<run>.json`, each with its `evidence` path |
+
+## Factory definition
+
+`definition.json` (schema `apmx-definition/1`) has `schema`, `stages[]` and
+`resolvedDependencies[]`. Each stage has `contractSha256`, `needs`,
+`produces`, `checks`, `resources` (every `checks/` file with its path, SHA-256
+and size), `capabilities` (the selected skills and instructions, each with its
+kind and source path), `limits`, `budget` and
+`selectionSchema`. `resolvedDependencies` are the APM lock entries, including
+the factory package itself.
+
+The **definition digest** is the SHA-256 of this canonical JSON with a final
+newline. It does not include the harness, the model, clocks, paths or the
+package label, so the same factory has the same digest on Copilot CLI and
+OpenCode.
+
+## Check results
+
+Predicate type `https://in-toto.io/attestation/test-result/v0.1`, one line per
+check.
+
+- `result`: `PASSED` or `FAILED`. The verifier also accepts `WARNED`, but the
+  Checks row requires PASSED.
+- `configuration[]`: each `checks/` file the command names (name and digest),
+  else the contract source, each annotated with `check`, `command`, `stage`,
+  `factoryDefinition: "sha256:<digest>"` and `scope`, which reads:
+  `Observed checks over the reconstructed candidate files; not a correctness guarantee.`
+- `passedTests[]`, `failedTests[]`: only when the checker reports cases.
+- `url`: `evidence/sha256/<hex>` of the raw report or log.
+
+## Inventory
+
+Predicate type `https://cyclonedx.org/bom`, CycloneDX 1.5: the output of
+`apm lock export --format cyclonedx` for the retained APM lock. It lists APM
+package components, not individual skills: selected skills and instructions
+are bound separately as capabilities in the provenance and the definition.
+With no lock,
+an empty inventory with the metadata property `apmx:apm-dependencies = 0`.
+`apmx audit --export abom` writes it as a standalone file.
+
+## Signing in CI
+
+Local receipts are never signed. In CI, `run.yml`'s `attest` job (the trusted
+signer) creates two GitHub artifact attestations, Sigstore keyless with the
+job's GitHub OIDC identity. Both have the delivered files, at their repository
+paths, as subjects:
+
+| Attestation | Predicate type | Predicate |
+| --- | --- | --- |
+| receipt bundle | `https://github.com/danielmeppiel/apmx/attestation/receipt-bundle/v2` | `{"lines": [...]}`: the statements in line order, so `apmx audit` can fetch them by file digest. Signing it asserts nothing by itself. |
+| verification summary | `https://slsa.dev/verification_summary/v1` | `verifier.id` (the workflow at its commit), `timeVerified`, `resourceUri`, `policy` (`uri` `apmx:factory/<definition>`, `digest.sha256` the definition), `inputAttestations[]` (`uri` `receipt.intoto.jsonl#<n>`, `digest` the line digest), `verificationResult: "PASSED"`, `verifiedLevels: []` |
+
+The statements travel inside the bundle predicate because GitHub's
+attestation store refuses a SLSA provenance with an unknown `buildType`. The
+provenance's `buildType` is APMX's own; APMX claims no SLSA Build level.
+
+## Verify without APMX
+
+`scripts/verify_evidence.py RECEIPT` in an APMX source checkout runs the same
+structural checks as `apmx audit`, loading the verifier by file path without
+importing `apmx`. Flags: `--require-evidence`, `--require-capability`,
+`--schemas DIR`, `--fetch-schemas`.
+
+```text title="scripts/verify_evidence.py (real output)"
+$ python <repo>/scripts/verify_evidence.py apmx-receipt --require-evidence
+{"assurance": "Unsigned content binding and format compatibility, not authenticated attestation.", "capabilities": 0, "definitionSha256": "c011c35b5790bc327355f427b73b56192e37b9e096d95bbf5dd9e6117480d05b", "evidence": "complete", "outputs": 1, "statements": 3, "status": "passed"}
+```
+
+The stock GitHub CLI verifies the verification summary on a delivered file,
+from a downloaded bundle: see
+[audit a receipt](/apmx/docs/audit-a-receipt/#verify-without-apmx).
+
+## Identifiers
+
+| What | Identifier |
+| --- | --- |
+| Statement | `https://in-toto.io/Statement/v1` |
+| Payload type | `application/vnd.in-toto+json` |
+| Provenance | `https://slsa.dev/provenance/v1` |
+| Build type | `https://github.com/danielmeppiel/apmx/build/factory/v2` |
+| Builder id | `https://github.com/danielmeppiel/apmx` |
+| Test result | `https://in-toto.io/attestation/test-result/v0.1` |
+| Inventory | `https://cyclonedx.org/bom` (CycloneDX 1.5) |
+| Receipt bundle attestation | `https://github.com/danielmeppiel/apmx/attestation/receipt-bundle/v2` |
+| Verification summary | `https://slsa.dev/verification_summary/v1` |
+| OIDC issuer | `https://token.actions.githubusercontent.com` |
+| Factory definition | `apmx-definition/1` |
+| Run records | `apm-contract-run/0.3`, `apmx-contract-chain/0.2`, `apmx-contract-controller/1` |
+| Audit JSON | `apmx-audit/2` <Badge text="Since the next release" variant="note" size="small" /> (v0.7.1: `apmx-audit/1`) |

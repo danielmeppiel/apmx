@@ -1,0 +1,656 @@
+---
+title: apmx audit
+description: Every option, route, row, output format, explain topic and exit code of apmx audit, with troubleshooting for INVALID and INCOMPLETE.
+---
+
+import { Badge, Tabs, TabItem } from '@astrojs/starlight/components';
+import AuditLadder from '../../../../components/docs/AuditLadder.astro';
+
+## Synopsis
+
+```text
+apmx audit [OPTIONS] [RECEIPT]
+```
+
+Verifies a factory delivery: a receipt on disk, or, in a GitHub pull request,
+the signed delivery behind the PR's changed files. It prints one row per
+check and a final verdict: VALID (exit 0), INVALID (exit 1) or INCOMPLETE
+(exit 2). For what the verdicts mean, read
+[audit verdicts](/apmx/docs/verdicts/) first.
+
+<details>
+<summary>Full <code>apmx audit --help</code></summary>
+
+<Tabs syncKey="apmx-release">
+<TabItem label="v0.7.1">
+
+```text title="apmx audit --help (v0.7.1)"
+Usage: apmx audit [OPTIONS] [RECEIPT]
+
+  Verify a factory delivery: integrity, standards (in-toto Statement v1, SLSA
+  Provenance v1, in-toto Test Result, CycloneDX 1.5, SLSA VSA v1), factory
+  definition, checks, ingredients, revocation, outputs and identity.
+
+  With no arguments it picks what to audit for you. Locally: the newest
+  COMPLETE run's receipt.intoto.jsonl under ./.apm/, with its outputs/ re-
+  hashed. In a GitHub pull request, which carries code only: the PR's changed
+  files (merge-base..head) are looked up by SHA-256 in the attestation store
+  of the policy's factories.signers; every changed file must be a subject of
+  one PASSED verification summary from an allowed signer, which binds the
+  receipt statements by digest; files the PR touches must match the recorded
+  before-images at the PR base. A PR none of whose files carries a factory
+  attestation fails as not a factory delivery: the check only passes factory
+  deliveries. RECEIPT is the offline route: a receipt.intoto.jsonl (or its run
+  directory), with --outputs DIR.
+
+  The policy is discovered like `apm audit`: --policy, else the repository's
+  apm-policy.yml (the PR base copy in a PR), else the org policy from the git
+  remote. Its `factories` section (apmx's own) adds the Factory, Revocation
+  and Identity rules; APM's keys are enforced by APM. No policy is reported,
+  never assumed.
+
+  Ingredients are audited by the bundled pinned APM: the receipt's inline
+  apm.yml and apm.lock.yaml are reinstalled with `apm install --frozen` in a
+  temporary project and checked with `apm audit --ci`.
+
+  --explain [factory|stages|checks|ingredients|outputs] prints what a receipt
+  records; --export abom writes its CycloneDX 1.5 inventory as a standalone
+  file.
+
+  Exit codes: 0 valid; 1 invalid or policy failure; 2 usage error, missing or
+  ambiguous receipt, unloadable policy, or ingredients or signatures that
+  could not be checked (network/auth); use --offline to skip them.
+
+Options:
+  --outputs DIR                   Re-hash the delivered files in DIR against
+                                  the receipt (offline route).
+  --policy SOURCE                 Override discovery: org, owner/repo, an
+                                  https:// URL or an apm-policy.yml file.
+  --offline                       Do not launch APM or use the network:
+                                  ingredients, signatures and org policy are
+                                  reported as not checked. Only a local policy
+                                  file is read.
+  --format [text|json|sarif]      Output format; json and sarif are for CI.
+                                  [default: text]
+  --explain [factory|stages|checks|ingredients|outputs|all]
+                                  Print what the receipt records (default: all
+                                  topics) instead of auditing it.
+  --export [abom]                 Write the receipt's CycloneDX 1.5 inventory
+                                  (stdout, or -o FILE).
+  -o, --output FILE               With --export: the file to write.
+  -h, --help                      Show this message and exit.
+```
+
+</TabItem>
+<TabItem label="Next release">
+
+```text title="apmx audit --help (main, unreleased)"
+Usage: apmx audit [OPTIONS] [RECEIPT]
+
+  Verify a factory delivery: integrity (intact and well-formed against the
+  pinned standards schemas), factory definition, checks, dependencies,
+  revocation, outputs and identity.
+
+  With no arguments it picks what to audit for you. Locally: the newest
+  COMPLETE run's receipt.intoto.jsonl under ./.apm/, with its outputs/ re-
+  hashed. In a GitHub pull request, which carries code only: the PR's changed
+  files (merge-base..head) are looked up by SHA-256 in the attestation store
+  of the policy's factories.signers; every changed file must be a subject of
+  one PASSED verification summary from an allowed signer, which binds the
+  receipt statements by digest; files the PR touches must match the recorded
+  before-images at the PR base. A PR none of whose files carries a factory
+  attestation fails as not a factory delivery: the check only passes factory
+  deliveries. RECEIPT is the offline route: a receipt.intoto.jsonl (or its run
+  directory), with --outputs DIR.
+
+  The policy is discovered like `apm audit`: --policy, else the repository's
+  apm-policy.yml (the PR base copy in a PR), else the org policy from the git
+  remote. Its `factories` section (apmx's own) adds the Factory, Revocation
+  and Identity rules; APM's keys are enforced by APM. No policy is reported,
+  never assumed.
+
+  Dependencies are audited by the bundled pinned APM: the receipt's inline
+  apm.yml and apm.lock.yaml are reinstalled with `apm install --frozen` in a
+  temporary project and checked with `apm audit --ci`.
+
+  --explain [factory|stages|checks|dependencies|outputs] prints what a receipt
+  records (factory includes the standards it conforms to); --export abom
+  writes its CycloneDX 1.5 inventory as a standalone file.
+
+  Exit codes: 0 valid; 1 invalid or policy failure; 2 usage error, missing or
+  ambiguous receipt, unloadable policy, or dependencies or signatures that
+  could not be checked (network/auth); use --offline to skip them.
+
+Options:
+  --outputs DIR                   Re-hash the delivered files in DIR against
+                                  the receipt (offline route).
+  --policy SOURCE                 Override discovery: org, owner/repo, an
+                                  https:// URL or an apm-policy.yml file.
+  --offline                       Do not launch APM or use the network:
+                                  dependencies, signatures and org policy are
+                                  reported as not checked. Only a local policy
+                                  file is read.
+  --format [text|json|sarif]      Output format; json and sarif are for CI.
+                                  [default: text]
+  --explain [factory|stages|checks|dependencies|outputs|all]
+                                  Print what the receipt records (default: all
+                                  topics) instead of auditing it.
+  --export [abom]                 Write the receipt's CycloneDX 1.5 inventory
+                                  (stdout, or -o FILE).
+  -o, --output FILE               With --export: the file to write.
+  -h, --help                      Show this message and exit.
+```
+
+</TabItem>
+</Tabs>
+
+</details>
+
+## Options
+
+| Option | Meaning |
+| --- | --- |
+| `RECEIPT` | A `receipt.intoto.jsonl`, or the run directory that holds it. Omitted: the newest local receipt, or the PR gate in a pull request (see [what gets audited](#what-gets-audited)). |
+| `--outputs DIR` | Re-hash the delivered files in `DIR` against the receipt's subjects. Must be a directory, else exit 2. Turns off PR binding. |
+| `--policy SOURCE` | Override policy discovery: `org`, `owner/repo` (also `github.com/owner/repo`), an `https://` URL, or a local `apm-policy.yml` file. |
+| `--offline` | Launch no APM and use no network. Dependencies, signatures and org policy are reported as not checked; only a local policy file is read. With a non-file `--policy` it is a usage error: `--offline can only read a local --policy file; org, owner/repo and URLs need the network.` |
+| `--format FORMAT` | `text` (default), `json` or `sarif`. See [output formats](#output-formats). |
+| `--explain [TOPIC]` | Print what the receipt records instead of auditing it. Topics: `factory`, `stages`, `checks`, `dependencies`, `outputs`, `all` (the default when bare). v0.7.1: `ingredients` instead of `dependencies`. |
+| `--export abom` | Write the receipt's CycloneDX 1.5 inventory to stdout, or to `-o FILE`. |
+| `-o`, `--output FILE` | Only with `--export`; otherwise `-o/--output is only used with --export.` (exit 2). Never overwrites: `FILE exists; refusing to overwrite it.` (exit 2). |
+| `-h`, `--help` | Show help. |
+
+<Badge text="Since the next release" variant="note" size="small" /> The
+`--explain` topic is `dependencies`; v0.7.1 accepts only `ingredients`, and
+each version rejects the other spelling as a usage error, with no alias.
+
+## What gets audited
+
+`--explain` and `--export` skip everything below: they read RECEIPT, or the
+newest local receipt, and only check its structure. Otherwise:
+
+| Situation | Route | What is audited |
+| --- | --- | --- |
+| No RECEIPT, not in a PR | local default | The newest receipt under `./.apm/runs/`, `./.apm/chains/` or `./.apm/controllers/` (by run-directory name, which starts with a UTC timestamp). Its sibling `outputs/` is re-hashed when present. |
+| RECEIPT given, not in a PR | explicit receipt | That bundle. `outputs/` is **not** re-hashed unless you pass `--outputs DIR`; the Outputs row then checks only that the statements agree. |
+| No RECEIPT, in a PR | PR gate | The PR's own change, looked up in the attestation store by file digest. See [pull request gate](#pull-request-gate). |
+| RECEIPT given, in a PR | explicit receipt, bound to the PR | That bundle, checked against the PR's change (unless `--outputs`). |
+
+The header line is
+`Receipt   <receipt>   [(<selection>)]   [N contract(s)]   signed|unsigned`.
+It says `signed` only when the Identity row authenticated a signer.
+
+Missing receipts are usage errors (exit 2):
+
+```text title="Missing receipt messages (v0.7.1 and main)"
+Error: No receipt under ./.apm/: run a factory first (every COMPLETE run writes receipt.intoto.jsonl), or pass RECEIPT.
+Error: No receipt at missing.jsonl: expected receipt.intoto.jsonl (for example .apm/chains/<id>/receipt.intoto.jsonl).
+```
+
+## Rows
+
+<AuditLadder />
+
+Rows are displayed in this order: Policy, Integrity, Factory, Checks,
+Dependencies, Revocation, Outputs, Identity. They are not evaluated in that
+order: Policy first; then Integrity, Factory, Checks and Outputs, each
+stopping at its first failure (later ones print
+`[i] not evaluated (earlier failure)`); then the outputs re-hash or PR
+binding; then the allow-list, Dependencies and Revocation; then Identity. In
+the PR gate, Identity is evaluated first.
+
+| Symbol | JSON status | Meaning |
+| --- | --- | --- |
+| `[+]` | `pass` | checked and consistent |
+| `[x]` | `fail` | checked and wrong: the verdict is INVALID |
+| `[!]` | `warn` | a warning (still VALID) or something not checked (INCOMPLETE) |
+| `[i]` | `info` | information, such as no policy |
+| `[i]` | `skipped` | not evaluated |
+
+Notes print as indented lines under a row.
+
+<Badge text="Since the next release" variant="note" size="small" /> Eight
+rows. v0.7.1 prints nine: Policy, Integrity, Standards, Factory, Checks,
+Ingredients, Revocation, Outputs, Identity.
+
+### Policy
+
+| | |
+| --- | --- |
+| Verifies | Which `apm-policy.yml` applies, and its `factories` enforcement. See [policy](/apmx/docs/reference/policy/). |
+| `[+]` | `<label>   factories enforcement block` (or `warn`), or `<label>   no factories section`. |
+| `[x]` | Never. |
+| `[i]` or `[!]` | `[i] none found`, with a note such as `no apm-policy.yml in <dir> and no git origin for org policy`: no policy is reported, never assumed. `[i] <label>   factories off`: top-level `enforcement: off`. `[!] org policy not checked (offline)`, or an `extends` not followed offline: still VALID. `[!] <label> could not be loaded: ...` with the note `A policy that cannot be loaded is never treated as a pass.`: INCOMPLETE. |
+
+### Integrity
+
+<Badge text="Since the next release" variant="note" size="small" /> Includes
+the standards schema checks; v0.7.1 shows them as a separate Standards row
+and words the detail `N statements; line digests computed`.
+
+| | |
+| --- | --- |
+| Verifies | The bundle is at most 16 MiB, ends with a newline, has no empty line and 1 to 4096 lines. Every line is a canonical unsigned DSSE envelope with payload type `application/vnd.in-toto+json` and a canonical JSON payload. Exactly one SLSA Provenance, exactly one CycloneDX, at most one VSA, and no other predicate types. A VSA's `inputAttestations` name exactly the other lines. Every blob present under `evidence/sha256/` hashes to its name. Then schema validity: in-toto Statement v1, SLSA Provenance v1, in-toto Test Result (`result` PASSED, FAILED or WARNED, with a non-empty `configuration`), CycloneDX 1.5 against a bundled, hash-pinned schema, and the SLSA VSA v1 shape. |
+| `[+]` | `N statements intact and well-formed; line digests computed`, then `; the VSA binds every other line` when there is one, then `; evidence K/M blobs verified` or `; evidence not present (optional)`. |
+| `[x]` | The first failure, for example `Evidence blob 4bfe1f7daa11.. does not match its name.` |
+| `[!]` | None. |
+
+### Standards (v0.7.1 only)
+
+| | |
+| --- | --- |
+| Verifies | The schema checks listed under Integrity, as their own row. |
+| `[+]` | `in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid` (plus `, SLSA VSA v1` when there is one). |
+| `[x]` | The schema message. In the next release the same failure fails Integrity. |
+
+### Factory
+
+| | |
+| --- | --- |
+| Verifies | The provenance's `buildType` is `https://github.com/danielmeppiel/apmx/build/factory/v2`, with a builder id, the factory's package, commit and definition, and at least one complete stage record. If the definition is in `evidence/`: its schema `apmx-definition/1`, contract digests, checks and produced names agree. The inline `apm.yml`, `apm.lock.yaml` and `imports-apm.yml` match their digests. A VSA's `policy.digest` equals the definition digest. Skill bindings agree with the CycloneDX components and the definition. Then, with `factories.allow`, the definition digest must be on the list. |
+| `[+]` | `definition sha256:<12>..  <package>  N contracts, M checks`. With `allow`: `definition sha256:<12>.. on factories.allow (<label>)`, and the plain detail as a note. |
+| `[x]` | A structural message, or `definition sha256:<12>.. is not on factories.allow` with the note `policy: <source>; K pinned definition(s)`. Unpinned patterns add `K unpinned package pattern(s) allow nothing yet: receipts do not record their factory package; pin <package>@sha256:<definition digest>`. |
+| `[!]` | The same message with `factories.enforcement: warn` (still VALID). |
+
+### Checks
+
+| | |
+| --- | --- |
+| Verifies | Every declared check of every stage has exactly one Test Result that names the same check and `factoryDefinition: sha256:<definition>`. Each is PASSED with no `failedTests`. A raw JSON report in `evidence/` must say `status: passed`. |
+| `[+]` | `K/N passed (in-toto test-result)`, plus `; R earlier rejected attempt(s) retained` when a budget retried. |
+| `[x]` | For example `Check <name> of the final candidate did not pass (FAILED).` or `Checker invocation omitted or invented: Test Results differ from the declared checks.` |
+| `[!]` | None. |
+
+### Dependencies
+
+<Badge text="Since the next release" variant="note" size="small" /> v0.7.1:
+Ingredients. Not to be confused with a contract's Dependencies
+(`imports`): this row re-checks the APM dependencies a receipt records.
+
+| | |
+| --- | --- |
+| Verifies | Done by the bundled, pinned APM: the retained lock matches the definition's `resolvedDependencies`; in a temporary project, `apm install --frozen ... --no-policy` with `APM_NO_SCRIPTS=1` reinstalls them; reinstalled lock and file hashes equal the retained ones; every selected skill body equals its `bodySha256`; APM derives exactly the receipt's CycloneDX components; `apm audit --ci --no-fail-fast -f json` passes, under `--policy <source>` only when APM reports a loadable APM policy (`found`), else `--no-policy`. |
+| `[+]` | `N APM dependencies   apm audit --ci: clean (content, lock, drift)` (or `(policy, content, lock, drift)`), with the note `installed bytes match CycloneDX inventory and recorded hashes`. Or `0 APM dependencies   nothing to audit`. |
+| `[x]` | For example `receipt lists N APM dependencies but retains no APM lock`, `the retained APM lock disagrees with the factory definition`, `...: reinstalled content differs from the receipt (<name>)`, `... apm audit --ci: K failing check(s)`. |
+| `[!]` or `[i]` | `[!] not audited (offline): N APM dependencies; retained lock matches the definition`: still VALID. INCOMPLETE: `bundled APM unavailable: ...`, `apm install --frozen could not reinstall them (...)`, `apm audit --ci did not produce a result`, `policy <src> was not enforced (...)`. `[i] not evaluated (receipt invalid; APM not launched)` after any failure, or `(policy could not be loaded)`. |
+
+### Revocation
+
+| | |
+| --- | --- |
+| Verifies | No selected skill matches a `factories.revoked` entry on both its exact `purl` and `bodySha256`. |
+| `[+]` | `0 of N capabilities revoked; factories.revoked is empty`, or `(K factories.revoked entries)`. |
+| `[x]` | `capability <name> is revoked (factories.revoked)`, with the note `purl=...  bodySha256=...`. |
+| `[!]` or `[i]` | `[!]` with `factories.enforcement: warn`. `[i]`: `no policy: nothing revoked to check`, `policy has no factories section`, `not evaluated (top-level enforcement: off)`, `not evaluated (policy could not be loaded)`, `not evaluated (earlier failure)`. |
+
+### Outputs
+
+| | |
+| --- | --- |
+| Verifies | Every statement names the same subjects: safe relative paths, not under `.git`, `.gitmodules` or `.apm`. One `base` descriptor; before-images, created and deleted files consistent and covering exactly the delivered and deleted files. A VSA's subjects equal the delivered files under one directory prefix. Then either the re-hash (regular files, at most 16 MiB, no symlinks) or the PR binding. |
+| `[+]` | `N files bound: a b c ...`. Re-hashed: `N/N delivered files match receipt subjects (re-hashed)`. PR: `PR #N: K changed file(s) = delivered files at head <12>; before-images match base <12>`, with notes. |
+| `[x]` | `<file> differs from its receipt subject (SHA-256)`, `<file> is missing from --outputs`, `<file> is a symlink in --outputs; refused`. PR: `PR #N changes <path>, which is not a delivered file`, `built on a stale base: ...; rerun the factory`. |
+| `[!]` | `the PR change could not be read (...)`: INCOMPLETE. |
+
+### Identity
+
+| | |
+| --- | --- |
+| Verifies | A PASSED SLSA verification summary from a `factories.signers` workflow covers the delivered files and binds exactly this receipt's statements. See [signature checks](#signature-checks). |
+| `[+]` | `signed by <workflow>@<ref> at <commit12>`, plus ` (tag object <sha12>)` when signed from a tag, with the note `run <run URL>`. The verdict reads `VALID   (authenticated: <workflow>)`. |
+| `[x]` | With `require_signed`: `unsigned: no attestation from factories.signers`. `signed by <workflow> at <x>, policy requires <y>` (wrong `workflow_sha`). `factories.require_signed is set but factories.signers is empty`. PR gate failures (below). |
+| `[!]` | Warnings that keep VALID: `unsigned: proves content binding, not who ran it` (no policy), `not authenticated: policy names no factories.signers`. Not checked, so INCOMPLETE with `require_signed` and a warning without it: `signature not checked (offline)`, `signature not checked: no delivered file to look it up by (--outputs)`, `signature not checked: the GitHub CLI (gh) is not installed`, `signature could not be checked`. Always INCOMPLETE: `signer commit could not be checked against workflow_sha`. |
+
+## Verdict and exit codes
+
+Any `[x]` row makes the verdict INVALID (exit 1), and that wins over
+anything incomplete. Otherwise, anything that could not be checked makes it
+INCOMPLETE (exit 2). Otherwise it is VALID (exit 0). The reason printed is the
+first failure, or the first thing not checked. Warnings do not change a VALID
+verdict.
+
+```text title="Final lines (main; v0.7.1 differs only in the INCOMPLETE hint)"
+[+] VALID   (content-bound; not authenticated)
+[+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
+[x] INVALID   Factory: definition sha256:0bec0549b9af.. is not on factories.allow
+[!] INCOMPLETE   Identity: signature not checked (offline)
+             Not a pass: the receipt could not be fully audited (exit 2). --offline skips dependencies explicitly.
+[x] Not a factory delivery: no changed file carries an attestation from factories.signers. This check only passes factory deliveries; merge other PRs through your normal review process (e.g. a ruleset bypass for maintainers).
+```
+
+In v0.7.1 the INCOMPLETE hint ends `--offline skips ingredients explicitly.`
+
+Exit 2 also covers usage errors, a missing or ambiguous receipt, an
+unloadable policy and an unreadable PR change.
+
+Text output is printable ASCII (anything else is replaced by `?`). It is
+colored only on a terminal, and never with `NO_COLOR` set.
+
+## Offline and online
+
+| | Online (default) | `--offline` |
+| --- | --- | --- |
+| Structural rows, re-hash, PR binding | yes | yes (all local) |
+| Local policy (repository or `--policy` file) | read; the bundled APM is launched to learn whether it loads it as an APM policy | read directly, without APM; an `extends` is not followed (Policy `[!]`, partial) |
+| Org policy, `owner/repo`, URL | fetched (GitHub contents API or https, 1 MiB max, `extends` up to 5 levels) | org discovery: `[!] org policy not checked (offline)`; an explicit remote `--policy` is a usage error |
+| Dependencies | APM reinstall and `apm audit --ci` | `[!] not audited (offline): ...` (VALID) |
+| Identity, with signers configured | looked up with `gh` | `[!] signature not checked (offline)`: VALID without `require_signed`, INCOMPLETE with it; always INCOMPLETE in a PR |
+
+## Pull request gate
+
+The gate runs when `GITHUB_ACTIONS=true`, `GITHUB_EVENT_NAME` is
+`pull_request` or `pull_request_target`, and the JSON at `GITHUB_EVENT_PATH`
+has `pull_request.base.sha` and `pull_request.head.sha`. Otherwise
+`apmx audit` silently uses the local routes. It does not call the GitHub API
+to find the pull request: base and head come from the event file, the change
+from local Git.
+
+1. **Load the change.** Both commits must be in the checkout. The changed
+   files are `git diff --name-status --no-renames merge-base(base,head)..head`.
+   A shallow checkout fails (exit 2) with
+   `PR #N change unavailable: the PR base commit <12> is not in this checkout; use actions/checkout with fetch-depth: 0`.
+2. **Read the policy from the PR base commit**, never the working tree. A
+   `--policy` file inside the checkout is refused (INCOMPLETE).
+3. An unloadable policy: every row `not evaluated (policy could not be loaded)`, INCOMPLETE.
+4. No policy or no `factories.signers`: Identity
+   `a PR carries code only: its delivery is looked up from signed attestations, and the policy names no factories.signers`, INCOMPLETE.
+5. `--offline`: Identity `signature not checked (offline)`, INCOMPLETE.
+6. **Is it a factory delivery?** Each distinct SHA-256 of an added or
+   modified regular file at the PR head is looked up in each signer's
+   repository (`gh api repos/<repo>/attestations/sha256:<digest>`). Deleted
+   files have no head digest and are not looked up.
+   None found: `[x] Not a factory delivery`, exit 1. A failed lookup, or more
+   than 1000 lookups: INCOMPLETE.
+7. A changed path that is not a regular file at head fails Outputs.
+8. **Signature.** A PASSED summary from an allowed signer must cover every
+   changed file at its repository path and digest. Otherwise
+   `[x] Identity  no PASSED verification summary from factories.signers covers every changed file (<path> is not a delivered file)`.
+9. The receipt statements are fetched from the same signer at the same
+   signer digest, and exactly the ones the summary names are kept.
+10. The structural rows run on those statements and the summary.
+11. **Bind the change.** Every added or modified file must be a delivered file
+    with the same SHA-256 at head; every deleted file a recorded deletion;
+    every touched file must match its recorded before-image at the PR base;
+    the recorded base commit must be in the PR base's history. Otherwise
+    `built on a stale base: ...; rerun the factory`.
+12. The allow-list, Dependencies (reinstalling the receipt's inline `apm.yml`
+    and lock) and Revocation.
+
+A real rejected PR, the same delivery plus a hand edit:
+
+<Tabs syncKey="apmx-release">
+<TabItem label="v0.7.1">
+
+```text title="PR #12: apmx audit (v0.7.1)"
+Receipt   attestations for PR #12   (looked up by file digest)   unsigned
+
+[+] Policy        apm-policy.yml (repository, PR base 4fed7ee21e1d)   factories enforcement block
+[i] Integrity     not evaluated (no signed delivery covers this PR)
+[i] Standards     not evaluated (no signed delivery covers this PR)
+[i] Factory       not evaluated (no signed delivery covers this PR)
+[i] Checks        not evaluated (no signed delivery covers this PR)
+[i] Ingredients   not evaluated (no signed delivery covers this PR)
+[i] Revocation    not evaluated (no signed delivery covers this PR)
+[i] Outputs       not evaluated (no signed delivery covers this PR)
+[x] Identity      no PASSED verification summary from factories.signers covers every changed file (src/checkout.py is not a delivered file)
+                  danielmeppiel/apmx/.github/workflows/run.yml: attestation ignored (summary does not cover src/checkout.py)
+                  danielmeppiel/apmx/.github/workflows/run.yml: attestation ignored (summary does not cover src/checkout.py)
+                  danielmeppiel/apmx/.github/workflows/run.yml: attestation ignored (summary does not cover src/checkout.py)
+
+[x] INVALID   Identity: no PASSED verification summary from factories.signers covers every changed file (src/checkout.py is not a delivered file)
+```
+
+</TabItem>
+<TabItem label="Next release">
+
+```text title="PR #12: apmx audit (main, unreleased)"
+Receipt   attestations for PR #12   (looked up by file digest)   unsigned
+
+[+] Policy        apm-policy.yml (repository, PR base 4fed7ee21e1d)   factories enforcement block
+[i] Integrity     not evaluated (no signed delivery covers this PR)
+[i] Factory       not evaluated (no signed delivery covers this PR)
+[i] Checks        not evaluated (no signed delivery covers this PR)
+[i] Dependencies  not evaluated (no signed delivery covers this PR)
+[i] Revocation    not evaluated (no signed delivery covers this PR)
+[i] Outputs       not evaluated (no signed delivery covers this PR)
+[x] Identity      no PASSED verification summary from factories.signers covers every changed file (src/checkout.py is not a delivered file)
+                  danielmeppiel/apmx/.github/workflows/run.yml: attestation ignored (summary does not cover src/checkout.py)
+                  danielmeppiel/apmx/.github/workflows/run.yml: attestation ignored (summary does not cover src/checkout.py)
+                  danielmeppiel/apmx/.github/workflows/run.yml: attestation ignored (summary does not cover src/checkout.py)
+
+[x] INVALID   Identity: no PASSED verification summary from factories.signers covers every changed file (src/checkout.py is not a delivered file)
+```
+
+</TabItem>
+</Tabs>
+
+The accepted PR #11 and a human PR #9 are on
+[auto-merge factory PRs](/apmx/docs/accept-prs/#4-a-real-pair).
+
+## Signature checks
+
+For each `factories.signers` entry, Identity:
+
+1. Uses the entry's `repo`, or the default repository (`GITHUB_REPOSITORY`,
+   else the `origin` remote on github.com).
+2. Lists the file's attestations with
+   `gh api repos/<repo>/attestations/sha256:<digest>?per_page=100`, unfiltered,
+   because GitHub's list API rejects the verification-summary predicate-type
+   filter with HTTP 422. It then runs `gh attestation verify` on the listed
+   bundles with `--signer-workflow`, the VSA predicate type,
+   `--cert-oidc-issuer https://token.actions.githubusercontent.com` and
+   `--deny-self-hosted-runners`.
+3. Re-checks each result itself: a VSA covering this file's digest, with
+   `verificationResult` PASSED; a GitHub Actions OIDC certificate from a
+   GitHub-hosted runner, signed by that workflow; a `verifier.id` naming the
+   workflow at its signer digest. Locally the summary's `inputAttestations`
+   must equal this receipt's line digests and its `policy.digest` the
+   definition digest; in the PR gate it must cover every changed file.
+4. Matches an `@<ref>` in the signer entry against the certificate's ref.
+5. Matches `workflow_sha`, if set, against the certificate's signer digest,
+   or the commit an annotated tag object with that SHA names. Mismatch: `[x]`
+   (or `[!]` with `enforcement: warn`). A tag that cannot be resolved:
+   INCOMPLETE.
+6. Without `workflow_sha`, adds the note
+   `signer pinned by mutable ref <ref>; pin workflow_sha` or
+   `signer not pinned (any ref); pin workflow_sha`, and still passes.
+
+The GitHub CLI (`gh`) must be installed and authenticated (`GH_TOKEN` in
+Actions).
+
+## Output formats
+
+### Text
+
+The default, described above.
+
+### JSON
+
+`--format json` prints one object:
+
+| Key | Value |
+| --- | --- |
+| `schema` | `"apmx-audit/2"`. <Badge text="Since the next release" variant="note" size="small" /> v0.7.1: `"apmx-audit/1"`. |
+| `receipt` | the receipt as displayed (a path, or `attestations for PR #N`) |
+| `selection` | `"newest COMPLETE run"`, `"newest of N COMPLETE runs"`, `"looked up by file digest"`, or `null` |
+| `result` | `valid`, `invalid`, `incomplete` (or `error`, below) |
+| `exitCode` | 0, 1 or 2 |
+| `reason` | the first failure or incomplete reason, or `null` |
+| `assurance` | `"content-bound; not authenticated"` or `"authenticated: <workflow>"` |
+| `signed` | boolean |
+| `rows` | in display order: `name`, `status` (`pass`, `fail`, `warn`, `info`, `skipped`), `detail`, `notes` |
+| `facts` | what was found; keys below |
+
+`facts` holds, when relevant: `policy`, `policyRef`, `lineDigests`,
+`evidence` (`absent`, `partial`, `complete`), `evidenceBlobs`,
+`provenanceStatements`, `testResultStatements`, `signedSummary`,
+`definitionSha256`, `factoryPackage`, `factoryCommit`, `contracts`,
+`declaredChecks`, `capabilities`, `apmDependencies`, `definitionRetained`,
+`checksPassed`, `checks`, `rejectedAttempts`, `outputs`, `deleted`, `base`,
+`subjectPrefix`, `stages` (per contract: `contract`, `harness`,
+`harnessVersion`, `requestedModel`, `observedModels`, `attempts`, `budget`,
+and for `apmx check` receipts `reportedBy`, `checkedBy`), `apmVersion`,
+`apmAudit` (`passed`, `policy`, `checks`, `failing`), `outputsRehashed`,
+`identity`, `delivery` and `change`.
+
+A missing receipt prints an error object on stdout and the `Error:` line on
+stderr, exit 2:
+
+<Tabs syncKey="apmx-release">
+<TabItem label="v0.7.1">
+
+```text title="apmx audit missing.jsonl --format json (v0.7.1)"
+{
+  "schema": "apmx-audit/1",
+  "receipt": "missing.jsonl",
+  "result": "error",
+  "exitCode": 2,
+  "reason": "No receipt at missing.jsonl: expected receipt.intoto.jsonl (for example .apm/chains/<id>/receipt.intoto.jsonl)."
+}
+Error: No receipt at missing.jsonl: expected receipt.intoto.jsonl (for example .apm/chains/<id>/receipt.intoto.jsonl).
+```
+
+</TabItem>
+<TabItem label="Next release">
+
+```text title="apmx audit missing.jsonl --format json (main, unreleased)"
+{
+  "schema": "apmx-audit/2",
+  "receipt": "missing.jsonl",
+  "result": "error",
+  "exitCode": 2,
+  "reason": "No receipt at missing.jsonl: expected receipt.intoto.jsonl (for example .apm/chains/<id>/receipt.intoto.jsonl)."
+}
+Error: No receipt at missing.jsonl: expected receipt.intoto.jsonl (for example .apm/chains/<id>/receipt.intoto.jsonl).
+```
+
+</TabItem>
+</Tabs>
+
+### SARIF
+
+`--format sarif` prints SARIF 2.1.0 (`$schema`
+`https://json.schemastore.org/sarif-2.1.0.json`) with the driver
+`apmx audit`, its version and `informationUri`
+`https://github.com/danielmeppiel/apmx`.
+
+- **Rules:** one per row, `apmx-audit/<row>` in lowercase, plus
+  `apmx-audit/receipt`: 9 rules. v0.7.1 has 10, including
+  `apmx-audit/standards` and `apmx-audit/ingredients` instead of
+  `apmx-audit/dependencies`.
+- **`helpUri`** of every rule is
+  `https://github.com/danielmeppiel/apmx/blob/main/docs/audit.md#rows`, in the
+  repository.
+- **Results:** one per `fail` row (`level: error`) and per `warn` row
+  (`level: warning`); `info` and `skipped` rows produce none. A missing
+  receipt adds an `apmx-audit/receipt` error.
+- **`artifactLocation.uri`** is the receipt as displayed: in a PR, literally
+  `attestations for PR #N`, not a file path.
+- **`runs[0].properties`** is `{result, exitCode}`.
+
+## Explain topics
+
+`--explain` reads only the receipt: no policy, no network, no APM. Its output
+is always text. If the bundle fails structurally it prints `[x] <Row>: <msg>`
+on stderr and exits 1.
+
+| Topic | Prints |
+| --- | --- |
+| `factory` | definition digest; the standards it conforms to (since the next release); package or `(local factory directory)`; commit; builder and versions; invocation id and times; base; each input; what the definition defines, or `(definition bytes not present: evidence/ was not shipped)`; rejected attempts |
+| `stages` | per contract: harness and version, requested and observed models, attempts; for `apmx check` receipts, a line saying harness and models were reported by the producer. The budget is not printed here; it is in JSON `facts.stages[].budget`. |
+| `checks` | per check: `[RESULT] stage/check`, reported cases, the command, the log's evidence path |
+| `dependencies` | `capability` (skill, purl, body digest), `component`, `retained` files, or `no APM dependencies were installed or selected` |
+| `outputs` | `created`, `modified` or `deleted` path and digest |
+| `all` | all five (the default for a bare `--explain`) |
+
+<Badge text="Since the next release" variant="note" size="small" /> In
+v0.7.1 the topic and section are `ingredients` and `Ingredients`.
+
+## Export the inventory
+
+`--export abom` writes the receipt's inline CycloneDX 1.5 inventory as
+pretty JSON (sorted keys, ASCII), to stdout or to `-o FILE`. It never
+overwrites a file (exit 2).
+
+```text title="apmx audit --export abom (v0.7.1)"
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "pkg:generic/apmx@a70c1939dddc6f5d7888b76fd5bb8bab3e69e886",
+      "name": "danielmeppiel/apmx",
+      "purl": "pkg:generic/apmx@a70c1939dddc6f5d7888b76fd5bb8bab3e69e886",
+      "type": "library",
+      "version": "1.0.0"
+    }
+  ],
+  "metadata": {
+    "timestamp": "1970-01-01T00:00:00+00:00",
+    "tools": [
+      {
+        "name": "apm lock export",
+        "vendor": "APM"
+      }
+    ]
+  },
+  "specVersion": "1.5",
+  "version": 1
+}
+```
+
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `GITHUB_ACTIONS`, `GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH` | Turn on the [pull request gate](#pull-request-gate). |
+| `GITHUB_REPOSITORY` | Default repository for attestation lookups (else the `origin` remote on github.com). |
+| `GH_TOKEN` | Used by `gh` for Identity and the PR gate. |
+| `GITHUB_APM_PAT`, `GITHUB_TOKEN`, `GH_TOKEN` | In that order: the token for reading an `owner/repo` policy. |
+| `NO_COLOR` | Disables color. |
+| `APMX_APM_BACKEND` | Source installs only: the pinned APM executable. Without it, Dependencies is INCOMPLETE. |
+
+## Troubleshooting: INVALID versus INCOMPLETE
+
+INVALID means something was checked and is wrong. INCOMPLETE means something
+could not be checked; it is never a pass.
+
+| Message | Verdict | Cause | What to do |
+| --- | --- | --- | --- |
+| `[x] Integrity  Evidence blob 4bfe1f7daa11.. does not match its name.` | INVALID | A file in `evidence/` was altered. | Copy the run directory again. Evidence is optional for `apmx audit`: without `evidence/` the row says `evidence not present (optional)`. |
+| `[x] Outputs  handoff.json differs from its receipt subject (SHA-256)` | INVALID | A delivered file changed after the run. | The file is not what the factory delivered. |
+| `[x] Factory  definition sha256:... is not on factories.allow` | INVALID | The factory changed (contracts, checks, checker files, skill pins, budgets, limits or dependencies), or the policy has only unpinned patterns. | Review it and add `<package>@sha256:<digest>` to `factories.allow`, or use `factories.enforcement: warn` during rollout. |
+| `[x] Revocation  capability <name> is revoked (factories.revoked)` | INVALID | A selected skill's exact purl and body digest are revoked. | Rebuild with a fixed pin. |
+| `[x] Identity  factories.require_signed is set but factories.signers is empty` | INVALID | The policy contradicts itself. | Add `signers`. |
+| `[x] Identity  unsigned: no attestation from factories.signers` | INVALID (with `require_signed`) | No summary from an allowed signer binds this receipt, for example a local or re-checked receipt. | Audit the CI receipt of record, or drop `require_signed` for local use. |
+| `attestation ignored (summary binds different statements than this receipt)` (note under Identity) | INVALID (with `require_signed`) | The files are attested, but by a summary of another receipt, for example after you re-ran `apmx check` locally. | Audit the receipt of record the signer signed. |
+| `[x] Identity  signed by <wf> at <x>, policy requires <y>` | INVALID | The signer's commit differs from `workflow_sha`. | Re-pin after reviewing the new `run.yml`. |
+| `[x] Identity  no PASSED verification summary ... (<path> is not a delivered file)` | INVALID (PR) | The PR changes a file the delivery did not deliver. | Remove the edit, or run the factory again. |
+| `[x] Not a factory delivery: ...` | INVALID (PR) | A human pull request. | Merge it the normal way, for example a ruleset bypass. |
+| `[x] Outputs  built on a stale base: ...; rerun the factory` | INVALID (PR) | The base moved under the delivery. | Run the factory again on the new base. |
+| `[!] INCOMPLETE  Policy: <src> could not be loaded: ...` | INCOMPLETE | An unknown key, bad digest or regex, bad YAML, unreachable `extends`, a remote host other than github.com or https, or no bundled APM. | Fix the policy; it fails closed. |
+| `[!] INCOMPLETE  Dependencies: bundled APM unavailable: ...` (next release; v0.7.1: `Ingredients: ...`) | INCOMPLETE | A source install without APM. | Install the native release, set `APMX_APM_BACKEND`, or use `--offline`. |
+| `[!] Dependencies  ...: apm install --frozen could not reinstall them (...)` (next release; v0.7.1: `[!] Ingredients  ...`) | INCOMPLETE | Network, authentication or package access. | Fix access, or use `--offline` to audit everything else. |
+| `[!] INCOMPLETE  Identity: signature not checked (offline)` | INCOMPLETE | `--offline` with `require_signed`, or any PR gate. | Run online, with `GH_TOKEN` in Actions. |
+| `[!] INCOMPLETE  Identity: signature not checked: no delivered file to look it up by (--outputs)` | INCOMPLETE (with `require_signed`) | An explicit receipt with no `outputs/` beside it. | Pass `--outputs DIR`. |
+| `[!] Identity  a PR carries code only: ... the policy names no factories.signers` | INCOMPLETE (PR) | The base policy has no signers. | Add `factories.signers`. |
+| `Error: PR #N change unavailable: ... use actions/checkout with fetch-depth: 0` | exit 2 | A shallow checkout. | Check out with `fetch-depth: 0`. |
+| `Error: No receipt under ./.apm/: ...` or `No receipt at ...` | exit 2 | Wrong directory or path. | Pass RECEIPT. |
+
+## Changes since v0.7.1
+
+The next release changes only `apmx audit`. This section goes away when it
+ships.
+
+| Change | v0.7.1 | Next release |
+| --- | --- | --- |
+| Rows | Policy, Integrity, Standards, Factory, Checks, Ingredients, Revocation, Outputs, Identity (9) | Policy, Integrity, Factory, Checks, Dependencies, Revocation, Outputs, Identity (8) |
+| Integrity detail | `11 statements; line digests computed; ...` | `11 statements intact and well-formed; line digests computed; ...` |
+| Schema checks | a separate Standards row: `...: schema-valid` | inside Integrity, after its other checks; a schema error fails Integrity |
+| JSON `schema` | `apmx-audit/1` | `apmx-audit/2` |
+| JSON and SARIF row names and rules | `Standards`, `Ingredients`, `apmx-audit/standards`, `apmx-audit/ingredients` (10 rules) | `Dependencies`, `apmx-audit/dependencies` (9 rules) |
+| `--explain` topic | `ingredients` (header `Ingredients`); `dependencies` is a usage error | `dependencies` (header `Dependencies`); `ingredients` is a usage error, no alias |
+| `--explain factory` | no standards line | adds `standards    <list>: schema-valid` |
+| `apmx audit --help` | names standards and ingredients | names dependencies; integrity covers the standards schemas |
+| INCOMPLETE hint | `--offline skips ingredients explicitly.` | `--offline skips dependencies explicitly.` |
+
+Both report `apmx, version 0.7.1`; the next release is not published yet.

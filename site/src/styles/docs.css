@@ -1,0 +1,116 @@
+/* Docs figures: the landing's visual grammar, re-declared for Starlight pages.
+   Every selector starts with .apmx- so nothing leaks into Starlight or the
+   landing. Colors come from tokens.css. Figures are HTML lists, not canvases:
+   they reflow to one column below 50rem. */
+
+.apmx-fig {
+  margin: 1.75rem 0;
+  padding: 1rem;
+  border: 1px solid var(--quiet-line);
+  border-radius: 14px;
+  background: var(--canvas);
+  color: var(--c-ink);
+  font-family: var(--sans);
+  font-size: .875rem;
+  line-height: 1.45;
+}
+/* Resets have zero specificity so component styles always win. */
+:where(.apmx-fig) :where(ol, ul) {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+:where(.apmx-fig) :where(p) { margin: 0; }
+.apmx-fig code,
+.apmx-field {
+  font-family: var(--mono);
+  font-size: .75rem;
+}
+.apmx-fig figcaption {
+  margin-top: .875rem;
+  color: var(--c-muted);
+  font-size: .8125rem;
+}
+
+/* Nodes: neutral surface, where the agent works, APMX-owned, optional. */
+.apmx-node {
+  border: 1px solid var(--quiet-line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: .75rem .875rem;
+}
+.apmx-node--agent { background: var(--exec-field); border-color: #2c4b39; }
+.apmx-node--sheet { background: var(--sheet); border-color: var(--accent); }
+.apmx-node--optional {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--line-strong);
+}
+.apmx-node b { color: var(--c-ink); font-weight: 650; }
+.apmx-node small,
+.apmx-sub {
+  display: block;
+  color: var(--secondary);
+  font-size: .78rem;
+  margin-top: .25rem;
+}
+
+/* Mono field tag: a real field or file name. */
+.apmx-field {
+  display: inline-block;
+  padding: .05rem .4rem;
+  border: 1px solid var(--quiet-line);
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* Status chips, as printed by apmx audit. */
+.apmx-chip {
+  display: inline-block;
+  min-width: 2.1rem;
+  padding: .05rem .35rem;
+  border: 1px solid var(--quiet-line);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: .75rem;
+  text-align: center;
+  white-space: nowrap;
+}
+.apmx-chip--pass { color: var(--green); border-color: #2c4b39; }
+.apmx-chip--fail { color: var(--risk); border-color: #5a2a2a; }
+.apmx-chip--warn { color: var(--warn); border-color: #5a4a20; }
+.apmx-chip--info { color: var(--secondary); }
+.apmx-chip--off { opacity: .3; }
+
+/* Forward-flow arrow: a green line with a chevron. Rotates on small screens. */
+.apmx-arrow {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 2rem;
+  color: var(--green);
+}
+.apmx-arrow::before {
+  content: '';
+  flex: 1;
+  border-top: 2px solid currentColor;
+  margin-right: -2px;
+}
+.apmx-arrow svg { display: block; flex: none; width: 10px; height: 12px; }
+
+.apmx-glyph { display: inline-block; vertical-align: middle; flex: none; }
+
+/* Visually hidden text for screen readers. */
+.apmx-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

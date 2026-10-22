@@ -1,0 +1,34 @@
+---
+// Small glyphs shared by the docs figures, copied from the landing:
+// the factory roof, the trusted-signature seal and a check mark.
+// With a label the glyph is an image with a title; without, it is decorative.
+interface Props {
+  name: 'roof' | 'seal' | 'check';
+  size?: number;
+  label?: string;
+}
+const { name, size = 20, label } = Astro.props;
+const a11y = label ? { role: 'img', 'aria-label': label } : { 'aria-hidden': 'true', focusable: 'false' };
+const width = name === 'roof' ? Math.round((size * 26) / 16) : size;
+---
+{name === 'roof' && (
+  <svg class="apmx-glyph" width={width} height={size} viewBox="-1 -1 26 16" {...a11y}>
+    {label && <title>{label}</title>}
+    <path d="M0 14V0L8 5V0L16 5V0L24 5V14Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+  </svg>
+)}
+{name === 'seal' && (
+  <svg class="apmx-glyph" width={width} height={size} viewBox="-52 -52 104 104" {...a11y}>
+    {label && <title>{label}</title>}
+    <circle r="48" fill="#a9ccff" stroke="#0d1117" stroke-width="3" />
+    <circle r="37" fill="none" stroke="#0d1117" stroke-width="1.6" stroke-opacity="0.55" />
+    <path d="M-21 2c4.6-13.8 9.2-15.6 9.2-3.7s-2.8 13.8 3.7 6.4s5.5-13.8 9.2-5.5s1.8 9.2 6.4 3.7s4.6-6.4 10.1-4.6" fill="none" stroke="#0d1117" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" />
+    <path d="M-18 14H18" stroke="#0d1117" stroke-width="2.4" stroke-linecap="round" />
+  </svg>
+)}
+{name === 'check' && (
+  <svg class="apmx-glyph" width={width} height={size} viewBox="0 0 16 16" {...a11y}>
+    {label && <title>{label}</title>}
+    <path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+)}

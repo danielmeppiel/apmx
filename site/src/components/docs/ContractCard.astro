@@ -1,0 +1,116 @@
+---
+// The six parts of an Agent Contract at a glance, each tied to its real field.
+// Grouped as the contract reads: what goes in, how it works, what comes out.
+const icon = {
+  lines: { stroke: '#f4f6fa', paths: ['M5 6h14M5 12h14M5 18h9'] },
+  inArrow: { stroke: '#a9ccff', paths: ['M3 12h11M10 8l4 4-4 4', 'M17 4h3v16h-3'] },
+  book: { stroke: '#f4f6fa', paths: ['M4 5c3-1 6-1 8 1v14c-2-2-5-2-8-1zM20 5c-3-1-6-1-8 1v14c2-2 5-2 8-1z'] },
+  outArrow: { stroke: '#a9ccff', paths: ['M7 4H4v16h3M10 12h11M17 8l4 4-4 4'] },
+  timer: { stroke: '#f4f6fa', paths: ['M12 13V8M9 2h6'], circle: true },
+  list: { stroke: '#f4f6fa', paths: ['M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17M11 6h9M11 12h9M11 18h9'] },
+};
+const groups = [
+  {
+    title: 'In',
+    parts: [
+      { label: 'Assignment', line: 'your intent, each time', field: 'needs:', icon: icon.inArrow, each: true },
+    ],
+  },
+  {
+    title: 'How it works',
+    parts: [
+      { label: 'Role', line: 'how it works, every time', field: 'Markdown body', icon: icon.lines },
+      { label: 'Dependencies', line: 'what it can use', field: 'imports:', icon: icon.book },
+      { label: 'Budget', line: 'what it may spend', note: 'attempts and time today', field: 'budget:', icon: icon.timer },
+    ],
+  },
+  {
+    title: 'Out',
+    parts: [
+      { label: 'Checks', line: 'how the work is judged', field: 'verify:', icon: icon.list },
+      { label: 'Deliverables', line: 'what it hands back', field: 'produces:', icon: icon.outArrow },
+    ],
+  },
+];
+---
+<figure class="apmx-fig apmx-fig--contract not-content">
+  <div class="card">
+    <div class="head">
+      <span class="apmx-field">*.contract.md</span>
+      <p class="name">Agent Contract</p>
+      <p class="def">A reusable specification for agent work.</p>
+    </div>
+    <div class="groups">
+      {groups.map((group) => (
+        <div class="group">
+          <p class="group-title">{group.title}</p>
+          <ul>
+            {group.parts.map((part) => (
+              <li>
+                <svg class="icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false" fill="none" stroke={part.icon.stroke} stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  {part.icon.circle && <circle cx="12" cy="13" r="8" />}
+                  {part.icon.paths.map((d) => <path d={d} />)}
+                </svg>
+                <div class="text">
+                  <p><b>{part.label}</b> <span class:list={['pill', { each: part.each }]}>{part.each ? 'each run' : 'every run'}</span></p>
+                  <p class="line">{part.line}{part.note && <small>{part.note}</small>}</p>
+                  <p><span class="apmx-field">{part.field}</span></p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+    <p class="foot">The intent changes. The contract stays.</p>
+  </div>
+  <figcaption>Six parts, one file. Labels are for people; the file keeps its field names.</figcaption>
+</figure>
+
+<style>
+  .card {
+    border: 1px solid var(--accent);
+    border-radius: 14px;
+    background: var(--sheet);
+    padding: 1rem 1.125rem;
+  }
+  .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .75rem; }
+  .name { font-weight: 650; font-size: 1.05rem; color: var(--c-ink); }
+  .def { color: var(--c-muted); width: 100%; }
+  .groups {
+    display: grid;
+    grid-template-columns: minmax(10.5rem, 1.1fr) 1.3fr 1.3fr;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+  .group-title {
+    font-size: .72rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--c-muted);
+    border-bottom: 1px solid var(--quiet-line);
+    padding-bottom: .25rem;
+    margin-bottom: .5rem;
+  }
+  li { display: flex; gap: .6rem; align-items: flex-start; }
+  li + li { margin-top: .75rem; }
+  .icon { flex: none; margin-top: .1rem; }
+  .text p + p { margin-top: .15rem; }
+  .line { color: var(--secondary); }
+  .line small { display: block; font-size: .72rem; color: var(--c-muted); }
+  .pill {
+    display: inline-block;
+    font-size: .66rem;
+    padding: 0 .4rem;
+    border-radius: 999px;
+    border: 1px solid var(--quiet-line);
+    color: var(--c-muted);
+    vertical-align: .1em;
+    white-space: nowrap;
+  }
+  .pill.each { border-color: var(--accent); color: var(--accent); }
+  .foot { margin-top: 1rem; color: var(--c-muted); }
+  @media (max-width: 50rem) {
+    .groups { grid-template-columns: 1fr; }
+  }
+</style>

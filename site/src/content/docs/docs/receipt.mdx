@@ -1,0 +1,159 @@
+---
+title: The receipt
+description: "A COMPLETE run writes one in-toto bundle bound to the delivered files: what built them, from what, and which checks passed."
+---
+
+import { FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
+import ReceiptAnatomy from '../../../components/docs/ReceiptAnatomy.astro';
+
+A COMPLETE run writes one **receipt**, bound to the files it delivered.
+REJECTED, UNPROVEN and HALTED runs get none. If the work completed but writing
+the receipt failed, `apmx` exits 23 and there is no receipt: retry the
+export, not the model (see
+[exit codes](/apmx/docs/reference/apmx/#outcomes-and-exit-codes)).
+
+The receipt keeps the **Traceability** promise: every delivered file is
+cryptographically bound to the factory that made it and the checks it
+passed. A receipt is evidence of how a change was made, not a guarantee that
+the code is correct.
+
+<ReceiptAnatomy />
+
+## Three parts
+
+A factory run writes its receipt under `.apm/chains/<id>/`: inside the
+factory directory for a local factory (`<factory>/.apm/chains/<id>/`), or
+under the calling directory for a package run with `--from`:
+
+<FileTree>
+- .apm/
+  - chains/
+    - 20261022T180938Z-c5a4aaff9823/
+      - **receipt.intoto.jsonl** the bundle
+      - outputs/ the delivered files
+        - handoff.json
+      - evidence/ optional
+        - sha256/
+          - ...
+</FileTree>
+
+| Part | What it is | Who needs it |
+| --- | --- | --- |
+| `receipt.intoto.jsonl` | One standard in-toto bundle: one statement per line | everyone; `apmx audit` |
+| `outputs/` | The delivered files, at their project paths | you, the pull request |
+| `evidence/sha256/` | Content-addressed copies of what the statements name by digest | forensics; `apmx check` and the trusted signer (which requires complete evidence); optional for a structural `apmx audit` |
+
+A single contract writes to `.apm/runs/<id>/` instead, or
+`.apm/controllers/<id>/` when it has a budget. The
+[receipt format reference](/apmx/docs/reference/receipt-format/) lists every
+file.
+
+## One line, one claim, all about the same files
+
+| Line | Standard | Says |
+| --- | --- | --- |
+| 1 | SLSA Provenance v1 | built by this factory definition, from these inputs; the harness and models each stage reported (recorded, not enforced) |
+| 2..n | in-toto Test Result v0.1, one per check | this check ran on these files: PASSED |
+| last | CycloneDX 1.5 (the agent bill of materials) | the APM package components, from the retained APM lock |
+
+**Every line names the same subjects: the delivered files**, by SHA-256. For
+a factory that writes patches, those are the files the patches produce, not
+the `.diff` itself.
+
+The CycloneDX line lists packages, not individual skills. The skills and
+instructions a contract selected are bound separately as **capabilities**:
+the factory definition records each one's kind and source path, and the
+provenance names its package identity and body digest.
+
+## Signed or unsigned
+
+A receipt you make on your machine is unsigned: it binds content, not
+identity. Each line is an envelope with an empty `signatures` list. Anyone who
+can write the files can write a self-consistent unsigned receipt.
+
+In CI, through [`run.yml`](/apmx/docs/run-in-ci/) with `attest: true`,
+`apmx check` writes the **receipt of record** and a trusted signer then
+creates two GitHub attestations on the delivered files: the receipt bundle,
+and a **verification summary** (SLSA VSA v1) that names every line by
+digest. The receipt file itself never gains a signature line. See the
+[trust model](/apmx/docs/trust-model/) for what the signature adds.
+
+## Your supply chain, answered by fields
+
+| Question | Where the receipt answers it |
+| --- | --- |
+| What went in? | The CycloneDX line lists the APM package components from the retained APM lock. Selected skills and instructions are bound as capabilities (kind, source path, package identity, body digest). The provenance's `resolvedDependencies` carries the inputs (such as `request.md`), `apm.yml` and `apm.lock.yaml`. |
+| Which factory state built it? | `externalParameters.factory.definition.sha256`: the SHA-256 of the `apmx-definition/1` document: stage contracts, checks, checker resources, selected capabilities, limits, budgets and resolved APM dependencies. |
+| Which harness and model? | `internalParameters.stages[]`, as each harness reported them. Recorded, not enforced. |
+| Which checks passed, on what? | One Test Result line per check, naming the checker files by digest. |
+| Can one component be fixed? | Change one pin, run again, approve the new definition digest, and revoke the old skill content with `factories.revoked`. |
+
+## Check one
+
+`apmx audit` with no arguments audits the newest receipt under `./.apm/` and,
+when its sibling `outputs/` is present, re-hashes the delivered files. Real output for a one-contract receipt:
+
+<Tabs syncKey="apmx-release">
+<TabItem label="v0.7.1">
+
+```text title="apmx audit (v0.7.1)"
+Receipt   .apm/chains/20261022T180938Z-c5a4aaff9823/receipt.intoto.jsonl   (newest COMPLETE run)   1 contract   unsigned
+
+[i] Policy        none found
+                  no apm-policy.yml in checkws-main and no git origin for org policy
+[+] Integrity     3 statements; line digests computed; evidence 5/5 blobs verified
+[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Factory       definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[i] Revocation    no policy: nothing revoked to check
+[+] Outputs       1/1 delivered files match receipt subjects (re-hashed)
+                  1 file bound: handoff.json
+[!] Identity      unsigned: proves content binding, not who ran it
+
+[+] VALID   (content-bound; not authenticated)
+```
+
+</TabItem>
+<TabItem label="Next release">
+
+```text title="apmx audit (main, unreleased)"
+Receipt   .apm/chains/20261022T180938Z-c5a4aaff9823/receipt.intoto.jsonl   (newest COMPLETE run)   1 contract   unsigned
+
+[i] Policy        none found
+                  no apm-policy.yml in checkws-main and no git origin for org policy
+[+] Integrity     3 statements intact and well-formed; line digests computed; evidence 5/5 blobs verified
+[+] Factory       definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Dependencies  1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[i] Revocation    no policy: nothing revoked to check
+[+] Outputs       1/1 delivered files match receipt subjects (re-hashed)
+                  1 file bound: handoff.json
+[!] Identity      unsigned: proves content binding, not who ran it
+
+[+] VALID   (content-bound; not authenticated)
+```
+
+</TabItem>
+</Tabs>
+
+How to read every row: [audit verdicts](/apmx/docs/verdicts/). Other
+recipes, including `--explain`, the CycloneDX export and verifying without
+APMX: [audit a receipt](/apmx/docs/audit-a-receipt/).
+
+:::caution[What it does not guarantee]
+- **Unsigned locally.** It binds content, not identity, until a trusted
+  signer signs a summary in CI.
+- **Not correctness.** It records which checks passed; checks are the bar.
+- **Not a sandbox.** It records what happened; it did not confine the run.
+- **No SLSA level** is claimed.
+:::
+
+:::danger[Never put evidence/ in a pull request]
+`evidence/` can contain private code, transcripts and inputs. Review it before
+sharing, and never put it in a pull request.
+:::
+
+Next: [trust model](/apmx/docs/trust-model/).

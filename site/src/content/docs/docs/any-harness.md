@@ -1,85 +1,105 @@
 ---
-title: Run a factory on any harness
-description: Chain contracts into a factory, preview it, run it on your choice of harness and model (GitHub Copilot CLI or OpenCode), and read the outcome literally.
+title: Choose your harness and model
+description: Run the same factory on GitHub Copilot CLI or OpenCode 1.2.24, with your choice of model. What is recorded, and what is not enforced.
 ---
 
-An **agentic software factory** is a set of agents that turns intent into an
-outcome, usually software. In APMX it is a directory of contracts and checks.
-Contracts hand off through files: one that `needs: plan.md` waits for the one that
-`produces: plan.md` and receives that exact checked file. No pipeline file
-is needed. The factory starts from your intent, written in `request.md`. The
-checkout example adds free delivery from a 5000-cent subtotal:
+Same factory, skills and checks on your choice of harness and model. Today
+that means GitHub Copilot CLI (the default) and OpenCode 1.2.24.
 
-```text
-request.md -> plan.md -> specification.md
-                        -> changes.diff + implementation.md
-                        -> documentation.diff + documentation.md -> review.md
-```
+A harness is the agent CLI that runs each contract. You pick it with `--on`
+and the model with `--model`; the factory does not change.
 
-## Three commands
+## Pick the harness
 
 ```sh
-apmx ./feature-factory --plan     # see the contracts, handoffs and checks; no agents, no installs
-apmx ./feature-factory            # run: each contract loops until its checks pass
-apmx audit <receipt>              # verify what was produced, from what, and how
+apmx ./my-factory --on copilot     # the default
+apmx ./my-factory --on opencode    # OpenCode, exactly version 1.2.24
 ```
 
-The same commands work for a single contract (`apmx build.contract.md`) or a
-Git package (`apmx --from owner/repo`). `--on copilot|opencode` selects the
-harness, the coding-agent runtime; Copilot is the default.
+OpenCode must be exactly 1.2.24; other versions refuse to run. Any other
+harness name is refused with UNPROVEN (exit 21):
 
-## Preview
+```text title="Refused harness names (main, trimmed: two of several runs, exit lines omitted; v0.7.1 prints the same for codex)"
+$ apmx --from ../factory --plan --on codex
+[!] apmx: UNPROVEN
+  Runtime codex does not support native contracts.
 
-```text title="apmx --from 'danielmeppiel/apmx-demo-factory#v1.0.0' --plan"
-Factory  danielmeppiel/apmx-demo-factory#v1.0.0   5 contracts   copilot / default model
-
-[1/5] planning        needs request.md -> produces plan.md
-                      checks: plan-sections   1 attempt
-[2/5] specification   needs request.md, plan.md* -> produces specification.md
-                      checks: specification-format-references   1 attempt
-[3/5] build           needs request.md, specification.md* -> produces changes.diff, implementation.md
-                      checks: shipping-examples, checkout-regression, implementation-report-format   budget 3 attempts, 600s
+$ apmx --from ../factory --plan --on claude
+[!] apmx: UNPROVEN
+  Unknown runtime: claude
 ```
 
-(Abridged; `*` marks an earlier contract's checked output.)
+## Pick the model
 
-## Switch the harness, keep the factory
-
-**Portability:** same factory, skills and checks on your choice of harness
-and model.
+`--model MODEL` is passed to the harness as is. Without it, the harness uses
+its own default. APMX never falls back to another model.
 
 ```sh
-apmx --from 'danielmeppiel/apmx-demo-factory#v1.0.0' --on opencode --model github-copilot/gpt-5.6-sol
+apmx ./my-factory --on opencode --model MODEL
 ```
 
-The OpenCode profile (OpenCode 1.2.24) uses the same preparation, capture,
-checking and repair as Copilot; only the native invocation adapter differs.
-APMX never switches providers or falls back to another model after an error.
-See [docs/opencode.md](https://github.com/danielmeppiel/apmx/blob/main/docs/opencode.md).
+## Same factory, same digest
 
-Observed in development: one factory definition (`sha256:0bec0549...`) ran on
-GitHub Copilot CLI (observed model `gpt-6.1-sol`) and on OpenCode (requested
-`github-copilot/gpt-5.6-sol`). The code came out different (`src/pricing.py`
-`e6981e53...` vs `41d1739a...`). Both passed the same nine checks.
+The factory definition digest covers contracts, checks, skill pins, budgets
+and dependencies, but not the harness or the model. So the same factory has
+the same digest on both harnesses, and a policy that approves it approves it
+on both. Only the plan's header and hints change:
 
-:::note
-Each stage records which harness ran it, the version it reported and the
-models it reported. These are recorded, not enforced: no policy selects
-models or harnesses yet ([#39](https://github.com/danielmeppiel/apmx/issues/39)).
-OpenCode does not report a model.
-:::
+```text title="apmx --from ../factory --plan --on opencode (v0.7.1, abridged)"
+Factory  ../factory   5 contracts   opencode / default model
+...
+Nothing ran. Run it with:  apmx --from ../factory --on opencode
+Unattended:                apmx --from ../factory --on opencode --allow-host-access --allow-unproven-inputs
+Runs are local and not sandboxed; APMX does not cap model charges.
+```
 
-## Read the outcome literally
+## Recorded, not enforced
 
-| Outcome | Exit | Meaning |
-| --- | --- | --- |
-| COMPLETE | 0 | Every declared output retained and every required check passed. |
-| REJECTED | 20 | At least one required check failed. |
-| UNPROVEN | 21 | Incomplete output or checks, missing consent or policy. Never success. |
-| HALTED | 22 | Execution, cancellation or finalization stopped the run. |
-| (COMPLETE) | 23 | The run completed but writing its receipt failed. Retry the export, not the model. |
+Each stage records the harness and models it reported. No policy enforces
+them: the `factories` policy has no harness or model rule.
 
-COMPLETE is not a sandbox, a correctness guarantee or permission to merge.
-See [docs/results.md](https://github.com/danielmeppiel/apmx/blob/main/docs/results.md).
+Per contract, the receipt keeps `harness`, `harnessVersion`,
+`requestedModel` and `observedModels`. Print them with
+`apmx audit --explain stages`:
 
-Next: [read the receipt](../receipt/).
+```text title="apmx audit --explain stages (v0.7.1, same on main): a five-contract Copilot run"
+Stages
+  planning         copilot  requested default  observed gpt-6.1-sol  attempts 1
+  specification    copilot  requested default  observed gpt-6.1-sol  attempts 1
+  build            copilot  requested default  observed gpt-6.1-sol  attempts 1
+  documentation    copilot  requested default  observed gpt-6.1-sol  attempts 1
+  review           copilot  requested default  observed gpt-6.1-sol  attempts 1
+```
+
+In a receipt of record from CI, these are what the agent's job **reported**;
+the job that reruns the checks does not observe the model:
+
+```text title="apmx audit --explain stages (v0.7.1, same on main): a CI receipt of record"
+Stages
+  handoff          copilot 1.0  requested default  observed fixture-model  attempts 1
+                   harness and models reported by the producer; checks rerun by apmx check (replay)
+```
+
+OpenCode may report no model, so `observedModels` can be empty. The
+repository's [OpenCode guide](https://github.com/danielmeppiel/apmx/blob/main/docs/opencode.md)
+covers that profile in detail.
+
+## In CI
+
+`run.yml` takes a `harness` input (default `copilot`) and a `model` input
+(empty means the harness default). `run.yml` installs only the Copilot CLI;
+it does not install OpenCode. See
+[run.yml and actions](/apmx/docs/reference/run-yml/#inputs).
+
+## What the harness may do
+
+APMX starts the Copilot CLI with a narrowed tool set: `view`, `apply_patch`,
+APMX's private artifact tools (`write_file`, `delete_file`,
+`export_changes`), and `skill` when the contract imports skills. Shell and URL
+tools are denied, built-in MCP servers and custom instructions are disabled,
+and broad-approval environment variables are removed.
+
+This restricts the harness's tools. It is not an operating-system sandbox:
+the run can still use your host's files, network and logins.
+
+Next: every option of the [`apmx` command](/apmx/docs/reference/apmx/).

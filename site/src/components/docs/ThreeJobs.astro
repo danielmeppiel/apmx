@@ -1,0 +1,108 @@
+---
+// The three isolated jobs of run.yml: the agent works, checks verify,
+// a trusted signer signs. `full` adds the optional target and deliver jobs.
+import Glyph from './Glyph.astro';
+interface Props {
+  variant?: 'full' | 'core';
+}
+const { variant = 'full' } = Astro.props;
+const full = variant === 'full';
+---
+<figure class:list={['apmx-fig', 'apmx-fig--jobs', 'not-content', variant]}>
+  <p class="frame-title">
+    <Glyph name="roof" size={14} />
+    <span><code>run.yml</code>: each job on a fresh runner</span>
+  </p>
+  {full && (
+    <div class="apmx-node apmx-node--optional edge before">
+      <span class="apmx-field">target</span> read-only checkout of the target repository
+    </div>
+  )}
+  <ol class="jobs">
+    <li>
+      <div class="apmx-node apmx-node--agent job">
+        <b>The agent works</b>
+        <span class="apmx-field">produce</span>
+        <small>model token; read-only contents; no signing identity</small>
+      </div>
+    </li>
+    <li>
+      <div class="hop">
+        <span class="apmx-arrow" aria-hidden="true"><svg viewBox="0 0 10 12"><path d="M1 1L8.5 6L1 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></span>
+        <span class="hop-label">producer receipt (untrusted)</span>
+      </div>
+      <div class="apmx-node job">
+        <b>Checks verify</b>
+        <span class="apmx-field">check</span>
+        <small>reruns your checks on the agent's bytes; no write token, no signing identity</small>
+      </div>
+    </li>
+    <li>
+      <div class="hop">
+        <span class="apmx-arrow" aria-hidden="true"><svg viewBox="0 0 10 12"><path d="M1 1L8.5 6L1 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></span>
+        <span class="hop-label">receipt of record</span>
+      </div>
+      <div class="apmx-node apmx-node--sheet job">
+        <span class="title-row"><Glyph name="seal" size={22} /><b>A trusted signer signs</b></span>
+        <span class="apmx-field">attest</span>
+        <small>no agent, no candidate code; signs only after an offline audit is VALID</small>
+      </div>
+    </li>
+  </ol>
+  {full && (
+    <div class="tail">
+      <span class="out">signed summary on every delivered file</span>
+      <div class="apmx-node apmx-node--optional edge">
+        <span class="apmx-field">deliver</span> commits and opens the pull request (only with <code>target-repository</code>)
+      </div>
+    </div>
+  )}
+  <figcaption>Three isolated jobs: the agent works, checks verify, a trusted signer signs. CI only: a local run has none of this separation.</figcaption>
+</figure>
+
+<style>
+  .apmx-fig--jobs { container-type: inline-size; }
+  .frame-title {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    color: var(--c-muted);
+    margin-bottom: .75rem;
+  }
+  .frame-title code { color: var(--c-ink); }
+  .jobs { display: flex; flex-direction: column; }
+  .jobs > li { display: flex; flex-direction: column; min-width: 0; }
+  .job { flex: 1; display: flex; flex-direction: column; gap: .3rem; align-items: flex-start; }
+  .title-row { display: flex; align-items: center; gap: .45rem; }
+  .job small { margin-top: 0; }
+  .hop {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: .5rem;
+    padding: .2rem 0 .2rem 1.1rem;
+  }
+  .hop .apmx-arrow { width: 2.25rem; min-width: 0; transform: rotate(90deg); }
+  .hop-label { font-size: .75rem; line-height: 1.25; color: var(--secondary); }
+  .edge { font-size: .8rem; color: var(--secondary); }
+  .edge.before { margin-bottom: .75rem; }
+  .tail { margin-top: .75rem; display: flex; flex-direction: column; gap: .5rem; align-items: stretch; }
+  .out {
+    align-self: flex-start;
+    font-size: .75rem;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    padding: .05rem .6rem;
+  }
+  /* Side by side only when the figure itself is wide enough to read. */
+  @container (min-width: 46rem) {
+    .jobs { flex-direction: row; align-items: stretch; }
+    .jobs > li { flex: 1.35 1 0; flex-direction: row; }
+    .jobs > li:first-child { flex-grow: 1; }
+    .hop { flex: none; width: 5.25rem; flex-direction: column; justify-content: center; gap: .25rem; padding: 0 .35rem; }
+    .hop .apmx-arrow { width: 100%; transform: none; }
+    .hop-label { font-size: .7rem; text-align: center; }
+    .out { align-self: flex-end; }
+  }
+</style>
