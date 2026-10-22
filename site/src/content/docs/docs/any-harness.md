@@ -6,7 +6,7 @@ description: Chain contracts into a factory, preview it, run it on GitHub Copilo
 A **factory** is a directory of contracts and checks. Contracts hand off
 through files: one that `needs: plan.md` waits for the one that
 `produces: plan.md` and receives that exact checked file. No pipeline file
-is needed. The checkout example adds free delivery from a 5000-cent subtotal:
+is needed. The factory starts from your intent, written in `request.md`. The checkout example adds free delivery from a 5000-cent subtotal:
 
 ```text
 request.md -> plan.md -> specification.md

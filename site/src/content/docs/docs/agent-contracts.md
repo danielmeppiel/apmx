@@ -6,7 +6,7 @@ description: An Agent Contract is a reusable specification for agent work, one M
 An **Agent Contract** is a reusable specification for agent work: one Markdown
 file that declares what the agent needs, which files it must produce, the
 skills it imports, its budget, and the checks its output must pass. The
-request changes from run to run; the contract stays.
+intent changes from run to run; the contract stays.
 
 ## The six parts, and their real fields
 
@@ -18,14 +18,15 @@ from the checkout factory's `build.contract.md`.
 | --- | --- | --- |
 | Job description | Markdown body | "Implement the admitted checkout specification." |
 | Skills | `imports:` (pinned in `apm.yml`) | `python-testing-patterns` |
-| Assignment | `needs:` | `request.md`, `specification.md` |
+| Assignment (your intent) | `needs:` | `request.md` (the intent), `specification.md` |
 | Deliverables | `produces:` | `changes.diff`, `implementation.md` |
 | Budget | `budget:` | 3 attempts, 600 seconds |
 | Checks | `verify:` | `shipping-examples`, `checkout-regression`, `implementation-report-format` |
 
-The budget is the only limit APMX enforces: attempts and seconds. Allowed
-actions or stop rules you write in the job description guide the agent; they
-are not enforced fields.
+The budget is what the job may spend. Today APMX enforces attempts and time;
+cost limits are not enforced yet, and APMX does not cap model charges.
+Allowed actions or stop rules you write in the job description guide the
+agent; they are not enforced fields.
 
 ## The smallest contract
 

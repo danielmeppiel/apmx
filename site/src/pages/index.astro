@@ -19,7 +19,7 @@ const repo = 'https://github.com/danielmeppiel/apmx';
 const install = `${repo}/blob/main/docs/install.md`;
 const title = 'APMX - Agentic software factories you can trust';
 const description =
-  'APMX runs agentic software factories built from Agent Contracts on any coding agent, records one receipt per delivery, and accepts their pull requests only by proof.';
+  'APMX runs agentic software factories built from Agent Contracts on any harness and model, records one receipt per delivery, and accepts their pull requests only by proof.';
 ---
 <!doctype html>
 <html lang="en">
@@ -70,9 +70,9 @@ const description =
             <ul class="parts">
               <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M5 12h14M5 18h9"></path></svg><b>Job description</b><span>what to do</span></li>
               <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5c3-1 6-1 8 1v14c-2-2-5-2-8-1zM20 5c-3-1-6-1-8 1v14c2-2 5-2 8-1z"></path></svg><b>Skills</b><span>what it can use</span></li>
-              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h11M10 8l4 4-4 4"></path><path d="M17 4h3v16h-3"></path></svg><b>Assignment</b><span>what it's given</span></li>
+              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h11M10 8l4 4-4 4"></path><path d="M17 4h3v16h-3"></path></svg><b>Assignment</b><span>your intent</span></li>
               <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4H4v16h3M10 12h11M17 8l4 4-4 4"></path></svg><b>Deliverables</b><span>what it hands back</span></li>
-              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 13V8M9 2h6"></path></svg><b>Budget</b><span>how many tries</span></li>
+              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 13V8M9 2h6"></path></svg><b>Budget</b><span>what it may spend<small>tries and time today</small></span></li>
               <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17M11 6h9M11 12h9M11 18h9"></path></svg><b>Checks</b><span>how the work is judged</span></li>
             </ul>
           </div>
@@ -82,7 +82,7 @@ const description =
       <section class="band" id="pains" aria-labelledby="pains-title">
         <div class="wrap">
           <h2 id="pains-title">Agent factories outrun the people who must trust them.</h2>
-          <p class="one">An agentic software factory is a chain of coding agents that plans, builds, reviews and opens pull requests. APMX makes four promises about yours.</p>
+          <p class="one">An agentic software factory is a set of agents that turns intent into an outcome, usually software. APMX makes four promises about yours.</p>
           <div class="figure fig-desk"><Flood /></div>
           <Properties labelledby="pains-title" />
         </div>
@@ -116,8 +116,8 @@ const description =
       <section class="band" id="any-agent" aria-labelledby="any-title">
         <div class="wrap">
           <p class="ptag">Promise: portability</p>
-          <h2 id="any-title">Same factory, same checks, your choice of agent.</h2>
-          <p class="one">We ran one factory on GitHub Copilot CLI and on OpenCode. The code came out different. Both passed the same nine checks.</p>
+          <h2 id="any-title">Same factory, same checks, your choice of harness.</h2>
+          <p class="one">We ran one factory on two harnesses, GitHub Copilot CLI and OpenCode. The code came out different. Both passed the same nine checks.</p>
           <div class="figure"><AnyAgent /></div>
         </div>
       </section>
@@ -136,7 +136,7 @@ const description =
         <div class="wrap">
           <p class="ptag">Promise: security</p>
           <h2 id="accept-title">Review the factory. Let its checks gate the pull requests.</h2>
-          <p class="one">Three isolated jobs: the agent writes, the checks rerun without it, a trusted signer signs. Only fully signed pull requests merge automatically.</p>
+          <p class="one">Three isolated jobs: the agent works, the checks verify without it, a trusted signer signs. Only fully signed pull requests merge automatically.</p>
           <ol class="machines" aria-label="Three isolated jobs">
             <li class="m agent"><b>Agent</b><span>writes the code; can't sign or change the checks</span></li>
             <li class="arr" aria-hidden="true"></li>
