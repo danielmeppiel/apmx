@@ -44,7 +44,7 @@ Receipt   attestations for PR #42   (looked up by file digest)   5 contracts   s
 [+] Factory       definition sha256:0bec0549b9af.. on factories.allow (acme/checkout-factory)
 [+] Revocation    0 of 1 capability revoked; factories.revoked is empty
 [+] Outputs       PR #42: 4 changed files = delivered files at head 9f8e7d6c5b4a; before-images match base 1a2b3c4d5e6f
-[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.7.1 at <commit12> (tag object <tag12>)
+[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.7.1 at a70c1939dddc (tag object 917ffb4e5406)
 
 [+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
 ```
