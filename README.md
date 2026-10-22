@@ -203,7 +203,7 @@ factories:
   require_signed: true
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to `git rev-parse v0.7.0^{commit}`
+      workflow_sha: 315491bff45f653e728c91c7ad1fc07465b97535   # git rev-parse v0.7.0^{commit}
       repo: acme/factories
 ```
 
