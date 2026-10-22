@@ -12,10 +12,12 @@ to its record (`.apm/runs/<id>/`, `.apm/chains/<id>/` or
 
 REJECTED and HALTED runs get no receipt: a receipt attests a COMPLETE result
 only. Their saved attempt outputs and check logs stay under `.apm/runs/<id>/`.
-The export neither runs a model nor reruns checks. Measured on the real
-five-stage checkout factory (v0.6.0, Copilot): v1 wrote 232 files (1.3 MB);
-v2 writes 1 bundle (37 KB, 11 lines), 4 delivered files and 31 evidence blobs
-(188 KB).
+The export neither runs a model nor reruns checks. The bundle of a real
+five-stage checkout run (v0.6.0, Copilot) is checked in at
+[`tests/unit/contracts/golden/receipt-v2/`](../tests/unit/contracts/golden/receipt-v2/receipt.intoto.jsonl):
+11 lines, 37 KB, with 4 delivered files. Its `evidence/` is not checked in;
+the evidence and v1 sizes measured in development (31 blobs, 188 KB, against
+232 files, 1.3 MB for v1) cannot be reproduced from this repository.
 
 ## What is inside `receipt.intoto.jsonl`
 
@@ -36,7 +38,8 @@ started from, not the `.diff` itself; otherwise the declared outputs.
 | last | `https://cyclonedx.org/bom` (CycloneDX 1.5, inline) | the APM packages and skills the agents were given |
 | (CI) | `https://slsa.dev/verification_summary/v1` | the verifier checked every other line: PASSED |
 
-Real lines from the v0.6.0 checkout run, shortened:
+Real lines from the v0.6.0 checkout run, shortened. That run needed no repair,
+so the `rejected-attempt` byproduct shows the shape such an entry takes:
 
 ```json
 {"_type": "https://in-toto.io/Statement/v1",
@@ -61,7 +64,7 @@ Real lines from the v0.6.0 checkout run, shortened:
      {"name": "python-testing-patterns", "uri": "pkg:generic/agents@46891e7e...", "digest": {"sha256": "<SKILL.md>"}, "annotations": {"apmx.role": "capability", "bomRef": "..."}},
      {"name": "apm.lock.yaml", "digest": {"sha256": "2aa9ff56bb6d..."}, "content": "<base64>", "annotations": {"apmx.role": "apm-lock"}}]},
   "runDetails": {
-   "builder": {"id": "https://github.com/danielmeppiel/apmx", "version": {"apmx": "0.7.0", "apm": "0.33.0"}},
+   "builder": {"id": "https://github.com/danielmeppiel/apmx", "version": {"apmx": "0.6.0", "apm": "0.33.0"}},
    "metadata": {"invocationId": "20261021T184925Z-67361d3ba1d4", "startedOn": "...", "finishedOn": "..."},
    "byproducts": [
      {"name": "definition.json", "digest": {"sha256": "0bec0549b9af..."}, "annotations": {"apmx.role": "definition", "evidence": "evidence/sha256/0bec0549b9af..."}},
