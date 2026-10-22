@@ -99,7 +99,7 @@ signer workflow `danielmeppiel/apmx/.github/workflows/run.yml`. Its only PR
 gate is `apmx audit`. See [Accept factory PRs by
 proof](../examples/accept-factory-prs/README.md).
 
-The factory runs in CI through `run.yml@v0.7.0` with `factory:
+The factory runs in CI through `run.yml@v0.7.1` with `factory:
 "danielmeppiel/apmx-demo-factory#v1.0.0"` and `checks-requirements:`, as three
 jobs:
 
@@ -218,7 +218,7 @@ From the source checkout, supply the trusted archive hash and checker interprete
 
 ```sh
 python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
-  --archive /absolute/path/to/apmx-0.7.0-macos-arm64.tar.gz \
+  --archive /absolute/path/to/apmx-0.7.1-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --python /absolute/path/to/checker-environment/bin/python \
   --verifier-python /absolute/path/to/independent-verifier/bin/python \
@@ -241,7 +241,7 @@ pinned remote package instead of the local example copy:
 
 ```sh
 python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
-  --archive /absolute/path/to/apmx-0.7.0-macos-arm64.tar.gz \
+  --archive /absolute/path/to/apmx-0.7.1-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --python /absolute/path/to/checker-environment/bin/python \
   --verifier-python /absolute/path/to/independent-verifier/bin/python \

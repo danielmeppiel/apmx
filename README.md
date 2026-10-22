@@ -9,7 +9,7 @@ Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
 **Install** the experimental
-[v0.7.0 release](https://github.com/danielmeppiel/apmx/releases/tag/v0.7.0)
+[v0.7.1 release](https://github.com/danielmeppiel/apmx/releases/tag/v0.7.1)
 with the [native installation guide](docs/install.md#install-a-prebuilt-archive).
 It runs contracts through native Copilot or the native
 [OpenCode profile](docs/opencode.md); authenticate in your chosen harness, whose
@@ -193,7 +193,7 @@ failed after a COMPLETE run. See [results](docs/results.md).
 ## Accept factory PRs by proof
 
 Run the factory in CI with [`run.yml`](.github/workflows/run.yml)
-(`uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.0`). The agent,
+(`uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1`). The agent,
 the checks of record and the signature each run in a separate job. The
 receiving repository pins what it accepts in its `apm-policy.yml`:
 
@@ -203,7 +203,7 @@ factories:
   require_signed: true
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: 315491bff45f653e728c91c7ad1fc07465b97535   # git rev-parse v0.7.0^{commit}
+      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to `git rev-parse v0.7.1^{commit}`
       repo: acme/factories
 ```
 
@@ -219,7 +219,7 @@ checks the statements it binds against the policy read from the PR base, and
 refuses a PR built on a stale base:
 
 ```yaml
-- uses: danielmeppiel/apmx/.github/actions/setup@v0.7.0   # installs apmx 0.7.0
+- uses: danielmeppiel/apmx/.github/actions/setup@v0.7.1   # installs apmx 0.7.1
 - run: apmx audit
   env: { GH_TOKEN: "${{ github.token }}" }
 ```

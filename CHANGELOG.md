@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.7.1 - 2026-10-22
+
+A PR cannot rewrite its own gate; green means accepted by proof, and nothing
+else.
+
+- **Gate on `pull_request_target`.** On `pull_request` a PR could edit or
+  delete its own `audit.yml` and turn the required check green. The shipped
+  templates now run the base branch's copy and execute nothing from the PR
+  (#44). Update your `audit.yml`.
+- **Not a factory delivery.** A PR without a factory attestation fails with a
+  message that says how to merge it instead (#44).
+
 ### Security
 
 - **A PR can no longer rewrite its own gate.** The shipped gate workflows

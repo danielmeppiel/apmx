@@ -77,6 +77,15 @@ class PromotionTests(unittest.TestCase):
         self.assertIn("blob/v0.7.0/CHANGELOG.md", notes)
         self.assertNotIn("## Changes in v0.6.0", notes)
 
+    def test_v071_notes_headline_the_gate_fix(self):
+        notes = promotion.release_notes("0.7.1", "a" * 40)
+        self.assertIn("## Changes in v0.7.1: A PR cannot rewrite its own gate", notes)
+        self.assertIn("pull_request_target", notes)
+        self.assertIn("Not a factory delivery", notes)
+        self.assertIn("@v0.7.1", notes)
+        self.assertIn("blob/v0.7.1/CHANGELOG.md", notes)
+        self.assertNotIn("## Changes in v0.7.0", notes)
+
     def test_v042_notes_preserve_failed_v041_candidate_truth(self):
         notes = promotion.release_notes("0.4.2", "a" * 40)
         self.assertIn("No GitHub release or native assets were published for v0.4.1", notes)

@@ -15,6 +15,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: danielmeppiel/apmx/.github/actions/setup@v0.7.0   # installs apmx 0.7.0
+      - uses: danielmeppiel/apmx/.github/actions/setup@v0.7.1   # installs apmx 0.7.1
       - run: apmx audit
         env: { GH_TOKEN: "${{ github.token }}" }
