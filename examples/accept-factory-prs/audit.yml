@@ -1,12 +1,20 @@
-# .github/workflows/audit.yml in the receiving repository
-on: pull_request
+# .github/workflows/audit.yml in the receiving repository.
+# pull_request_target runs THIS file from the base branch, never the PR's copy,
+# so a PR cannot rewrite its own gate. Nothing from the PR is executed: the PR
+# head is checked out as bytes for `apmx audit` to hash, with no credentials.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
 permissions: { contents: read, attestations: read }
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: danielmeppiel/apmx/.github/actions/setup@v0.7.0   # installs apmx 0.7.0
       - run: apmx audit
         env: { GH_TOKEN: "${{ github.token }}" }

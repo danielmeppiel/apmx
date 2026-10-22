@@ -43,6 +43,12 @@ SYMBOLS = {"pass": "[+]", "fail": "[x]", "warn": "[!]", "info": "[i]", "skipped"
 COLORS = {"pass": "green", "fail": "red", "warn": "yellow", "info": "cyan", "skipped": None}
 EXIT_VALID, EXIT_INVALID, EXIT_UNAVAILABLE = 0, 1, 2
 SARIF_LEVELS = {"fail": "error", "warn": "warning"}
+NOT_FACTORY = (
+    "Not a factory delivery: no changed file carries an attestation from factories.signers. "
+    "This check only passes factory deliveries; merge other PRs through your normal review "
+    "process (e.g. a ruleset bypass for maintainers)."
+)
+MAX_LOOKUPS = 1000
 
 
 @dataclass
@@ -409,12 +415,16 @@ def run_gate(
         _not_evaluated(audit, "not evaluated (no signer to look attestations up from)")
         return audit
     present = sorted(path for path, status in change.changed.items() if status != "D")
-    if not present:
-        audit.fail("Outputs", f"{change.pull.label} adds or modifies no file to look up")
-        _not_evaluated(audit, "not evaluated (nothing to look up)")
-        return audit
-    head = change.files(change.pull.head, present)
+    head = change.files(change.pull.head, present) if present else {}
     wanted = {path: verifier.sha256(raw) for path, (_, raw) in head.items() if raw is not None}
+    if offline:
+        audit.incomplete("Identity", "signature not checked (offline)")
+        _not_evaluated(audit, "not evaluated (no signed delivery covers this PR)")
+        return audit
+    attested = _factory_file(audit, change, rules, wanted, run)
+    if attested is None:
+        return audit
+    present = [attested, *(path for path in present if path != attested)]
     if set(wanted) != set(present):
         missing = min(set(present) - set(wanted))
         audit.fail("Outputs", f"{change.pull.label} changes {missing} into a non-regular file")
@@ -432,13 +442,11 @@ def run_gate(
 
     with tempfile.TemporaryDirectory(prefix="apmx-gate-") as temporary:
         artifact = Path(temporary) / "artifact"
-        result = identities.Identity("unavailable", "signature not checked (offline)")
-        # A summary is looked up by a changed file's digest; files the delivery does not
-        # name have none, so try a few before concluding that nothing covers the PR.
+        result = identities.Identity("unavailable", "signature not checked")
+        # A summary is looked up by a changed file's digest, starting with the file that
+        # carries a factory attestation; files the delivery does not name have none.
         for first in present[:10]:
             artifact.write_bytes(head[first][1])
-            if offline:
-                break
             result = identities.verify(
                 artifact,
                 covers,
@@ -520,6 +528,73 @@ def run_gate(
                 audit.fail("Outputs", _ascii(detail), notes)
     _policy_rows(audit, receipt, policy, structural=structural, offline=offline)
     return audit
+
+
+def _factory_file(
+    audit: Audit,
+    change: changes.Change,
+    rules: policies.FactoryPolicy,
+    wanted: dict[str, str],
+    run: identities.Runner | None,
+) -> str | None:
+    """The first changed file that carries a factory attestation; else settle the audit.
+
+    A PR none of whose files carries one is not a factory delivery: it fails (exit 1)
+    with a message that says how such PRs are merged. A lookup that fails is
+    INCOMPLETE (exit 2). Either way the result is never a pass.
+    """
+    default = identities.repository(change.root)
+    repositories = list(dict.fromkeys(signer.repo or default for signer in rules.signers))
+    digests = list(dict.fromkeys(wanted.values()))
+    facts: dict[str, object] = {
+        "factory": False,
+        "lookedUp": len(digests),
+        "repositories": [repo for repo in repositories if repo],
+    }
+    audit.facts["delivery"] = facts
+    unavailable: list[str] = []
+    if None in repositories:
+        unavailable.append("a signer has no repository to look up attestations in")
+        repositories = [repo for repo in repositories if repo]
+    lookups = 0
+    seen: set[str] = set()
+    for path, digest in sorted(wanted.items()):
+        if digest in seen:
+            continue
+        seen.add(digest)
+        for repo in repositories:
+            lookups += 1
+            if lookups > MAX_LOOKUPS:
+                audit.incomplete(
+                    "Identity",
+                    f"{len(digests)} changed files are too many to look up (at most "
+                    f"{MAX_LOOKUPS} attestation lookups)",
+                )
+                _not_evaluated(audit, "not evaluated (attestations not looked up)")
+                return None
+            status, reason = identities.carries(digest, repo, run)
+            if status == "factory":
+                facts.update(factory=True, attested=path, repository=repo)
+                return path
+            if status == "unavailable":
+                unavailable.append(f"{path} in {repo}: {reason}")
+    if unavailable:
+        audit.incomplete(
+            "Identity",
+            "attestations could not be looked up",
+            [_ascii(note) for note in unavailable[:5]],
+        )
+        _not_evaluated(audit, "not evaluated (attestations not looked up)")
+        return None
+    where = ", ".join(facts["repositories"]) or "no repository"
+    audit.fail(
+        "Identity",
+        f"not a factory delivery: none of {len(digests)} changed file digest(s) carries a "
+        f"factory attestation in {where}",
+    )
+    audit.reason = NOT_FACTORY
+    _not_evaluated(audit, "not evaluated (not a factory delivery)")
+    return None
 
 
 def to_json(audit: Audit) -> str:
@@ -629,6 +704,8 @@ def to_text(audit: Audit, *, color: bool = False) -> str:
     lines.append("")
     if audit.result == "valid":
         lines.append(f"{mark('pass')} VALID   ({audit.assurance})")
+    elif audit.result == "invalid" and audit.reason == NOT_FACTORY:
+        lines.append(f"{mark('fail')} {NOT_FACTORY}")
     elif audit.result == "invalid":
         lines.append(f"{mark('fail')} INVALID   {audit.reason}")
     else:
@@ -650,7 +727,9 @@ AUDIT_HELP = (
     "looked up by SHA-256 in the attestation store of the policy's factories.signers; "
     "every changed file must be a subject of one PASSED verification summary from an "
     "allowed signer, which binds the receipt statements by digest; files the PR touches "
-    "must match the recorded before-images at the PR base. RECEIPT is the offline route: "
+    "must match the recorded before-images at the PR base. A PR none of whose files "
+    "carries a factory attestation fails as not a factory delivery: the check only passes "
+    "factory deliveries. RECEIPT is the offline route: "
     "a receipt.intoto.jsonl (or its run directory), with --outputs DIR.\n\n"
     "The policy is discovered like `apm audit`: --policy, else the repository's "
     "apm-policy.yml (the PR base copy in a PR), else the org policy from the git remote. "

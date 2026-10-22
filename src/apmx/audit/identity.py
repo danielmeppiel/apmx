@@ -42,6 +42,7 @@ from . import verifier
 
 PREDICATE_TYPE = verifier.VSA
 BUNDLE_TYPE = verifier.BUNDLE_TYPE
+FACTORY_TYPES = (PREDICATE_TYPE, BUNDLE_TYPE)
 ISSUER = "https://token.actions.githubusercontent.com"
 _NOT_FOUND = ("no attestations found", "no matching attestations", "http 404")
 # Attestations exist but none satisfies the signer constraints. gh reports this,
@@ -161,6 +162,48 @@ def _check(result: dict, *, digest: str, accept: Accept, workflow: str) -> tuple
     if reason is not None:
         return None, reason
     return ref, ""
+
+
+def carries(digest: str, repo: str, run: Runner | None = None) -> tuple[str, str | None]:
+    """Does ``repo``'s attestation store hold a factory attestation for ``digest``?
+
+    (``factory``, None) | (``none``, None) | (``unavailable``, reason). This only
+    chooses the message for a PR the gate refuses, so nothing here is trusted:
+    an attestation of apmx's receipt bundle or of a SLSA VSA, from any workflow,
+    counts, and so does one whose predicate type cannot be read. Only a lookup
+    that succeeds and finds none of them is ``none``.
+    """
+    run = run or _gh
+    try:
+        code, out, err = run(
+            ["gh", "api", f"repos/{repo}/attestations/sha256:{digest}?per_page=100"]
+        )
+    except FileNotFoundError:
+        return "unavailable", "the GitHub CLI (gh) is not installed"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "unavailable", f"gh failed ({type(exc).__name__})"
+    if code != 0:
+        text = (err + out).decode("utf-8", errors="replace").lower()
+        if "http 404" in text or '"status":"404"' in text.replace(" ", ""):
+            return "none", None
+        last = [line for line in err.decode("utf-8", errors="replace").splitlines() if line.strip()]
+        return "unavailable", _ascii(last[-1] if last else "gh api failed")
+    try:
+        listed = json.loads(out)["attestations"]
+        if not isinstance(listed, list):
+            raise TypeError
+    except (ValueError, KeyError, TypeError):
+        return "unavailable", "gh api returned unparseable attestations"
+    for item in listed:
+        bundle = item.get("bundle") if isinstance(item, dict) else None
+        payload = ((bundle or {}).get("dsseEnvelope") or {}).get("payload")
+        try:
+            kind = json.loads(base64.b64decode(payload, validate=True)).get("predicateType")
+        except (ValueError, TypeError, AttributeError):
+            return "factory", None
+        if kind in FACTORY_TYPES:
+            return "factory", None
+    return "none", None
 
 
 def _attestations(

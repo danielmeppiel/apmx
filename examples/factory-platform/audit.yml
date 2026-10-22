@@ -1,12 +1,17 @@
 # .github/workflows/apmx-audit.yml in acme/factory-platform: the gate an
 # organization ruleset requires on every repository (see README). It runs
 # from this file at the ruleset's pinned ref, never from the pull request.
+# pull_request_target: the base side's workflow runs, never the PR's copy, and
+# nothing from the PR is executed (its head is checked out as bytes only).
+# Every PR must be a factory delivery to pass; merge other PRs through the
+# repository's normal review path (a ruleset bypass for maintainers).
 name: apmx audit
-on: pull_request
-permissions: { contents: read }
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+permissions: { contents: read, attestations: read }
 jobs:
   audit:
-    if: startsWith(github.head_ref, 'apmx/')   # factory branches; other PRs follow normal review
     runs-on: ubuntu-latest
     steps:
       - id: token   # read-only: the platform's attestations and the org policy
@@ -19,7 +24,10 @@ jobs:
           permission-attestations: read
           permission-contents: read
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0, persist-credentials: false }
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: danielmeppiel/apmx/.github/actions/setup@v0.7.0
       - run: apmx audit
         env: { GH_TOKEN: "${{ steps.token.outputs.token }}" }

@@ -137,7 +137,7 @@ jobs:
           printf ' ' >> "$FACTORY/handoff.json"
           git commit -qam "edit the delivered file"
           event
-          expect "$RUNNER_TEMP/policy.yml" "^\[x\] Identity      no PASSED verification summary"
+          expect "$RUNNER_TEMP/policy.yml" "^\[x\] Not a factory delivery: no changed file carries an attestation"
           git reset -q --hard HEAD~1
           echo "smuggled" > "$FACTORY/smuggled.txt"
           git add -A && git commit -qm "smuggle a file"

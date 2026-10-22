@@ -354,6 +354,48 @@ def test_cyclic_extends_is_unloadable(tmp_path) -> None:
     assert resolution.status == "unloadable" and "cyclic" in resolution.detail
 
 
+def _repository(tmp_path: Path) -> str:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "remote", "add", "origin", "https://github.com/acme/shop.git")
+    (tmp_path / "README.md").write_text("base\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "base")
+    return _git(tmp_path, "rev-parse", "HEAD")
+
+
+def test_a_pull_request_never_reads_the_working_tree_policy(tmp_path) -> None:
+    """With no policy at the base, a policy the PR adds is ignored: org discovery applies."""
+    base = _repository(tmp_path)
+    (tmp_path / "apm-policy.yml").write_text("factories:\n  signers: []\n")
+    roots = []
+
+    class Status(Reader):
+        def _status(self, root, source):
+            roots.append(root)
+            return {"outcome": "absent"}
+
+    resolution = policies.resolve(tmp_path, base=base, reader=Status({}))
+    assert resolution.status == "none", resolution.detail
+    # APM ran in an empty project that shares only the origin, not in the PR checkout.
+    (root,) = roots
+    assert root != tmp_path and not (root / "apm-policy.yml").exists()
+    assert _git(root, "remote", "get-url", "origin") == "https://github.com/acme/shop.git"
+
+
+def test_a_pull_request_refuses_a_policy_override_inside_the_checkout(tmp_path) -> None:
+    base = _repository(tmp_path)
+    (tmp_path / "gate.yml").write_text("factories:\n  signers: []\n")
+    resolution = policies.resolve(tmp_path, override="gate.yml", base=base, reader=Reader({}))
+    assert resolution.status == "unloadable"
+    assert "must not name a file in the checkout" in resolution.detail
+    outside = tmp_path.parent / f"{tmp_path.name}-gate.yml"
+    outside.write_text("factories:\n  signers: []\n")
+    reader = Reader({str(outside): _found(str(outside), "empty")})
+    resolution = policies.resolve(tmp_path, override=str(outside), base=base, reader=reader)
+    assert resolution.status == "found", resolution.detail
+    resolution.cleanup()
+
+
 def test_pull_request_reads_the_repository_policy_from_the_base(tmp_path) -> None:
     _git(tmp_path, "init", "-q")
     path = tmp_path / "apm-policy.yml"

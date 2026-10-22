@@ -4,7 +4,8 @@ There is one governance file, ``apm-policy.yml``, found the way APM finds it:
 
 1. ``--policy SOURCE`` (an override: ``org``, ``owner/repo``, ``https://`` or a file).
 2. The repository's ``apm-policy.yml`` at the Git top level. In a pull request
-   it is read from the PR **base** commit, so a PR cannot loosen its own gate.
+   it is read from the PR **base** commit, so a PR cannot loosen its own gate;
+   nothing in the PR's working tree is read, and APM runs in an empty project.
 3. The organization policy repository APM discovers from the ``origin`` remote
    (``.github-private``, ``.github``, ``.apm``, ``_apm``), following ``extends:``.
 
@@ -454,25 +455,46 @@ def resolve(
     root = repository_root(cwd)
     temporary = None
     origin = None
+    tools = root
+    if base is not None:
+        # A pull request's working tree is the PR's own content: nothing in it is
+        # read. APM runs, and relative policy references resolve, in an empty
+        # project that only shares the repository's origin.
+        origin = origin_remote(root)
+        temporary = tempfile.TemporaryDirectory(prefix="apmx-policy-")
+        tools = Path(temporary.name)
+        _git(tools, "init", "--quiet")
+        if origin is not None:
+            _git(tools, "remote", "add", "origin", origin)
     if override is not None:
         candidate = Path(override).expanduser()
         candidate = candidate if candidate.is_absolute() else cwd / candidate
         if candidate.is_file():
             source, kind, label = str(candidate.resolve()), "file", f"{override} (--policy)"
+            if base is not None and Path(source).is_relative_to(root.resolve()):
+                temporary.cleanup()
+                return _unloadable(
+                    label,
+                    PolicyError(
+                        "in a pull request, --policy must not name a file in the checkout: "
+                        "that is the PR's own copy"
+                    ),
+                )
         else:
             source, kind, label = override, "remote", f"{override} (--policy)"
     elif base is not None and _git(root, "cat-file", "-e", f"{base}:{POLICY_FILE}") is not None:
-        temporary = tempfile.TemporaryDirectory(prefix="apmx-policy-")
-        path = Path(temporary.name) / POLICY_FILE
+        path = tools / POLICY_FILE
         path.write_text(_git(root, "show", f"{base}:{POLICY_FILE}") or "", encoding="utf-8")
         source, kind = str(path), "file"
         label = f"{POLICY_FILE} (repository, PR base {base[:12]})"
-    elif (root / POLICY_FILE).is_file():
+    elif base is None and (root / POLICY_FILE).is_file():
         source = str((root / POLICY_FILE).resolve())
         kind, label = "file", f"{POLICY_FILE} (repository)"
     else:
-        origin = origin_remote(root)
+        origin = origin or origin_remote(root)
         if origin is None:
+            if temporary is not None:
+                temporary.cleanup()
             return Resolution(
                 "none",
                 "none found",
@@ -480,6 +502,8 @@ def resolve(
                 facts={"policy": None},
             )
         if offline:
+            if temporary is not None:
+                temporary.cleanup()
             return Resolution(
                 "partial",
                 "org policy not checked (offline)",
@@ -487,7 +511,7 @@ def resolve(
                 facts={"policy": "unchecked-offline"},
             )
         source, kind, label = None, "org", "org policy"
-    resolution = _resolve(reader, root, source, kind, label, offline, override is not None)
+    resolution = _resolve(reader, tools, source, kind, label, offline, override is not None)
     resolution._temporary = temporary
     resolution.origin = origin or origin_remote(root)
     if base is not None and override is None:

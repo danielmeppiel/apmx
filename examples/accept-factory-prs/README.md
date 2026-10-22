@@ -17,12 +17,22 @@ section and one workflow step.
 2. **Pin what you accept.** Copy [`apm-policy.yml`](apm-policy.yml) to the
    receiving repository's root: the approved factory definition digest, the
    signer workflow at its commit, and any revoked capability content.
-3. **Gate the PR.** Add [`audit.yml`](audit.yml). `apmx audit` looks the PR's
+3. **Gate the PR.** Add [`audit.yml`](audit.yml) and make its `audit` check
+   required, with GitHub Actions as the expected source. It runs on
+   `pull_request_target`, so the base branch's copy runs and a PR cannot edit
+   or delete its own gate; it checks the PR head out as bytes, without
+   credentials, and executes nothing from it. `apmx audit` looks the PR's
    changed files up by SHA-256 in the signer's attestation store, requires
    every one to be a subject of one PASSED verification summary from the
    allowed signer, checks the receipt statements it binds against the policy
    read from the PR base, and refuses a PR built on a stale base. Exit 0 is
    the pass.
+4. **Merge everything else the normal way.** Green means accepted by proof
+   and nothing else, so auto-merge on the check is safe. A human PR fails it
+   with `Not a factory delivery: no changed file carries an attestation from
+   factories.signers`; maintainers merge it through a ruleset bypass after
+   their usual review, or factories deliver to a repository or branch only
+   they write to.
 
 An excerpt of the gate's output:
 
@@ -39,11 +49,14 @@ Receipt   attestations for PR #42   (looked up by file digest)   5 contracts   s
 [+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
 ```
 
-A PR that also edits anything else, changes `apm-policy.yml`, was not signed
+A factory PR that also edits anything else, changes `apm-policy.yml`, was not signed
 by the allowed signer at its commit, was built on a base that has since
 changed the same files, or uses a factory definition you did not approve fails
 with exit 1. A policy or attestation store that cannot be read is exit 2,
-never a pass. See [docs/audit.md](../../docs/audit.md).
+never a pass. See [docs/audit.md](../../docs/audit.md#a-pr-cannot-rewrite-its-own-gate)
+for why the gate must run on `pull_request_target`, and for organizations, an
+organization ruleset that requires the gate workflow from a central
+repository ([`../factory-platform`](../factory-platform)).
 
 APM 0.33.0 warns `Unknown top-level policy key: 'factories'` when it loads
 this policy. That is expected: the section belongs to apmx.
