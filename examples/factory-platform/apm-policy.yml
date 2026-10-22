@@ -7,8 +7,8 @@ factories:
   require_signed: true
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      # The reviewed run.yml: `git rev-parse v0.6.0^{commit}` in danielmeppiel/apmx.
-      # The annotated tag object's SHA (`git rev-parse v0.6.0`) works too.
-      workflow_sha: cadfa207e4645306199ddb85271c5f3e13340924
+      # The reviewed run.yml: `git rev-parse v0.7.0^{commit}` in danielmeppiel/apmx.
+      # The annotated tag object's SHA (`git rev-parse v0.7.0`) works too.
+      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to that commit
       repo: acme/factory-platform   # the only repository whose runs are trusted
   revoked: []

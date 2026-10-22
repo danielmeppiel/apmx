@@ -5,9 +5,9 @@ description: >
   sha256 input. No Python packages, no pip.
 inputs:
   version:
-    description: apmx release version, for example 0.6.0.
+    description: apmx release version, for example 0.7.0.
     required: false
-    default: "0.6.0"
+    default: "0.7.0"
   sha256:
     description: >
       Optional SHA-256 of the archive for this runner's target. Pin it to trust

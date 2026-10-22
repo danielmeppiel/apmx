@@ -18,7 +18,7 @@ consumers, uses a native APMX bundle and preserves earlier runs when resetting.
 The source-development setup below remains available.
 
 This is the **five-stage example** released with v0.5.0. It requires APMX
-v0.5.0 or later with implicit project capture: a native bundle (current: v0.6.0) through
+v0.5.0 or later with implicit project capture: a native bundle (current: v0.7.0) through
 the demo kit, or the corresponding source checkout with backend provisioning
 and the `factory` extra. Existing v0.4.2 downloads and historical recordings
 below contain the older four-stage example, not this implementation.

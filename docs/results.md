@@ -135,14 +135,14 @@ for new-schema receipts. Do not rename old UNPROVEN/21 or VERIFIED/0 records.
 
 ## Current release versus historical downloads
 
-The v0.6.0 source and native release, like v0.4.2 and v0.5.0 before it, report COMPLETE/0
+The v0.7.0 source and native release, like v0.4.2, v0.5.0 and v0.6.0 before it, report COMPLETE/0
 for successful native execution after exact evidence finalization. The immutable v0.4.0 and
 v0.4.1 tags record failed release-preparation candidates; no release or native
 assets were published for either tag. Historical v0.3.2 native
 binaries and the immutable `be9c5be` source/demo still report UNPROVEN/21.
-The installation guide's source route now uses the `v0.6.0` tag, not that
+The installation guide's source route now uses the `v0.7.0` tag, not that
 historical pin. No v0.3.2 asset, manifest or historical media is rebuilt or
 reused by v0.4.2 or later. Match every adapter to its record version; current smoke
-fixtures target v0.6.0, not old binaries. For scripts running v0.4.2 or later, replace
+fixtures target v0.7.0, not old binaries. For scripts running v0.4.2 or later, replace
 old exit-21 completion special cases with exit 0 success handling; do not apply
 that migration to v0.3.2 binaries.

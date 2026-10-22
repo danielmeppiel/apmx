@@ -1,6 +1,6 @@
 # Install APMX
 
-**Use the [v0.6.0 release page](https://github.com/danielmeppiel/apmx/releases/tag/v0.6.0)
+**Use the [v0.7.0 release page](https://github.com/danielmeppiel/apmx/releases/tag/v0.7.0)
 after its native archives, checksums and manifest are listed.** Verify and
 extract the archive using the [native installation steps](#install-a-prebuilt-archive)
 below. Until those assets appear, use the
@@ -9,7 +9,7 @@ withheld v0.1/v0.2 archives. The immutable v0.4.0 and v0.4.1 tags record failed
 release-preparation candidates; no GitHub release or native assets were
 published for either tag.
 
-The v0.6.0 native bundles include the APMX Python runtime and private **official
+The v0.7.0 native bundles include the APMX Python runtime and private **official
 APM 0.33.0** backend. They need no APMX build, global APM installation or
 experimental activation command. **Contract checks still need their own
 tools**: this factory uses Python 3.12 and Behave 1.3.3.
@@ -18,16 +18,16 @@ tools**: this factory uses Python 3.12 and Behave 1.3.3.
 
 | Route | What you get |
 | --- | --- |
-| [Prebuilt v0.6.0](#install-a-prebuilt-archive) **(recommended when listed)** | Download, verify and extract a complete native bundle. No Python runtime installation for APMX itself. |
-| [Tagged v0.6.0 source](#run-the-current-source-checkout) | A working fallback or development route, including the [approved-client alternative](#managed-environment-installation-optional) for managed environments. |
+| [Prebuilt v0.7.0](#install-a-prebuilt-archive) **(recommended when listed)** | Download, verify and extract a complete native bundle. No Python runtime installation for APMX itself. |
+| [Tagged v0.7.0 source](#run-the-current-source-checkout) | A working fallback or development route, including the [approved-client alternative](#managed-environment-installation-optional) for managed environments. |
 
 Keep the current guide open while following either route. Both routes pin the
-example (and, for source, the runtime) to the immutable **`v0.6.0` tag**, so the
+example (and, for source, the runtime) to the immutable **`v0.7.0` tag**, so the
 five-stage factory matches the release. For a native installation, the example
 checkout must be the bundle's own source commit, recorded in its `RELEASE.json`.
 A version string alone does not identify a build.
 
-**Result-version distinction:** v0.6.0 source and downloads, like v0.4.2 and v0.5.0, return COMPLETE/0
+**Result-version distinction:** v0.7.0 source and downloads, like v0.4.2, v0.5.0 and v0.6.0, return COMPLETE/0
 after exact evidence finalization. Historical v0.3.2 downloads and the earlier
 `be9c5be` source pin still return UNPROVEN/21 for completed native runs; those
 downloads, that pin and the historical demo are unchanged. See
@@ -36,7 +36,7 @@ files together. Release availability is not a claim of fresh model execution.
 
 ## Install a prebuilt archive
 
-The [v0.6.0 release page](https://github.com/danielmeppiel/apmx/releases/tag/v0.6.0)
+The [v0.7.0 release page](https://github.com/danielmeppiel/apmx/releases/tag/v0.7.0)
 is the publication location for the five platform archives below, their
 checksum sidecars and the release manifest. Do not run the download blocks
 until all three are listed. Published downloads do not require GitHub
@@ -53,11 +53,11 @@ Choose the archive matching your operating system and CPU:
 
 | Machine | Archive |
 | --- | --- |
-| macOS, Apple Silicon | `apmx-0.6.0-macos-arm64.tar.gz` |
-| macOS, Intel | `apmx-0.6.0-macos-x86_64.tar.gz` |
-| Linux, x86-64 | `apmx-0.6.0-linux-x86_64.tar.gz` |
-| Linux, ARM64 | `apmx-0.6.0-linux-arm64.tar.gz` |
-| Windows, x86-64 | `apmx-0.6.0-windows-x86_64.zip` |
+| macOS, Apple Silicon | `apmx-0.7.0-macos-arm64.tar.gz` |
+| macOS, Intel | `apmx-0.7.0-macos-x86_64.tar.gz` |
+| Linux, x86-64 | `apmx-0.7.0-linux-x86_64.tar.gz` |
+| Linux, ARM64 | `apmx-0.7.0-linux-arm64.tar.gz` |
+| Windows, x86-64 | `apmx-0.7.0-windows-x86_64.zip` |
 
 Each archive has a same-name `.sha256` sidecar. `release-manifest.json` binds
 the five archives to the release version and full source commit.
@@ -70,7 +70,7 @@ The download commands use `curl` and do not need GitHub CLI authentication.
 Change `target` to one of the four macOS/Linux targets in the table:
 
 ```sh
-version=0.6.0
+version=0.7.0
 target=macos-arm64
 archive="apmx-$version-$target.tar.gz"
 install_dir="$HOME/.local/share/apmx/$version"
@@ -105,7 +105,7 @@ command -v apmx
 apmx --version
 ```
 
-Expect the command under `APMX_NATIVE_ROOT` and version `0.6.0`. This PATH applies
+Expect the command under `APMX_NATIVE_ROOT` and version `0.7.0`. This PATH applies
 to the current terminal. Keep the full extracted directory in place, then
 continue with [example checker setup](#macos-and-linux-checker-setup).
 
@@ -117,7 +117,7 @@ launched from PowerShell. Do not mix native Windows and WSL tools; inside WSL,
 use the Linux archive and instructions instead.
 
 ```powershell
-$version = "0.6.0"
+$version = "0.7.0"
 $archive = "apmx-$version-windows-x86_64.zip"
 $installDir = Join-Path $env:LOCALAPPDATA "apmx\$version"
 $releaseUrl = "https://github.com/danielmeppiel/apmx/releases/download/v$version"
@@ -139,7 +139,7 @@ apmx --version
 if ($LASTEXITCODE -ne 0) { throw "APMX version check failed." }
 ```
 
-Expect `apmx.exe` in the extracted directory, version `0.6.0`, native
+Expect `apmx.exe` in the extracted directory, version `0.7.0`, native
 `copilot.exe`, and `sh.exe` from Git for Windows. If `sh` is missing, add your
 actual Git for Windows `bin` directory to this terminal's PATH. Continue with
 [Windows checker setup](#windows-checker-setup).
@@ -186,7 +186,7 @@ does not supply the tools used by a contract's independent checks.
 The software-factory example needs **Python 3.12** and **Behave 1.3.3**.
 Other contracts may use different tools.
 
-The commands below clone the example at the `v0.6.0` tag, confirm it is the
+The commands below clone the example at the `v0.7.0` tag, confirm it is the
 source commit of your native bundle, and create a **checks-only** environment.
 They do not install APMX from source or replace the downloaded executable. Do not run `uv sync` or install this checkout into the check
 environment. Keep your organization's approved package proxy and certificate
@@ -200,7 +200,7 @@ directory and a native Python 3.12 installation with `venv` support:
 ```sh
 git clone https://github.com/danielmeppiel/apmx.git apmx-examples &&
 cd apmx-examples &&
-git checkout --detach v0.6.0 &&
+git checkout --detach v0.7.0 &&
 bundle_commit="$(python3 -c 'import json, os, sys; print(json.load(open(os.path.join(os.environ["APMX_NATIVE_ROOT"], "RELEASE.json")))["source_commit"])')" &&
 test "$(git rev-parse HEAD)" = "$bundle_commit" &&
 python3.12 -m venv .apmx-checks &&
@@ -286,7 +286,7 @@ use PowerShell:
 git clone https://github.com/danielmeppiel/apmx.git apmx-examples
 if ($LASTEXITCODE -ne 0) { throw "Clone failed; stop here." }
 Set-Location apmx-examples
-git checkout --detach v0.6.0
+git checkout --detach v0.7.0
 if ($LASTEXITCODE -ne 0) { throw "Tagged checkout failed; stop here." }
 $revision = git rev-parse HEAD
 $bundleCommit = (Get-Content (Join-Path $env:APMX_NATIVE_ROOT "RELEASE.json") -Raw | ConvertFrom-Json).source_commit
@@ -376,12 +376,12 @@ together even as the default branch changes:
 ```sh
 git clone https://github.com/danielmeppiel/apmx.git apmx-source &&
 cd apmx-source &&
-git checkout --detach v0.6.0 &&
+git checkout --detach v0.7.0 &&
 git describe --exact-match --tags HEAD &&
 git rev-parse HEAD
 ```
 
-`git describe` must print `v0.6.0`; keep the printed commit as this
+`git describe` must print `v0.7.0`; keep the printed commit as this
 installation's source identity. An unavailable tag or access error is a stop,
 not a reason to substitute `main` or an older release tag.
 
@@ -425,11 +425,11 @@ In PowerShell, with Git, uv and native Copilot already installed:
 git clone https://github.com/danielmeppiel/apmx.git apmx-source
 if ($LASTEXITCODE -ne 0) { throw "Clone failed; stop here." }
 Set-Location apmx-source
-git checkout --detach v0.6.0
+git checkout --detach v0.7.0
 if ($LASTEXITCODE -ne 0) { throw "Tagged checkout failed; stop here." }
 $tag = git describe --exact-match --tags HEAD
-if ($LASTEXITCODE -ne 0 -or $tag -ne "v0.6.0") {
-  throw "Source revision is not v0.6.0; stop here."
+if ($LASTEXITCODE -ne 0 -or $tag -ne "v0.7.0") {
+  throw "Source revision is not v0.7.0; stop here."
 }
 git rev-parse HEAD
 uv sync --frozen --python 3.12 --extra factory
@@ -490,7 +490,7 @@ proxy addresses, credentials or certificate configuration into this repository.
 Use your organization's approved client for these steps, **instead of**
 `uv sync`; runtime source and locked dependency versions/hashes stay the same:
 
-1. In a fresh checkout at the exact `v0.6.0` tag above, create a new Python 3.12
+1. In a fresh checkout at the exact `v0.7.0` tag above, create a new Python 3.12
    `.venv`, for example with `uv venv --python 3.12 .venv`. Export the canonical
    factory requirements using
    `uv export --frozen --format requirements-txt --no-emit-project --no-dev --extra factory`.
@@ -502,7 +502,7 @@ Use your organization's approved client for these steps, **instead of**
    values from this same pinned `uv.lock`. Do not resolve an unpinned build
    environment: `--frozen` for the application lock does not itself freeze
    isolated build requirements. The `be9c5be` editable build succeeded with
-   that locked setuptools, which `v0.6.0` also pins; a separate wheel package was not needed.
+   that locked setuptools, which `v0.7.0` also pins; a separate wheel package was not needed.
 3. Install the pinned checkout with the approved pip client targeting the same
    environment: `install --no-index --no-deps --no-build-isolation --editable .`.
    Run its `check` command against that environment. For a preconfigured system
@@ -532,7 +532,7 @@ installation process, not an unqualified `uv sync`.
 The historical v0.1/v0.2 archives remain withheld and are not an installation
 fallback. Their Linux bundles omitted the required libffi MIT notice. The new
 v0.3.2 distribution passed the corrected third-party notice gates. Each fresh
-distribution, including v0.6.0, must independently pass the same gates; no release's
+distribution, including v0.7.0, must independently pass the same gates; no release's
 availability makes those older archives acceptable.
 
 For source history, v0.2.0 corresponds to
@@ -548,8 +548,8 @@ separate from the withheld APMX archives.
 ## Migrating from v0.2.0 to v0.3.0
 
 This section describes migration from older source or installations to v0.3.0.
-These compatibility changes also apply to v0.3.2 and remain in v0.6.0. Use the
-[prebuilt v0.6.0 release](#install-a-prebuilt-archive) or the pinned source
+These compatibility changes also apply to v0.3.2 and remain in v0.7.0. Use the
+[prebuilt v0.7.0 release](#install-a-prebuilt-archive) or the pinned source
 fallback; old native archives remain withheld.
 
 **Breaking compatibility change: imported skill metadata.** A skill accepted by
@@ -583,7 +583,7 @@ project skills from existing in your checkout.
 Scalar contracts and existing single-contract invocations remain supported.
 Historical v0.3.2 downloads and the earlier `be9c5be` source pin retain scalar
 `apm-contract-run/0.1` and multi-output `apm-contract-run/0.2` records. Current
-v0.6.0 source and downloads use leaf schema `apm-contract-run/0.3` for both and
+v0.7.0 source and downloads use leaf schema `apm-contract-run/0.3` for both and
 factory schema `apmx-contract-chain/0.2`. Consumers of records should inspect
 the schema instead of assuming every delivery is one file. Existing runs,
 snapshots and artifact paths are not migrated or rewritten.
@@ -594,7 +594,7 @@ every declared output, passing
 required checks, intact inventory and consent. For automation, pass both
 `--allow-host-access` and `--allow-unproven-inputs`. Native execution remains
 unsandboxed. Historical v0.3.2 and `be9c5be` runs remain **UNPROVEN / exit 21**,
-even when checks pass; v0.6.0 source and downloads require complete validated
+even when checks pass; v0.7.0 source and downloads require complete validated
 evidence for **COMPLETE / exit 0**. Behave remains an
 optional checker prerequisite for the software-factory example, not an APMX
 requirement.

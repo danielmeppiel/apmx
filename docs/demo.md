@@ -5,8 +5,9 @@ Don't trust the agent; trust the proof." About 10 minutes:
 
 1. **Run the factory** on a laptop with a native harness.
 2. **Prove it** with `apmx audit`, then the same factory on another harness.
-3. **Accept the PR by proof:** the factory runs in CI, signs its receipt, and
-   opens a pull request whose only gate is that same audit.
+3. **Accept the PR by proof:** the factory runs in CI, signs what it
+   delivered, and opens a code-only pull request whose only gate is that same
+   audit.
 
 The macOS/Linux kit below separates machine preparation from the presentation.
 It uses a genuine native APMX bundle, its official APM backend and an unchanged
@@ -98,27 +99,33 @@ signer workflow `danielmeppiel/apmx/.github/workflows/run.yml`. Its only PR
 gate is `apmx audit`. See [Accept factory PRs by
 proof](../examples/accept-factory-prs/README.md).
 
-The factory runs in CI through `run.yml@v0.6.0` with `factory:
+The factory runs in CI through `run.yml@v0.7.0` with `factory:
 "danielmeppiel/apmx-demo-factory#v1.0.0"` and `checks-requirements:`, as three
 jobs:
 
 - **produce:** the agent, with a read-only token; the only job that sees the
   model token.
 - **check:** a fresh runner and no agent; `apmx check` reruns the checks on
-  the output bytes and writes the receipt of record.
-- **attest:** OIDC signs the receipt, with no candidate code present.
+  the output bytes and writes the receipt of record: one
+  `receipt.intoto.jsonl` bundle (SLSA provenance, test results, CycloneDX).
+- **attest:** OIDC signs a SLSA Verification Summary over the delivered files
+  and attests the receipt bundle beside it, with no candidate code present.
 
-Show two pull requests' `audit` checks:
+The pull request carries **code only**: the delivered files (the patched
+`src/pricing.py`, not a patch) and no receipt. `apmx audit` looks each changed
+file up by SHA-256 in the signer's attestation store. Show two pull requests'
+`audit` checks:
 
 - **The genuine delivery:** Policy, Factory (on `factories.allow`), Outputs
-  (the PR's change is exactly the delivered patches, applied to the base) and
+  (every changed file is a delivered file, built on the same base) and
   Identity (`signed by .../run.yml@...`) pass: `VALID (authenticated)`.
-- **The same delivery plus one unrelated edit:** the signature still verifies,
-  but Outputs fails (`PR changes <file>, which the receipt does not bind`):
-  `INVALID`, exit 1.
+- **The same delivery plus one unrelated edit:** nothing signed covers that
+  file, so Identity fails (`no PASSED verification summary from
+  factories.signers covers every changed file (<file> is not a delivered
+  file)`): `INVALID`, exit 1.
 
-"The signature is valid. What fails is the binding: this PR is more than the
-factory delivered, so it cannot merge."
+"The delivered files are signed. The extra file is not: this PR is more than
+the factory delivered, so it cannot merge."
 
 ### Honest limits
 
@@ -206,7 +213,7 @@ From the source checkout, supply the trusted archive hash and checker interprete
 
 ```sh
 python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
-  --archive /absolute/path/to/apmx-0.6.0-macos-arm64.tar.gz \
+  --archive /absolute/path/to/apmx-0.7.0-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --python /absolute/path/to/checker-environment/bin/python \
   --verifier-python /absolute/path/to/independent-verifier/bin/python \
@@ -229,7 +236,7 @@ pinned remote package instead of the local example copy:
 
 ```sh
 python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
-  --archive /absolute/path/to/apmx-0.6.0-macos-arm64.tar.gz \
+  --archive /absolute/path/to/apmx-0.7.0-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --python /absolute/path/to/checker-environment/bin/python \
   --verifier-python /absolute/path/to/independent-verifier/bin/python \

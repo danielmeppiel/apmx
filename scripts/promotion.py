@@ -247,6 +247,31 @@ def release_notes(version: str, commit: str) -> str:
             f"See the [v0.6.0 changelog](https://github.com/{REPOSITORY}/blob/v{version}/"
             "CHANGELOG.md).\n\n"
         )
+    if version == "0.7.0":
+        patch_notes = (
+            "## Changes in v0.7.0: One receipt bundle, code-only PRs, central factories\n\n"
+            "Receipts are one standard in-toto bundle; PRs carry only code; run factories "
+            "centrally across repos.\n\n"
+            "- **Breaking:** every COMPLETE run writes one `receipt.intoto.jsonl` (SLSA "
+            "Provenance v1, in-toto Test Results and the CycloneDX 1.5 inventory, one DSSE "
+            "envelope per line) plus content-addressed `evidence/sha256/<hex>`. It replaces the "
+            "v1 `receipt/` folder, which is no longer read.\n"
+            "- PRs carry code only. `run.yml` signs a SLSA Verification Summary over the "
+            "delivered files and attests the receipt bundle beside it; `apmx audit` looks the "
+            "PR's changed files up by SHA-256 in the signer's attestation store and refuses a "
+            "PR built on a stale base.\n"
+            "- Run factories centrally: `run.yml` takes `target-repository`, `target-ref`, a "
+            "GitHub App (`target-app-client-id`, `target-app-private-key`) or `target-token`, "
+            "and `deliver: pull-request|branch|bundle`. The agent's job never receives a target "
+            "credential (`examples/factory-platform`).\n"
+            "- Pin a signer to immutable code with `factories.signers[].workflow_sha`; the "
+            "signing certificate's commit or annotated tag object both match.\n"
+            "- `apmx audit --explain` and `--export abom`; stages record harness, harness "
+            "version and models (recorded, not yet enforced).\n"
+            "- Reference the actions and `run.yml` at `@v0.7.0` or its commit SHA.\n\n"
+            f"See the [v0.7.0 changelog](https://github.com/{REPOSITORY}/blob/v{version}/"
+            "CHANGELOG.md).\n\n"
+        )
     return (
         f"Standalone apmx {version}; candidate commit `{commit}`.\n\n{patch_notes}"
         "## What's new since v0.2.0\n\n"
