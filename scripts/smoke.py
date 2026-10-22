@@ -1110,7 +1110,7 @@ def _run_case(
         if selection == "package":
             require(
                 audit["facts"].get("apmAudit", {}).get("passed") is True,
-                "Bundled APM did not audit the package receipt's ingredients",
+                "Bundled APM did not audit the package receipt's dependencies",
             )
     return {
         "selection": selection, "mode": mode, "exit_code": result.returncode,

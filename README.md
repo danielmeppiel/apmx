@@ -160,11 +160,10 @@ Receipt   feature-factory/.apm/chains/<id>/receipt.intoto.jsonl   5 contracts   
 
 [i] Policy        none found
                   APM reports absent: no apm-policy.yml applies
-[+] Integrity     11 statements; line digests computed; evidence 31/31 blobs verified
-[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Integrity     11 statements intact and well-formed; line digests computed; evidence 31/31 blobs verified
 [+] Factory       definition sha256:...  5 contracts, 9 checks
 [+] Checks        9/9 passed (in-toto test-result)
-[+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
+[+] Dependencies  1 APM dependency   apm audit --ci: clean (content, lock, drift)
                   installed bytes match CycloneDX inventory and recorded hashes
 [i] Revocation    no policy: nothing revoked to check
 [+] Outputs       4/4 delivered files match receipt subjects (re-hashed)
@@ -175,7 +174,7 @@ Receipt   feature-factory/.apm/chains/<id>/receipt.intoto.jsonl   5 contracts   
 ```
 
 `apmx audit --explain` prints what the receipt records (factory, stages,
-checks, ingredients, outputs); `apmx audit --export abom` writes the CycloneDX
+checks, dependencies, outputs); `apmx audit --export abom` writes the CycloneDX
 inventory as a standalone file for SBOM tools.
 
 For dependencies, `apmx audit` reinstalls the recorded lock with the bundled

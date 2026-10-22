@@ -61,10 +61,10 @@ apmx audit .apm/chains/<run-id>/receipt.intoto.jsonl
 ```
 
 Walk the rows: **Integrity** (one in-toto bundle, its evidence blobs
-verified by digest), **Standards** (in-toto, SLSA v1, CycloneDX 1.5,
-schema-valid), **Factory** (the definition digest of these contracts, checks
+verified by digest, every statement schema-valid against in-toto, SLSA v1 and
+CycloneDX 1.5), **Factory** (the definition digest of these contracts, checks
 and package commit),
-**Checks**, **Ingredients** (APM reinstalls the pinned capability and runs
+**Checks**, **Dependencies** (APM reinstalls the pinned capability and runs
 `apm audit`), **Outputs**, and **Identity**: `[!] unsigned`. A laptop receipt
 proves content binding, not who ran it. Act 3 adds the signature. `apmx audit
 --explain stages` shows the harness and models each stage reported. See
@@ -140,7 +140,7 @@ trustworthy, and checks assess only their stated scope. Native execution is not
 a sandbox. Every workflow that calls `run.yml` at the pinned ref can sign; the
 policy pins the reusable workflow, not its caller. Never present exit 20, 21,
 22 or 23 as success. With no network, `apmx audit --offline` still checks
-Integrity, Standards, Factory, Checks and Outputs.
+Integrity, Factory, Checks and Outputs.
 
 ## Reset and relaunch
 

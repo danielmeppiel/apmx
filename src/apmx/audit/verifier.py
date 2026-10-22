@@ -22,9 +22,9 @@ optional: each blob present is checked against the digest that names it.
 
 Checks run in report rows, each stopping at its first failure:
 
-- Integrity: envelopes, line digests, the VSA's inputAttestations and evidence blobs.
-- Standards: in-toto Statement v1, SLSA Provenance v1, in-toto Test Result,
-  CycloneDX 1.5 and SLSA VSA v1 schema validity.
+- Integrity: envelopes, line digests, the VSA's inputAttestations and evidence
+  blobs, then schema validity against the standards (in-toto Statement v1, SLSA
+  Provenance v1, in-toto Test Result, CycloneDX 1.5 and SLSA VSA v1).
 - Factory: build type, factory definition, stages and capability bindings agree.
 - Checks: every declared check of the final candidate is present and PASSED.
 - Outputs: every statement names the same delivered files; before-images,
@@ -73,7 +73,7 @@ SCHEMAS = {
     "jsf-0.82.schema.json": "8bae002c25e723db7ee1f26afde680ae1a2b1a8f6b4b4b0fd65dc3becb090aae",
 }
 BUNDLED_SCHEMAS = Path(__file__).resolve().parent / "schemas"
-ROWS = ("Integrity", "Standards", "Factory", "Checks", "Outputs")
+ROWS = ("Integrity", "Factory", "Checks", "Outputs")
 ASSURANCE = "Unsigned content binding and format compatibility, not authenticated attestation."
 MAX_BUNDLE = 16 * 1024 * 1024
 MAX_LINES = 4096
@@ -394,7 +394,8 @@ def _parse_lines(receipt: Receipt) -> None:
         receipt.digests.append(line_digest(content))
 
 
-def _integrity(receipt: Receipt) -> None:
+def _integrity(receipt: Receipt, schemas: Path | None) -> None:
+    """Intact (envelopes, digests, bindings, blobs), then well-formed (standards schemas)."""
     _parse_lines(receipt)
     kinds = [item.get("predicateType") for item in receipt.statements]
     require(kinds.count(PROVENANCE) == 1, "Expected exactly one SLSA provenance statement.")
@@ -405,7 +406,7 @@ def _integrity(receipt: Receipt) -> None:
     receipt.bom = receipt.statements[kinds.index(CYCLONEDX)]["predicate"]
     receipt.tests = [item for item in receipt.statements if item["predicateType"] == TEST_RESULT]
     others = [d for d, kind in zip(receipt.digests, kinds, strict=True) if kind != VSA]
-    detail = f"{len(receipt.statements)} statements; line digests computed"
+    detail = f"{len(receipt.statements)} statements intact and well-formed; line digests computed"
     if VSA in kinds:
         receipt.vsa = receipt.statements[kinds.index(VSA)]
         named = [_digest(item) for item in receipt.vsa["predicate"]["inputAttestations"]]
@@ -435,6 +436,7 @@ def _integrity(receipt: Receipt) -> None:
         if receipt.evidence is not None
         else "; evidence not present (optional)"
     )
+    _standards(receipt, schemas)
     receipt.details["Integrity"] = detail
 
 
@@ -535,10 +537,12 @@ def _standards(receipt: Receipt, schemas: Path | None) -> None:
         testResultStatements=len(receipt.tests),
         signedSummary=receipt.vsa is not None,
     )
-    receipt.details["Standards"] = (
-        "in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5"
-        + (", SLSA VSA v1" if receipt.vsa is not None else "")
-        + ": schema-valid"
+
+
+def standards(receipt: Receipt) -> str:
+    """The standards a verified receipt's statements are schema-valid against."""
+    return "in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5" + (
+        ", SLSA VSA v1" if receipt.vsa is not None else ""
     )
 
 
@@ -921,8 +925,7 @@ def _inspect(
     receipt: Receipt, schemas: Path | None, require_capability: bool
 ) -> tuple[Receipt, Failure | None]:
     steps = (
-        ("Integrity", lambda: _integrity(receipt)),
-        ("Standards", lambda: _standards(receipt, schemas)),
+        ("Integrity", lambda: _integrity(receipt, schemas)),
         ("Factory", lambda: _factory(receipt, require_capability)),
         ("Checks", lambda: _checks(receipt)),
         ("Outputs", lambda: _outputs(receipt)),

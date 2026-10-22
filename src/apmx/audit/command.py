@@ -24,17 +24,16 @@ from . import explain as explanation
 from . import identity as identities
 from . import policy as policies
 from . import stages, verifier
-from .ingredients import FAIL, PASS, UNAVAILABLE, WARN, audit_ingredients
+from .dependencies import FAIL, PASS, UNAVAILABLE, WARN, audit_dependencies
 
-SCHEMA = "apmx-audit/1"
+SCHEMA = "apmx-audit/2"
 ASSURANCE = "content-bound; not authenticated"
 DISPLAY = (
     "Policy",
     "Integrity",
-    "Standards",
     "Factory",
     "Checks",
-    "Ingredients",
+    "Dependencies",
     "Revocation",
     "Outputs",
     "Identity",
@@ -166,7 +165,7 @@ def _policy_rows(
     structural: bool,
     offline: bool,
 ) -> None:
-    """Factory allow-list, Ingredients and Revocation: the same in every route."""
+    """Factory allow-list, Dependencies and Revocation: the same in every route."""
     rules = resolution.policy if resolution.applies else None
     if structural and rules is not None:
         base = audit.rows["Factory"].detail
@@ -175,15 +174,15 @@ def _policy_rows(
         if rules.allow is None:
             audit.rows["Factory"] = Row("Factory", "pass", base)
     if audit.result == "invalid":
-        audit.rows["Ingredients"] = Row(
-            "Ingredients", "skipped", "not evaluated (receipt invalid; APM not launched)"
+        audit.rows["Dependencies"] = Row(
+            "Dependencies", "skipped", "not evaluated (receipt invalid; APM not launched)"
         )
     elif resolution.status == "unloadable":
-        audit.rows["Ingredients"] = Row(
-            "Ingredients", "skipped", "not evaluated (policy could not be loaded)"
+        audit.rows["Dependencies"] = Row(
+            "Dependencies", "skipped", "not evaluated (policy could not be loaded)"
         )
     else:
-        result = audit_ingredients(
+        result = audit_dependencies(
             receipt,
             policy=resolution.apm_source,
             offline=offline,
@@ -191,13 +190,15 @@ def _policy_rows(
         )
         audit.facts.update(result.facts)
         status = {PASS: "pass", WARN: "warn", FAIL: "fail", UNAVAILABLE: "warn"}[result.status]
-        audit.rows["Ingredients"] = Row(
-            "Ingredients", status, _ascii(result.detail), [_ascii(n) for n in result.notes]
+        audit.rows["Dependencies"] = Row(
+            "Dependencies", status, _ascii(result.detail), [_ascii(n) for n in result.notes]
         )
         if result.status == FAIL:
-            audit.fail("Ingredients", _ascii(result.detail), audit.rows["Ingredients"].notes)
+            audit.fail("Dependencies", _ascii(result.detail), audit.rows["Dependencies"].notes)
         elif result.status == UNAVAILABLE:
-            audit.incomplete("Ingredients", _ascii(result.detail), audit.rows["Ingredients"].notes)
+            audit.incomplete(
+                "Dependencies", _ascii(result.detail), audit.rows["Dependencies"].notes
+            )
     if not structural:
         audit.rows["Revocation"] = Row("Revocation", "skipped", "not evaluated (earlier failure)")
     elif rules is None:
@@ -712,15 +713,15 @@ def to_text(audit: Audit, *, color: bool = False) -> str:
         lines.append(f"{mark('warn')} INCOMPLETE   {audit.reason}")
         lines.append(
             "             Not a pass: the receipt could not be fully audited (exit 2). "
-            "--offline skips ingredients explicitly."
+            "--offline skips dependencies explicitly."
         )
     return "\n".join(lines)
 
 
 AUDIT_HELP = (
-    "Verify a factory delivery: integrity, standards (in-toto Statement v1, SLSA "
-    "Provenance v1, in-toto Test Result, CycloneDX 1.5, SLSA VSA v1), factory "
-    "definition, checks, ingredients, revocation, outputs and identity.\n\n"
+    "Verify a factory delivery: integrity (intact and well-formed against the pinned "
+    "standards schemas), factory definition, checks, dependencies, revocation, outputs "
+    "and identity.\n\n"
     "With no arguments it picks what to audit for you. Locally: the newest COMPLETE "
     "run's receipt.intoto.jsonl under ./.apm/, with its outputs/ re-hashed. In a GitHub "
     "pull request, which carries code only: the PR's changed files (merge-base..head) are "
@@ -735,13 +736,14 @@ AUDIT_HELP = (
     "apm-policy.yml (the PR base copy in a PR), else the org policy from the git remote. "
     "Its `factories` section (apmx's own) adds the Factory, Revocation and Identity "
     "rules; APM's keys are enforced by APM. No policy is reported, never assumed.\n\n"
-    "Ingredients are audited by the bundled pinned APM: the receipt's inline apm.yml and "
+    "Dependencies are audited by the bundled pinned APM: the receipt's inline apm.yml and "
     "apm.lock.yaml are reinstalled with `apm install --frozen` in a temporary project "
     "and checked with `apm audit --ci`.\n\n"
-    "--explain [factory|stages|checks|ingredients|outputs] prints what a receipt records; "
+    "--explain [factory|stages|checks|dependencies|outputs] prints what a receipt records "
+    "(factory includes the standards it conforms to); "
     "--export abom writes its CycloneDX 1.5 inventory as a standalone file.\n\n"
     "Exit codes: 0 valid; 1 invalid or policy failure; 2 usage error, missing or "
-    "ambiguous receipt, unloadable policy, or ingredients or signatures that could not be "
+    "ambiguous receipt, unloadable policy, or dependencies or signatures that could not be "
     "checked (network/auth); use --offline to skip them."
 )
 
@@ -815,7 +817,7 @@ def _read_only(bundle: Path, explain: str | None, export: str | None, output: Pa
     "--offline",
     is_flag=True,
     help=(
-        "Do not launch APM or use the network: ingredients, signatures and org policy are "
+        "Do not launch APM or use the network: dependencies, signatures and org policy are "
         "reported as not checked. Only a local policy file is read."
     ),
 )
