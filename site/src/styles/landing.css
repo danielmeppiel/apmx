@@ -58,27 +58,41 @@ svg .chip { fill: var(--canvas); stroke: var(--line-strong); stroke-width: 1.5; 
 
 /* hero: one reading path down a single left edge.
    Headline, subtitle, the contract reveal, then the CTAs where the eye exits it. */
-.hero { padding: 56px 0 112px; }
+.hero { padding: 40px 0 112px; }
 .hero h1 { font: 560 clamp(3rem, 4.4vw + 1rem, 5.25rem)/1.0 var(--sans); letter-spacing: -.035em; max-width: 22ch; }
 .hero h1 b { color: var(--accent); font-weight: inherit; }
 .hero .one { font-size: clamp(1.25rem, .6vw + 1.05rem, 1.5rem); max-width: 52ch; margin-top: 24px; }
 .ctas { display: flex; gap: 14px; margin-top: 40px; flex-wrap: wrap; }
-.hero .ctas { margin-top: 32px; }
+.hero .ctas { margin-top: 28px; }
 .card { background: var(--sheet); border: 2px solid var(--accent); border-radius: 6px; padding: 36px 36px 34px; }
-.hero .card { margin-top: 48px; display: grid; grid-template-columns: auto minmax(0, 1fr); padding: 36px 44px; }
-.hero .card .name { white-space: nowrap; }
+.hero .card { margin-top: 40px; padding: 26px 40px 28px; }
 .card .file-tag { display: inline-block; margin: 0 0 18px; font: 500 15px/1 var(--mono); color: var(--c-muted); background: rgba(169, 204, 255, .08); border: 1px solid rgba(169, 204, 255, .35); border-radius: 4px; padding: 6px 10px; letter-spacing: .01em; }
 .card .name { font: 620 clamp(2.4rem, 2.2vw + 1.4rem, 3.6rem)/1 var(--sans); font-stretch: 115%; letter-spacing: -.03em; color: var(--accent); margin: 0; }
 .card .def { font: 460 20px/1.35 var(--sans); color: var(--c-ink); margin: 12px 0 0; }
-.card .parts { list-style: none; margin: 0 0 0 40px; padding: 4px 0 0 40px; display: grid; grid-template-columns: 1fr 1fr; gap: 26px 0; border-left: 1px solid rgba(183, 201, 223, .35); }
-.part:nth-child(odd) { padding-right: 32px; }
-/* Role and Assignment are the pair: the constant half and the per-run half. */
-.part.pair { padding-bottom: 24px; border-bottom: 1px solid rgba(183, 201, 223, .22); }
+.card .id { padding-bottom: 20px; border-bottom: 1px solid rgba(183, 201, 223, .22); }
+
+/* Three zones in reading order: what goes in (Assignment), how the agent works
+   (Role, Dependencies, Budget), and what comes out (Checks, then Deliverables). */
+.zones { display: grid; margin: 22px 0 0; }
+.card .parts { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; align-content: start; }
+.zones .parts + .parts { margin-top: 22px; padding-top: 22px; border-top: 1px solid rgba(183, 201, 223, .22); }
 .part { display: grid; grid-template-columns: 30px 1fr; column-gap: 12px; align-content: start; }
 .part svg { width: 26px; height: 26px; margin-top: 2px; }
 .part b { font: 600 21px/1.25 var(--sans); color: var(--c-ink); }
-.part small { display: block; margin-top: 2px; font: 440 14px/1.3 var(--sans); color: var(--secondary); }
+.part small { display: block; margin-top: 2px; font: 440 14px/1.3 var(--sans); color: var(--secondary); text-wrap: balance; }
 .part span { grid-column: 2; font: 440 18px/1.35 var(--sans); color: var(--c-muted); margin-top: 3px; }
+
+/* Wide: identity on one line, the three zones side by side. */
+@media (min-width: 1100px) {
+  .card .id { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 28px; }
+  .card .id .file-tag { order: 3; margin: 0 0 0 auto; align-self: center; }
+  .card .def { margin: 0; }
+  .hero .card .name { white-space: nowrap; }
+  .zones { grid-template-columns: minmax(0, .8fr) minmax(0, 1.25fr) minmax(0, .95fr); }
+  .card .core { gap: 12px; }
+  .zones .parts + .parts { margin-top: 0; padding: 0 0 0 36px; border-top: 0; border-left: 1px solid rgba(183, 201, 223, .22); }
+  .zones .parts:not(:last-child) { padding-right: 36px; }
+}
 
 /* pains */
 .pains { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin: 40px 0 0; }
@@ -140,21 +154,15 @@ footer a { color: var(--secondary); }
   /* The hero's one authored moment: the contract unrolls under the subtitle, then its parts settle in reading order. */
   .hero .card { animation: contract-unroll 760ms cubic-bezier(.16, 1, .3, 1) 140ms both; }
   .hero .part { animation: part-settle 520ms cubic-bezier(.16, 1, .3, 1) both; }
-  .hero .part:nth-child(1) { animation-delay: 420ms; }
-  .hero .part:nth-child(2) { animation-delay: 480ms; }
-  .hero .part:nth-child(3) { animation-delay: 560ms; }
-  .hero .part:nth-child(4) { animation-delay: 610ms; }
-  .hero .part:nth-child(5) { animation-delay: 660ms; }
-  .hero .part:nth-child(6) { animation-delay: 710ms; }
+  .hero .in .part { animation-delay: 420ms; }
+  .hero .core .part:nth-child(1) { animation-delay: 490ms; }
+  .hero .core .part:nth-child(2) { animation-delay: 540ms; }
+  .hero .core .part:nth-child(3) { animation-delay: 590ms; }
+  .hero .out .part:nth-child(1) { animation-delay: 670ms; }
+  .hero .out .part:nth-child(2) { animation-delay: 730ms; }
 }
 @keyframes contract-unroll { from { clip-path: inset(0 0 100% 0 round 6px); } to { clip-path: inset(0 0 0 0 round 6px); } }
 @keyframes part-settle { from { opacity: 0; transform: translateY(8px); } }
-
-@media (max-width: 1279px) {
-  .hero .card { grid-template-columns: 1fr; }
-  .hero .card .name { white-space: normal; }
-  .card .parts { margin: 32px 0 0; padding: 30px 0 0; border-left: 0; border-top: 1px solid rgba(183, 201, 223, .35); }
-}
 
 @media (max-width: 767px) {
   :root { --margin: 20px; }
@@ -168,10 +176,6 @@ footer a { color: var(--secondary); }
   .hero .ctas { margin-top: 28px; }
   .prs { grid-template-columns: 1fr; gap: 40px; }
   .card { padding: 26px 22px; }
-  .card .parts { margin-top: 26px; padding-top: 26px; grid-template-columns: 1fr; gap: 18px; }
-  .part:nth-child(odd) { padding-right: 0; }
-  .part.pair:first-child { padding-bottom: 0; border-bottom: 0; }
-  .part.pair { padding-bottom: 20px; }
   .machines { grid-template-columns: 1fr; }
   .machines .arr { width: 2.3px; height: 32px; margin: 0 0 0 40px; }
   .machines .arr::after { right: auto; left: -5px; top: auto; bottom: -1px; transform: rotate(45deg); }

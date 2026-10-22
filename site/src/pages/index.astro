@@ -63,14 +63,20 @@ const description =
               <p class="name" id="contract-name">Agent Contract</p>
               <p class="def">A reusable specification for agent work.</p>
             </div>
-            <ul class="parts">
-              <li class="part pair"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M5 12h14M5 18h9"></path></svg><b>Role</b><span>how it works, every time</span></li>
-              <li class="part pair"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h11M10 8l4 4-4 4"></path><path d="M17 4h3v16h-3"></path></svg><b>Assignment</b><span>your intent, each time</span></li>
-              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5c3-1 6-1 8 1v14c-2-2-5-2-8-1zM20 5c-3-1-6-1-8 1v14c2-2 5-2 8-1z"></path></svg><b>Skills</b><span>what it can use</span></li>
-              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4H4v16h3M10 12h11M17 8l4 4-4 4"></path></svg><b>Deliverables</b><span>what it hands back</span></li>
-              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 13V8M9 2h6"></path></svg><b>Budget</b><span>what it may spend<small>tries and time today</small></span></li>
-              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17M11 6h9M11 12h9M11 18h9"></path></svg><b>Checks</b><span>how the work is judged</span></li>
-            </ul>
+            <div class="zones">
+              <ul class="parts in">
+                <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h11M10 8l4 4-4 4"></path><path d="M17 4h3v16h-3"></path></svg><b>Assignment</b><span>your intent, each time</span></li>
+              </ul>
+              <ul class="parts core">
+                <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M5 12h14M5 18h9"></path></svg><b>Role</b><span>how it works, every time</span></li>
+                <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"></path><path d="M4 7.5l8 4.5 8-4.5M12 12v9"></path></svg><b>Dependencies</b><span>what it can use<small>skills, MCP servers, hooks, any APM package</small></span></li>
+                <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 13V8M9 2h6"></path></svg><b>Budget</b><span>what it may spend<small>tries and time today</small></span></li>
+              </ul>
+              <ul class="parts out">
+                <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17M11 6h9M11 12h9M11 18h9"></path></svg><b>Checks</b><span>how the work is judged</span></li>
+                <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4H4v16h3M10 12h11M17 8l4 4-4 4"></path></svg><b>Deliverables</b><span>what it hands back</span></li>
+              </ul>
+            </div>
           </div>
           <div class="ctas">
             <a class="cta" href={install}>Install APMX</a>
