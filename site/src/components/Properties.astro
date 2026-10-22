@@ -1,0 +1,17 @@
+---
+// The four properties APMX unlocks, each tied to the problem it solves.
+// Rendered identically at the top of the page and in the close.
+interface Props { labelledby?: string }
+const { labelledby } = Astro.props;
+const items = [
+  ['Automated merges', 'Solves the PR review bottleneck.'],
+  ['Trust', 'Solves unreviewed factories and agents gaming the checks.'],
+  ['Traceability', 'Solves compliance, learning and repair.'],
+  ['Portability', 'Avoids harness and model lock-in.'],
+];
+---
+<ol class="pains" aria-labelledby={labelledby}>
+  {items.map(([title, line], i) => (
+    <li><span class="pn" aria-hidden="true">{i + 1}</span><b>{title}</b><span>{line}</span></li>
+  ))}
+</ol>

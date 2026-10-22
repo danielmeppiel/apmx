@@ -23,6 +23,11 @@ REJECTED and HALTED runs get no receipt.
 | last | CycloneDX 1.5 SBOM (the agent bill of materials) | the APM packages and skills the agents were given, from the APM lockfile |
 | (CI) | SLSA Verification Summary v1, signed | the verifier checked every other line: PASSED |
 
+The last statement comes from a **trusted signer**, a job the agent cannot
+reach. In v0.7.1 that signer is a GitHub Actions workflow, APMX's reusable
+`run.yml`, signing through Sigstore with the workflow's GitHub OIDC identity.
+Your policy pins it by workflow and commit (`factories.signers`).
+
 **Every statement names the same subjects: the delivered files** (for a
 factory that writes patches, the files the patches produce, not the `.diff`).
 

@@ -64,6 +64,7 @@ svg .chip { fill: var(--canvas); stroke: var(--line-strong); stroke-width: 1.5; 
 .hero .one { font-size: clamp(1.25rem, .6vw + 1.05rem, 1.5rem); max-width: 34ch; margin-top: 28px; }
 .ctas { display: flex; gap: 14px; margin-top: 40px; flex-wrap: wrap; }
 .card { background: var(--sheet); border: 2px solid var(--accent); border-radius: 6px; padding: 36px 36px 34px; }
+.card .file-tag { display: inline-block; margin: 0 0 18px; font: 500 15px/1 var(--mono); color: var(--c-muted); background: rgba(169, 204, 255, .08); border: 1px solid rgba(169, 204, 255, .35); border-radius: 4px; padding: 6px 10px; letter-spacing: .01em; }
 .card .name { font: 620 clamp(2.4rem, 2.2vw + 1.4rem, 3.6rem)/1 var(--sans); font-stretch: 115%; letter-spacing: -.03em; color: var(--accent); margin: 0; }
 .card .def { font: 460 20px/1.35 var(--sans); color: var(--c-ink); margin: 12px 0 0; }
 .card .parts { list-style: none; margin: 34px 0 0; padding: 30px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 26px 32px; border-top: 1px solid rgba(183, 201, 223, .35); }
@@ -78,11 +79,10 @@ svg .chip { fill: var(--canvas); stroke: var(--line-strong); stroke-width: 1.5; 
 .pn { display: inline-flex; width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--secondary); align-items: center; justify-content: center; font: 600 15px var(--sans); color: var(--ink); }
 .pains b { display: block; margin-top: 16px; font: 560 24px/1.2 var(--sans); letter-spacing: -.01em; }
 .pains span:not(.pn) { display: block; margin-top: 8px; font-size: 18px; color: var(--secondary); line-height: 1.4; }
-.pains.resolved { margin-top: 56px; }
-.pains.resolved > li { background: transparent; border-color: var(--quiet-line); }
+.resolved .pains { margin-top: 56px; }
 
 /* accept by proof */
-.machines { list-style: none; padding: 0; display: grid; grid-template-columns: 1fr 48px 1fr 48px 1fr; align-items: center; margin: 72px 0 0; }
+.machines { list-style: none; padding: 0; display: grid; grid-template-columns: 1fr 48px 1fr 48px 1fr; align-items: stretch; margin: 72px 0 0; }
 .machines .m { background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: 12px; padding: 22px 24px; }
 .machines .m.agent { background: var(--exec-field); border-color: #2c4b39; }
 .machines .m.sign { background: var(--sheet); border: 2px solid var(--accent); }
@@ -90,7 +90,7 @@ svg .chip { fill: var(--canvas); stroke: var(--line-strong); stroke-width: 1.5; 
 .machines .m.sign b { color: var(--accent); }
 .machines .m span { display: block; margin-top: 6px; font-size: 18px; color: var(--secondary); }
 .machines .m.sign span { color: var(--c-muted); }
-.machines .arr { height: 2.3px; background: var(--green); position: relative; margin: 0 8px; }
+.machines .arr { align-self: center; height: 2.3px; background: var(--green); position: relative; margin: 0 8px; }
 .machines .arr::after { content: ''; position: absolute; right: -1px; top: -5px; border: solid var(--green); border-width: 0 2.3px 2.3px 0; padding: 4px; transform: rotate(-45deg); }
 .prs { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 48px; }
 .pr { background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: 14px; padding: 28px; }

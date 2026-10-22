@@ -22,8 +22,11 @@ fresh machine:
 | `attest` | no | no | no | **yes**, after `apmx audit --offline` is VALID |
 | `deliver` | no | no | **yes** (target only) | no |
 
-The attest job signs a SLSA Verification Summary over the delivered files with
-the workflow's GitHub OIDC identity through Sigstore. The pull request carries
+Three isolated roles: the agent produces, the checks rerun without it, and a
+**trusted signer** signs. The agent cannot sign and cannot change the checks.
+In v0.7.1 the trusted signer is the `attest` job: it signs a SLSA Verification
+Summary over the delivered files with the workflow's GitHub OIDC identity
+through Sigstore, and your policy pins that workflow (step 2). The pull request carries
 **code only**; never commit a receipt.
 
 ## 2. Pin what you accept

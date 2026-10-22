@@ -11,14 +11,15 @@ import AnyAgent from '../components/AnyAgent.astro';
 import EvidenceDesktop from '../components/EvidenceDesktop.astro';
 import EvidenceMobile from '../components/EvidenceMobile.astro';
 import Platform from '../components/Platform.astro';
+import Properties from '../components/Properties.astro';
 
 const base = import.meta.env.BASE_URL;
 const docs = (slug: string) => `${base}docs/${slug}/`;
 const repo = 'https://github.com/danielmeppiel/apmx';
 const install = `${repo}/blob/main/docs/install.md`;
-const title = 'APMX - Version your factory, not just your code';
+const title = 'APMX - Agentic software factories you can trust';
 const description =
-  'APMX runs agent work from Agent Contracts on any coding agent, records a receipt for every run, and accepts factory pull requests by proof.';
+  'APMX runs agentic software factories built from Agent Contracts on any coding agent, records one receipt per delivery, and accepts their pull requests only by proof.';
 ---
 <!doctype html>
 <html lang="en">
@@ -55,14 +56,15 @@ const description =
       <section class="hero" aria-labelledby="hero-title">
         <div class="wrap grid">
           <div>
-            <h1 id="hero-title">APMX makes agent work <b>reusable</b> and auditable.</h1>
-            <p class="one">Agents open PRs faster than teams can review. APMX, a command-line tool, runs them from Agent Contracts; in CI, it accepts only signed, checked work.</p>
+            <h1 id="hero-title">Agentic software factories you can <b>trust</b>.</h1>
+            <p class="one">APMX runs agentic software factories built from Agent Contracts, on any coding agent, and accepts their pull requests only by proof.</p>
             <div class="ctas">
               <a class="cta" href={install}>Install APMX</a>
               <a class="cta secondary" href={docs('agent-contracts')}>See a real contract</a>
             </div>
           </div>
           <div class="card" role="group" aria-labelledby="contract-name">
+            <p class="file-tag mono">*.contract.md</p>
             <p class="name" id="contract-name">Agent Contract</p>
             <p class="def">A reusable specification for agent work.</p>
             <ul class="parts">
@@ -80,14 +82,9 @@ const description =
       <section class="band" id="pains" aria-labelledby="pains-title">
         <div class="wrap">
           <h2 id="pains-title">Agent factories outrun the people who must trust them.</h2>
-          <p class="one">An agent factory is a chain of coding agents that plans, builds, reviews and opens pull requests. At scale, four problems appear.</p>
+          <p class="one">An agentic software factory is a chain of coding agents that plans, builds, reviews and opens pull requests. At scale, it needs four things.</p>
           <div class="figure fig-desk"><Flood /></div>
-          <ol class="pains">
-            <li><span class="pn" aria-hidden="true">1</span><b>Review can't keep up</b><span>Pull requests arrive at agent speed.</span></li>
-            <li><span class="pn" aria-hidden="true">2</span><b>Trust</b><span>Which factories do we trust, and why?</span></li>
-            <li><span class="pn" aria-hidden="true">3</span><b>Traceability</b><span>Which factory built this, from what? For audits, learning and repair.</span></li>
-            <li><span class="pn" aria-hidden="true">4</span><b>Lock-in</b><span>Rebuild everything for each new model?</span></li>
-          </ol>
+          <Properties labelledby="pains-title" />
         </div>
       </section>
 
@@ -118,7 +115,7 @@ const description =
 
       <section class="band" id="any-agent" aria-labelledby="any-title">
         <div class="wrap">
-          <p class="ptag">Answers lock-in</p>
+          <p class="ptag">Answers portability</p>
           <h2 id="any-title">Same factory, same checks, your choice of agent.</h2>
           <p class="one">We ran one factory on GitHub Copilot CLI and on OpenCode. The code came out different. Both passed the same nine checks.</p>
           <div class="figure"><AnyAgent /></div>
@@ -137,32 +134,32 @@ const description =
 
       <section class="band" id="accept" aria-labelledby="accept-title">
         <div class="wrap">
-          <p class="ptag">Answers review and trust</p>
+          <p class="ptag">Answers automated merges and trust</p>
           <h2 id="accept-title">Review the factory. Let its checks gate the pull requests.</h2>
-          <p class="one">People review the factory and its checks. Its PRs merge only when every file is signed; anything else, including hand edits, gets normal review.</p>
-          <ol class="machines" aria-label="Separate CI jobs">
-            <li class="m agent"><b>Agent</b><span>writes the code, can't sign</span></li>
+          <p class="one">Three isolated jobs: the agent writes, the checks rerun without it, a trusted signer signs. Only fully signed pull requests merge automatically.</p>
+          <ol class="machines" aria-label="Three isolated jobs">
+            <li class="m agent"><b>Agent</b><span>writes the code; can't sign or change the checks</span></li>
             <li class="arr" aria-hidden="true"></li>
             <li class="m"><b>Checks</b><span>rerun without the agent</span></li>
             <li class="arr" aria-hidden="true"></li>
-            <li class="m sign"><b>Signs in CI</b><span>each delivered file, with Sigstore</span></li>
+            <li class="m sign"><b>Trusted signer</b><span>signs each delivered file</span></li>
           </ol>
           <div class="prs">
             <div class="pr">
               <h3>A factory pull request</h3>
               <ul aria-label="Changed files">
-                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
-                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
-                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed</span></li>
               </ul>
               <p class="verdict"><span class="mono pass" aria-hidden="true">[+]</span>Accepted</p>
             </div>
             <div class="pr">
               <h3>The same PR + one hand edit</h3>
               <ul aria-label="Changed files">
-                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
-                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
-                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed</span></li>
                 <li><span class="file extra" aria-hidden="true"></span><span class="unsigned">Not signed</span></li>
               </ul>
               <p class="verdict"><span class="mono fail" aria-hidden="true">[x]</span>Blocked: review it by hand</p>
@@ -173,9 +170,9 @@ const description =
 
       <section class="band" id="platform" aria-labelledby="platform-title">
         <div class="wrap">
-          <p class="ptag">Answers review, at scale</p>
+          <p class="ptag">Answers automated merges</p>
           <h2 id="platform-title">One factory for many projects.</h2>
-          <p class="one">Run your factories from one central repository. They open pull requests in every project, and each project's required check verifies the signatures.</p>
+          <p class="one">Run your factories from one central repository. It opens pull requests in every project, and each project's required check verifies the signatures.</p>
           <div class="figure"><Platform /></div>
         </div>
       </section>
@@ -185,7 +182,7 @@ const description =
           <h2 id="limits-title">Honest limits.</h2>
           <ul class="limits">
             <li>A signature shows where code came from and which of your checks passed. Your checks are the safety bar.</li>
-            <li>Laptop receipts are unsigned. Only CI signs.</li>
+            <li>Receipts made on a laptop are unsigned. Only the trusted signer signs.</li>
             <li>APMX is for your own factories, not for AI pull requests from strangers.</li>
             <li>Experimental, independent, not a Microsoft or GitHub product.</li>
           </ul>
@@ -195,12 +192,7 @@ const description =
       <section class="band close" id="close" aria-labelledby="close-title">
         <div class="wrap">
           <h2 id="close-title">Version your factory, not just your code.</h2>
-          <ol class="pains resolved">
-            <li><span class="pn" aria-hidden="true">1</span><b>Review</b><span>Review the factory, not every diff.</span></li>
-            <li><span class="pn" aria-hidden="true">2</span><b>Trust</b><span>Checks and signing run in jobs without the agent.</span></li>
-            <li><span class="pn" aria-hidden="true">3</span><b>Traceability</b><span>One receipt per delivery.</span></li>
-            <li><span class="pn" aria-hidden="true">4</span><b>Lock-in</b><span>Switch agents, keep the checks.</span></li>
-          </ol>
+          <div class="resolved"><Properties labelledby="close-title" /></div>
           <div class="ctas">
             <a class="cta" href={install}>Install APMX v0.7.1</a>
             <a class="cta secondary" href={docs('agent-contracts')}>See a real contract</a>
