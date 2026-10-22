@@ -75,7 +75,12 @@ svg .chip { fill: var(--canvas); stroke: var(--line-strong); stroke-width: 1.5; 
 
 /* pains */
 .pains { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin: 40px 0 0; }
-.pains > li { background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: 14px; padding: 24px 24px 26px; }
+.pains > li { background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: 14px; transition: border-color .2s; }
+.pains > li:hover { border-color: var(--accent); }
+.pains a { display: block; height: 100%; box-sizing: border-box; padding: 24px 24px 26px; color: inherit; text-decoration: none; border-radius: 13px; }
+.pains a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.unlock { margin: 28px 0 0; font: 460 22px/1.4 var(--sans); color: var(--secondary); }
+.unlock b { color: var(--accent); font-weight: 620; }
 .pn { display: inline-flex; width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--secondary); align-items: center; justify-content: center; font: 600 15px var(--sans); color: var(--ink); }
 .pains b { display: block; margin-top: 16px; font: 560 24px/1.2 var(--sans); letter-spacing: -.01em; }
 .pains span:not(.pn) { display: block; margin-top: 8px; font-size: 18px; color: var(--secondary); line-height: 1.4; }
@@ -144,7 +149,8 @@ footer a { color: var(--secondary); }
   .fig-desk { display: none; }
   .fig-mob { display: block; }
   .pains { grid-template-columns: 1fr 1fr; gap: 12px; }
-  .pains > li { padding: 18px; }
+  .pains a { padding: 18px; }
+  .unlock { font-size: 19px; }
   .pains b { font-size: 19px; }
   .pains span:not(.pn) { font-size: 15px; }
   .pr { padding: 22px; }
