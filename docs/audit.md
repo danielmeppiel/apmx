@@ -124,7 +124,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}   # bytes to hash; never executed
           fetch-depth: 0
           persist-credentials: false
-      - uses: danielmeppiel/apmx/.github/actions/setup@v0.7.0   # installs apmx 0.7.0
+      - uses: danielmeppiel/apmx/.github/actions/setup@v0.7.1   # installs apmx 0.7.1
       - run: apmx audit
         env:
           GH_TOKEN: ${{ github.token }}   # gh attestation verify
@@ -169,7 +169,7 @@ identified by workflow file, not by a check name.
 The setup action downloads the native release archive for the runner and
 installs it only if its SHA-256 matches the release's `.sha256` file, the
 release manifest and, if you give one, the `sha256` input. Reference the
-actions and `run.yml` by an immutable release tag such as `@v0.7.0`, or by
+actions and `run.yml` by an immutable release tag such as `@v0.7.1`, or by
 that tag's commit SHA. apmx publishes no moving major tag (`@v1`).
 
 **Offline route.** Off GitHub, ship the bundle with the files and run
@@ -208,7 +208,7 @@ factories:                               # apmx's section
   require_signed: true                   # reject deliveries that are not signed (see Identity)
   signers:                               # who may sign; null = no opinion, [] = none
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml   # optional @<ref>
-      workflow_sha: 315491bff45f653e728c91c7ad1fc07465b97535   # git rev-parse v0.7.0^{commit}
+      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to `git rev-parse v0.7.1^{commit}`
       repo: acme/factories                 # where the factory ran (default: this repository)
   revoked:                               # capability content revoked by incident response
     - purl: "pkg:github/acme/style@3f2a..."
@@ -229,15 +229,16 @@ is `factories` as `empty`; apmx still applies its rules and runs
   entry's package is a label; an unpinned pattern such as `acme/*` allows
   nothing yet, and the Factory row says so.
 - `signers`: `workflow: owner/repo/.github/workflows/<file>.yml`, optionally
-  pinned to the signer's ref with `@<ref>` (for example `@refs/tags/v0.7.0`), an
+  pinned to the signer's ref with `@<ref>` (for example `@refs/tags/v0.7.1`), an
   optional `workflow_sha`, and an optional `repo: owner/repo`: the repository
   the factory ran in, where its attestations are stored. `repo` defaults to the
   repository being audited.
 - `workflow_sha` (40 hex) pins the signer workflow's code. Whoever controls the
   workflow's repository can move a tag or a branch, so `@<ref>` alone does not
   pin the reviewed `run.yml`; `workflow_sha` does. Pin the **commit**: `git
-  rev-parse v0.7.0^{commit}`; for apmx's `run.yml@v0.7.0` that is
-  `315491bff45f653e728c91c7ad1fc07465b97535`. `workflow: <file>.yml@<40-hex sha>` is the
+  rev-parse v0.7.1^{commit}` for apmx's `run.yml@v0.7.1` (the all-zero SHA in
+  the examples is a placeholder for it; for `run.yml@v0.7.0` it was
+  `315491bff45f653e728c91c7ad1fc07465b97535`). `workflow: <file>.yml@<40-hex sha>` is the
   same pin. apmx compares it with the signing certificate's Build Signer Digest
   (Fulcio extension OID `1.3.6.1.4.1.57264.1.10`, the OIDC `job_workflow_sha`
   claim; `gh attestation verify --format json` shows it as
@@ -247,7 +248,7 @@ is `factories` as `empty`; apmx still applies its rules and runs
   resolves that tag object read-only with `gh api
   repos/<owner>/<repo>/git/tags/<sha>`, and the pin matches if the tag names
   that commit; the row says `at <commit12> (tag object <sha12>)`. Pinning the
-  tag object itself (`git rev-parse v0.7.0`) also works, without the lookup;
+  tag object itself (`git rev-parse v0.7.1`) also works, without the lookup;
   it hashes its target commit, so it is just as immutable. If the lookup
   fails, the audit is INCOMPLETE (exit 2), never a pass. Re-pin when you upgrade
   the `run.yml` you call.
@@ -419,7 +420,7 @@ keeps the agent away from both:
 ```yaml
 jobs:
   factory:
-    uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.0
+    uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1
     with:
       factory: path/to/factory
       checks-requirements: checks/requirements.txt   # optional, inside the factory
@@ -503,7 +504,7 @@ the target. Each target's gate pins the platform as the signer:
 ```yaml
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: 315491bff45f653e728c91c7ad1fc07465b97535   # or the tag object SHA
+      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: `git rev-parse v0.7.1^{commit}` (or the tag object)
       repo: acme/factory-platform
 ```
 

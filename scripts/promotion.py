@@ -272,6 +272,25 @@ def release_notes(version: str, commit: str) -> str:
             f"See the [v0.7.0 changelog](https://github.com/{REPOSITORY}/blob/v{version}/"
             "CHANGELOG.md).\n\n"
         )
+    if version == "0.7.1":
+        patch_notes = (
+            "## Changes in v0.7.1: A PR cannot rewrite its own gate\n\n"
+            "Green means accepted by proof, and nothing else.\n\n"
+            "- **Security:** the gate templates now run on `pull_request_target`, so the base "
+            "branch's copy runs and a PR cannot edit or delete its own `audit` workflow (on "
+            "`pull_request` it could, and the required check turned green). The PR head is "
+            "checked out as bytes without credentials and nothing from it runs. Update your "
+            "`audit.yml` the same way.\n"
+            "- In a pull request, `apmx audit` never reads policy from the PR's working tree, "
+            "runs APM's policy discovery in an empty project and refuses a `--policy` file "
+            "inside the checkout.\n"
+            "- A PR that carries no factory attestation fails with `Not a factory delivery`: "
+            "the check only passes factory deliveries; merge other PRs through your normal "
+            "review process (for example a ruleset bypass for maintainers).\n"
+            "- Reference the actions and `run.yml` at `@v0.7.1` or its commit SHA.\n\n"
+            f"See the [v0.7.1 changelog](https://github.com/{REPOSITORY}/blob/v{version}/"
+            "CHANGELOG.md).\n\n"
+        )
     return (
         f"Standalone apmx {version}; candidate commit `{commit}`.\n\n{patch_notes}"
         "## What's new since v0.2.0\n\n"
