@@ -1,0 +1,245 @@
+---
+import '@fontsource-variable/mona-sans/wdth.css';
+import '@fontsource/monaspace-neon/400.css';
+import '../styles/tokens.css';
+import '../styles/landing.css';
+import Flood from '../components/Flood.astro';
+import WhyContract from '../components/WhyContract.astro';
+import Loop from '../components/Loop.astro';
+import Factory from '../components/Factory.astro';
+import AnyAgent from '../components/AnyAgent.astro';
+import EvidenceDesktop from '../components/EvidenceDesktop.astro';
+import EvidenceMobile from '../components/EvidenceMobile.astro';
+import Platform from '../components/Platform.astro';
+
+const base = import.meta.env.BASE_URL;
+const docs = (slug: string) => `${base}docs/${slug}/`;
+const repo = 'https://github.com/danielmeppiel/apmx';
+const install = `${repo}/blob/main/docs/install.md`;
+const title = 'APMX - Version your factory, not just your code';
+const description =
+  'APMX runs agent work from Agent Contracts on any coding agent, records a receipt for every run, and accepts factory pull requests by proof.';
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta name="theme-color" content="#0d1117" />
+    <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+      <defs>
+        <marker id="ag" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1L8.5 5L1 9" fill="none" stroke="#56d364" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></marker>
+        <marker id="ap" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1L8.5 5L1 9" fill="none" stroke="#d2a8ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></marker>
+      </defs>
+    </svg>
+
+    <header class="topbar">
+      <a class="wordmark" href={base}>APMX</a>
+      <nav aria-label="Main">
+        <a class="hide-m" href="#how">How it works</a>
+        <a href={docs('agent-contracts')}>Docs</a>
+        <a class="hide-m" href={repo}>GitHub</a>
+        <a class="cta" href={install}>Install</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="wrap grid">
+          <div>
+            <h1 id="hero-title">APMX makes agent work <b>reusable</b> and auditable.</h1>
+            <p class="one">Agents open PRs faster than teams can review. APMX, a command-line tool, runs them from Agent Contracts; in CI, it accepts only signed, checked work.</p>
+            <div class="ctas">
+              <a class="cta" href={install}>Install APMX</a>
+              <a class="cta secondary" href={docs('agent-contracts')}>See a real contract</a>
+            </div>
+          </div>
+          <div class="card" role="group" aria-labelledby="contract-name">
+            <p class="name" id="contract-name">Agent Contract</p>
+            <p class="def">A reusable specification for agent work.</p>
+            <ul class="parts">
+              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M5 12h14M5 18h9"></path></svg><b>Job description</b><span>what to do</span></li>
+              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5c3-1 6-1 8 1v14c-2-2-5-2-8-1zM20 5c-3-1-6-1-8 1v14c2-2 5-2 8-1z"></path></svg><b>Skills</b><span>what it can use</span></li>
+              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h11M10 8l4 4-4 4"></path><path d="M17 4h3v16h-3"></path></svg><b>Assignment</b><span>what it's given</span></li>
+              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4H4v16h3M10 12h11M17 8l4 4-4 4"></path></svg><b>Deliverables</b><span>what it hands back</span></li>
+              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 13V8M9 2h6"></path></svg><b>Budget</b><span>how many tries</span></li>
+              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17M11 6h9M11 12h9M11 18h9"></path></svg><b>Checks</b><span>how the work is judged</span></li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" id="pains" aria-labelledby="pains-title">
+        <div class="wrap">
+          <h2 id="pains-title">Agent factories outrun the people who must trust them.</h2>
+          <p class="one">An agent factory is a chain of coding agents that plans, builds, reviews and opens pull requests. At scale, four problems appear.</p>
+          <div class="figure fig-desk"><Flood /></div>
+          <ol class="pains">
+            <li><span class="pn" aria-hidden="true">1</span><b>Review can't keep up</b><span>Pull requests arrive at agent speed.</span></li>
+            <li><span class="pn" aria-hidden="true">2</span><b>Trust</b><span>Which factories do we trust, and why?</span></li>
+            <li><span class="pn" aria-hidden="true">3</span><b>Traceability</b><span>Which factory built this, from what? For audits, learning and repair.</span></li>
+            <li><span class="pn" aria-hidden="true">4</span><b>Lock-in</b><span>Rebuild everything for each new model?</span></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="band" id="how" aria-labelledby="how-title">
+        <div class="wrap">
+          <h2 id="how-title">Write the job down once: the Agent Contract.</h2>
+          <p class="one">Today, how your agents should work lives in prompts and chat history. An Agent Contract puts it in one versioned file, reused for every request.</p>
+          <div class="figure"><WhyContract /></div>
+        </div>
+      </section>
+
+      <section class="band" id="loop" aria-labelledby="loop-title">
+        <div class="wrap">
+          <p class="ptag">Answers trust</p>
+          <h2 id="loop-title">The agent works. Independent checks decide.</h2>
+          <p class="one">Checks are your own commands, run apart from the agent. A rejected attempt goes back to the agent while the budget lasts.</p>
+          <div class="figure"><Loop /></div>
+        </div>
+      </section>
+
+      <section class="band" id="factory" aria-labelledby="factory-title">
+        <div class="wrap">
+          <h2 id="factory-title">Chain contracts into a factory.</h2>
+          <p class="one">Each contract's checked output becomes the next one's input. Factories are APM packages, versioned and shared with APM, the agent package manager.</p>
+          <div class="figure"><Factory /></div>
+        </div>
+      </section>
+
+      <section class="band" id="any-agent" aria-labelledby="any-title">
+        <div class="wrap">
+          <p class="ptag">Answers lock-in</p>
+          <h2 id="any-title">Same factory, same checks, your choice of agent.</h2>
+          <p class="one">We ran one factory on GitHub Copilot CLI and on OpenCode. The code came out different. Both passed the same nine checks.</p>
+          <div class="figure"><AnyAgent /></div>
+        </div>
+      </section>
+
+      <section class="band" id="evidence" aria-labelledby="evidence-title">
+        <div class="wrap">
+          <p class="ptag">Answers traceability</p>
+          <h2 id="evidence-title">Your code now has another supply chain.</h2>
+          <p class="one">Contracts, skills and tools arrive as packages the APM lockfile pins. APMX records them, the build and the checks in one receipt (SBOM, SLSA provenance).</p>
+          <div class="figure fig-desk"><EvidenceDesktop /></div>
+          <div class="figure fig-mob"><EvidenceMobile /></div>
+        </div>
+      </section>
+
+      <section class="band" id="accept" aria-labelledby="accept-title">
+        <div class="wrap">
+          <p class="ptag">Answers review and trust</p>
+          <h2 id="accept-title">Review the factory. Let its checks gate the pull requests.</h2>
+          <p class="one">People review the factory and its checks. Its PRs merge only when every file is signed; anything else, including hand edits, gets normal review.</p>
+          <ol class="machines" aria-label="Separate CI jobs">
+            <li class="m agent"><b>Agent</b><span>writes the code, can't sign</span></li>
+            <li class="arr" aria-hidden="true"></li>
+            <li class="m"><b>Checks</b><span>rerun without the agent</span></li>
+            <li class="arr" aria-hidden="true"></li>
+            <li class="m sign"><b>Signs in CI</b><span>each delivered file, with Sigstore</span></li>
+          </ol>
+          <div class="prs">
+            <div class="pr">
+              <h3>A factory pull request</h3>
+              <ul aria-label="Changed files">
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
+              </ul>
+              <p class="verdict"><span class="mono pass" aria-hidden="true">[+]</span>Accepted</p>
+            </div>
+            <div class="pr">
+              <h3>The same PR + one hand edit</h3>
+              <ul aria-label="Changed files">
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
+                <li><span class="file" aria-hidden="true"></span><span class="signed"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"></path></svg>Signed in CI</span></li>
+                <li><span class="file extra" aria-hidden="true"></span><span class="unsigned">Not signed</span></li>
+              </ul>
+              <p class="verdict"><span class="mono fail" aria-hidden="true">[x]</span>Blocked: review it by hand</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" id="platform" aria-labelledby="platform-title">
+        <div class="wrap">
+          <p class="ptag">Answers review, at scale</p>
+          <h2 id="platform-title">One factory for many projects.</h2>
+          <p class="one">Run your factories from one central repository. They open pull requests in every project, and each project's required check verifies the signatures.</p>
+          <div class="figure"><Platform /></div>
+        </div>
+      </section>
+
+      <section class="band" id="limits" aria-labelledby="limits-title">
+        <div class="wrap">
+          <h2 id="limits-title">Honest limits.</h2>
+          <ul class="limits">
+            <li>A signature shows where code came from and which of your checks passed. Your checks are the safety bar.</li>
+            <li>Laptop receipts are unsigned. Only CI signs.</li>
+            <li>APMX is for your own factories, not for AI pull requests from strangers.</li>
+            <li>Experimental, independent, not a Microsoft or GitHub product.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="band close" id="close" aria-labelledby="close-title">
+        <div class="wrap">
+          <h2 id="close-title">Version your factory, not just your code.</h2>
+          <ol class="pains resolved">
+            <li><span class="pn" aria-hidden="true">1</span><b>Review</b><span>Review the factory, not every diff.</span></li>
+            <li><span class="pn" aria-hidden="true">2</span><b>Trust</b><span>Checks and signing run in jobs without the agent.</span></li>
+            <li><span class="pn" aria-hidden="true">3</span><b>Traceability</b><span>One receipt per delivery.</span></li>
+            <li><span class="pn" aria-hidden="true">4</span><b>Lock-in</b><span>Switch agents, keep the checks.</span></li>
+          </ol>
+          <div class="ctas">
+            <a class="cta" href={install}>Install APMX v0.7.1</a>
+            <a class="cta secondary" href={docs('agent-contracts')}>See a real contract</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <p class="layer">APM is the package, dependency and policy layer. APMX runs contracts and proves the result.</p>
+        <p>APMX is an independent project by Daniel Meppiel, licensed under Apache-2.0 for APMX-specific additions. Retained Microsoft APM material remains MIT-licensed; its terms and attribution are preserved in NOTICE. This is not an official Microsoft or GitHub release.</p>
+        <p><a href={`${repo}/blob/main/docs/source-origin.md`}>Source origin</a> | <a href={`${repo}/blob/main/LICENSE`}>License</a> | <a href={`${repo}/blob/main/NOTICE`}>Notices</a></p>
+      </div>
+    </footer>
+
+    <script>
+      // One-time reveal of below-the-fold sections. The HTML is the final state:
+      // without JS, or with reduced motion, nothing is ever hidden.
+      const bands = document.querySelectorAll('section.band');
+      if (window.matchMedia('(prefers-reduced-motion: no-preference)').matches && 'IntersectionObserver' in window) {
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting) {
+                entry.target.classList.add('seen');
+                io.unobserve(entry.target);
+              }
+            }
+          },
+          { threshold: 0.12 },
+        );
+        bands.forEach((band) => {
+          const box = band.getBoundingClientRect();
+          if (box.top < window.innerHeight) return;
+          band.classList.add('reveal');
+          io.observe(band);
+        });
+      }
+    </script>
+  </body>
+</html>

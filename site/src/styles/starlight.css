@@ -1,0 +1,46 @@
+/* Starlight theme: one dark canvas, matching the landing page. The same values
+   apply under both data-theme values, and the theme picker is hidden. */
+:root,
+:root[data-theme='dark'],
+:root[data-theme='light'] {
+  color-scheme: dark;
+  --sl-font: var(--sans);
+  --sl-font-mono: var(--mono);
+  --sl-color-white: #f0f6fc;
+  --sl-color-gray-1: #e6edf3;
+  --sl-color-gray-2: #c9d1d9;
+  --sl-color-gray-3: #b1bac4;
+  --sl-color-gray-4: #6e7681;
+  --sl-color-gray-5: #3d444d;
+  --sl-color-gray-6: #161b22;
+  --sl-color-gray-7: #0d1117;
+  --sl-color-black: #0d1117;
+  --sl-color-accent-low: #142235;
+  --sl-color-accent: #a9ccff;
+  --sl-color-accent-high: #bbdaff;
+  --sl-color-text-accent: #a9ccff;
+  --sl-color-bg-nav: #0d1117;
+  --sl-color-bg-sidebar: #0d1117;
+  --sl-color-hairline: #30363d;
+  --sl-color-hairline-shade: #30363d;
+  --sl-color-hairline-light: #3d444d;
+  --sl-color-bg-inline-code: #161b22;
+  --sl-color-orange: #eec469;
+  --sl-color-orange-low: #2b2410;
+  --sl-color-red: #ff7b72;
+  --sl-color-red-low: #2d1517;
+  --sl-color-green: #56d364;
+  --sl-color-green-low: #12261a;
+  --sl-color-blue: #a9ccff;
+  --sl-color-blue-low: #142235;
+}
+
+starlight-theme-select { display: none; }
+
+.site-title { font-weight: 620; font-stretch: 115%; letter-spacing: -.01em; }
+.sl-markdown-content :is(h1, h2, h3) { letter-spacing: -.015em; }
+.sl-markdown-content table { font-size: .9rem; }
+.sl-markdown-content :focus-visible, a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}

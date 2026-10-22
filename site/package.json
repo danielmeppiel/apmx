@@ -1,0 +1,24 @@
+{
+  "name": "apmx-site",
+  "private": true,
+  "type": "module",
+  "description": "The APMX landing page and docs (Astro + Starlight), deployed to GitHub Pages.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check-links": "node scripts/check-links.mjs dist /apmx/"
+  },
+  "engines": {
+    "node": ">=20.3.0"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.6",
+    "@fontsource-variable/mona-sans": "5.3.0",
+    "@fontsource/monaspace-neon": "5.3.0",
+    "astro": "7.3.8"
+  },
+  "overrides": {
+    "postcss-selector-parser": "7.1.6"
+  }
+}

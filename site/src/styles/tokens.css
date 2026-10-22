@@ -1,0 +1,23 @@
+/* APMX design tokens, shared by the landing page and the Starlight docs.
+   Agentic Software Factory keynote family: GitHub-dark canvas, Mona Sans,
+   green = forward flow, purple = feedback, pale blue = the APMX accent. */
+:root {
+  --canvas: #0d1117;
+  --surface: #161b22;
+  --exec-field: #111e18;
+  --sheet: #142235;
+  --ink: #f0f6fc;
+  --c-ink: #f4f6fa;
+  --secondary: #b1bac4;
+  --c-muted: #b7c9df;
+  --quiet-line: #3d444d;
+  --line-strong: #6e7681;
+  --green: #56d364;
+  --purple: #d2a8ff;
+  --accent: #a9ccff;
+  --accent-hover: #bbdaff;
+  --warn: #eec469;
+  --risk: #ff7b72;
+  --sans: 'Mona Sans Variable', -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'Monaspace Neon', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
