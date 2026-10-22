@@ -54,27 +54,27 @@ const description =
 
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
-        <div class="wrap grid">
-          <div>
-            <h1 id="hero-title">Agentic software factories you can <b>trust</b>.</h1>
-            <p class="one">APMX runs agentic software factories built from Agent Contracts, on any coding agent. Every change ships with signed evidence of how it was made, so you can auto-merge what your policy trusts.</p>
-            <div class="ctas">
-              <a class="cta" href={install}>Install APMX</a>
-              <a class="cta secondary" href={docs('agent-contracts')}>See a real contract</a>
-            </div>
-          </div>
+        <div class="wrap">
+          <h1 id="hero-title">Agentic software factories you can <b>trust</b>.</h1>
+          <p class="one">APMX runs agentic software factories built from Agent Contracts, on any coding agent. Every change ships with signed evidence of how it was made, so you can auto-merge what your policy trusts.</p>
           <div class="card" role="group" aria-labelledby="contract-name">
-            <p class="file-tag mono">*.contract.md</p>
-            <p class="name" id="contract-name">Agent Contract</p>
-            <p class="def">A reusable specification for agent work.</p>
+            <div class="id">
+              <p class="file-tag mono">*.contract.md</p>
+              <p class="name" id="contract-name">Agent Contract</p>
+              <p class="def">A reusable specification for agent work.</p>
+            </div>
             <ul class="parts">
-              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M5 12h14M5 18h9"></path></svg><b>Job description</b><span>what to do</span></li>
+              <li class="part pair"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M5 12h14M5 18h9"></path></svg><b>Role</b><span>how it works, every time</span></li>
+              <li class="part pair"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h11M10 8l4 4-4 4"></path><path d="M17 4h3v16h-3"></path></svg><b>Assignment</b><span>your intent, each time</span></li>
               <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5c3-1 6-1 8 1v14c-2-2-5-2-8-1zM20 5c-3-1-6-1-8 1v14c2-2 5-2 8-1z"></path></svg><b>Skills</b><span>what it can use</span></li>
-              <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h11M10 8l4 4-4 4"></path><path d="M17 4h3v16h-3"></path></svg><b>Assignment</b><span>your intent</span></li>
               <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#a9ccff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4H4v16h3M10 12h11M17 8l4 4-4 4"></path></svg><b>Deliverables</b><span>what it hands back</span></li>
               <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 13V8M9 2h6"></path></svg><b>Budget</b><span>what it may spend<small>tries and time today</small></span></li>
               <li class="part"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#f4f6fa" stroke-width="1.8" stroke-linecap="round"><path d="M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17M11 6h9M11 12h9M11 18h9"></path></svg><b>Checks</b><span>how the work is judged</span></li>
             </ul>
+          </div>
+          <div class="ctas">
+            <a class="cta" href={install}>Install APMX</a>
+            <a class="cta secondary" href={docs('agent-contracts')}>See a real contract</a>
           </div>
         </div>
       </section>
@@ -90,7 +90,7 @@ const description =
 
       <section class="band" id="how" aria-labelledby="how-title">
         <div class="wrap">
-          <h2 id="how-title">Write the job down once: the Agent Contract.</h2>
+          <h2 id="how-title">Write the role down once: the Agent Contract.</h2>
           <p class="one">Today, how agents should work is scattered across prompts, chat, skills and MCP servers. An Agent Contract brings it into one versioned file.</p>
           <div class="figure"><WhyContract /></div>
         </div>
