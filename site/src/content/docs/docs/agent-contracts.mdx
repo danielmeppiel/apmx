@@ -1,0 +1,126 @@
+---
+title: Agent Contracts
+description: "An Agent Contract is a reusable specification for agent work: one Markdown file with its assignment, role, dependencies, budget, checks and deliverables."
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import ContractCard from '../../../components/docs/ContractCard.astro';
+
+An **Agent Contract** is a reusable specification for agent work: one
+Markdown file (`*.contract.md`) that says what the agent starts from, how it
+works, what it can use and spend, how its work is judged, and what it hands
+back. The intent changes. The contract stays.
+
+<ContractCard />
+
+## The six parts
+
+The labels are for people; the file keeps its own field names. Read a
+contract in three groups: what goes **in** (Assignment), **how it works**
+(Role, Dependencies, Budget) and what comes **out** (Checks, Deliverables).
+The examples come from the demo factory's `build.contract.md`.
+
+| Label | What it means | Field | Example |
+| --- | --- | --- | --- |
+| **Assignment** | Your intent, each time: the files the agent starts from. Your intent (`request.md` in the examples) and checked files from earlier contracts. | `needs` | `request.md`, `specification.md` |
+| **Role** | How it works, every time: behavior and standards, constant on every run. | Markdown body | "Implement the admitted checkout specification." |
+| **Dependencies** | What it can use: skills and instructions from installed APM packages. | `imports` | `python-testing-patterns` |
+| **Budget** | What the job may spend; today attempts and time are enforced, cost is not capped. | `budget` | 3 attempts, 600 seconds |
+| **Checks** | How the work is judged: your commands, run by APMX outside the agent. | `verify` | `shipping-examples`, `checkout-regression`, `implementation-report-format` |
+| **Deliverables** | What it hands back: the files the agent must write. | `produces` | `changes.diff`, `implementation.md` |
+
+`request.md` is a convention, not an APMX feature: to APMX it is an ordinary
+input file, recorded by digest in the receipt.
+
+## The smallest contract
+
+From
+[`examples/contracts/first-contract`](https://github.com/danielmeppiel/apmx/tree/v0.7.1/examples/contracts/first-contract),
+complete:
+
+```markdown title="handoff.contract.md"
+---
+needs: notes.md
+produces: handoff.json
+verify:
+  handoff: python3 checks/check_handoff.py handoff.json notes.md
+---
+Create handoff.json as a concise onboarding reference for a new teammate.
+
+Read the facts and source IDs in notes.md. Write a JSON array containing one
+object per source ID, with source_id, summary, and caution as nonempty strings.
+Explain each fact plainly and name its important limitation. Do not invent
+commands or facts.
+
+Write the file, not just a chat response. Do not execute the commands described
+in the notes, install anything, publish, or delegate work.
+```
+
+Assignment `notes.md`, Role the body, Checks `handoff`, Deliverables
+`handoff.json`. No Dependencies and no Budget, so it gets one attempt. Try it
+in [Your first run](/apmx/docs/quickstart/#run-one-contract).
+
+## Checks are your own commands
+
+APMX runs each `verify` command itself, on the saved output, outside the
+agent's conversation:
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | pass |
+| 1 | reject: the run is REJECTED, and a budget may retry it |
+| anything else, or a timeout | not a pass: the run is UNPROVEN and is not retried |
+
+A passing check is evidence only of what that check tests. Code that passes
+weak checks still passes.
+
+## Budget: what the job may spend
+
+A budget is what the job may spend; today attempts and time are enforced,
+cost is not capped.
+
+```yaml
+budget:
+  max_attempts: 3
+  max_seconds: 600
+```
+
+- **No budget:** exactly one attempt.
+- **With a budget:** up to `max_attempts` attempts, sharing one `max_seconds`
+  deadline. Only a REJECTED candidate (a check exited 1) is retried. Each
+  retry gets the previous checks' exit codes.
+- Producing the same rejected bytes again stops as `no_progress`.
+- APMX does not cap model charges.
+
+## Dependencies: skills and instructions from APM packages
+
+Each `imports` entry names one installed APM package. `apm.yml` declares and
+pins the package; the APM lock fixes its exact content. Versions never go in
+`imports`.
+
+From the package, APMX activates **only skills** (`SKILL.md`) **and
+instructions** (`.apm/instructions/*.instructions.md`). Nothing else in the
+package reaches the agent through the contract.
+
+:::caution[What an import cannot bring]
+A selected skill or instruction is rejected with `unsupported_import` when
+its frontmatter declares `hooks`, `mcp`, `mcpServers`, `lspServers`, `agent`,
+`model`, `allowed-tools` or `context`.
+
+A scoped instruction is also rejected with `unsupported_import`: `applyTo`
+must be absent, `"*"`, `"**"` or `"**/*"`.
+:::
+
+Not to be confused with the **Dependencies row** of `apmx audit`, which
+re-checks that a receipt's APM dependencies reinstall to the same bytes.
+<Badge text="Since the next release" variant="note" size="small" /> In
+v0.7.1 that row is named Ingredients.
+
+:::caution[Not a sandbox]
+Run only contracts you trust: `--allow-host-access` lets the agent and the
+checks use your files, network and logins.
+:::
+
+Next: every field and limit in the
+[contract file reference](/apmx/docs/reference/contract/), or how contracts
+form a [factory](/apmx/docs/factories/).

@@ -1,0 +1,198 @@
+---
+title: Your first run
+description: Preview a real five-contract factory, run one contract, and audit its receipt, in a few minutes.
+---
+
+import { Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+You need three commands:
+
+- `apmx <factory> --plan` previews the contracts, handoffs and checks. Nothing runs.
+- `apmx <factory>` runs them and writes a receipt.
+- `apmx audit` checks that receipt.
+
+This page assumes you have [installed APMX](/apmx/docs/install/) and logged
+in to GitHub Copilot CLI.
+
+## Before you start
+
+:::caution[Work in a new directory]
+Use a new directory **outside any Git repository that has a remote**: APMX
+refuses to run there, even for `--plan`.
+
+A run is not sandboxed: the agent and your checks can use your host files,
+network and logins. Run only contracts you trust.
+:::
+
+## Preview a real factory
+
+The demo factory is a public APM package with five contracts. Preview it
+straight from Git:
+
+```sh
+apmx --from 'danielmeppiel/apmx-demo-factory#v1.0.0' --plan
+```
+
+```text title="apmx --plan (v0.7.1)"
+Factory  danielmeppiel/apmx-demo-factory#v1.0.0   5 contracts   copilot / default model
+
+[1/5] planning        needs request.md -> produces plan.md
+                      checks: plan-sections   1 attempt
+[2/5] specification   needs request.md, plan.md* -> produces specification.md
+                      checks: specification-format-references   1 attempt
+[3/5] build           needs request.md, specification.md* -> produces changes.diff, implementation.md
+                      checks: shipping-examples, checkout-regression, implementation-report-format   budget 3 attempts, 600s
+[4/5] documentation   needs request.md, specification.md*, changes.diff*, implementation.md* -> produces documentation.diff, documentation.md
+                      checks: documentation-format-links-examples, documented-checkout, documentation-report-format   budget 2 attempts, 300s
+[5/5] review          needs request.md, specification.md*, changes.diff*, implementation.md*, documentation.diff*, documentation.md* -> produces review.md
+                      checks: review-format-references   1 attempt
+                      * from an earlier contract
+
+Nothing ran. Run it with:  apmx --from 'danielmeppiel/apmx-demo-factory#v1.0.0'
+Unattended:                apmx --from 'danielmeppiel/apmx-demo-factory#v1.0.0' --allow-host-access --allow-unproven-inputs
+Runs are local and not sandboxed; APMX does not cap model charges.
+```
+
+Nothing ran: no agent, no install. The package was fetched read-only into a
+temporary workspace. Every contract starts from `request.md`, your intent;
+`*` marks a file an earlier contract produced and its checks passed.
+
+## Run one contract
+
+<Steps>
+
+1. **Get the example.** Clone the v0.7.1 tag and copy the first-contract
+   example into a new directory outside the clone:
+
+   ```sh
+   git clone --depth 1 --branch v0.7.1 https://github.com/danielmeppiel/apmx.git apmx-v0.7.1
+   mkdir "$HOME/apmx-first-contract-demo"
+   cp -R apmx-v0.7.1/examples/contracts/first-contract/. "$HOME/apmx-first-contract-demo/"
+   cd "$HOME/apmx-first-contract-demo"
+   ```
+
+   If your home directory is itself inside a Git repository, pick another
+   location.
+
+2. **Read the contract.** `handoff.contract.md` is the whole contract:
+
+   ```markdown title="handoff.contract.md"
+   ---
+   needs: notes.md
+   produces: handoff.json
+   verify:
+     handoff: python3 checks/check_handoff.py handoff.json notes.md
+   ---
+   Create handoff.json as a concise onboarding reference for a new teammate.
+
+   Read the facts and source IDs in notes.md. Write a JSON array containing one
+   object per source ID, with source_id, summary, and caution as nonempty strings.
+   Explain each fact plainly and name its important limitation. Do not invent
+   commands or facts.
+
+   Write the file, not just a chat response. Do not execute the commands described
+   in the notes, install anything, publish, or delegate work.
+   ```
+
+   Read it as an [Agent Contract](/apmx/docs/agent-contracts/): the
+   **Assignment** is `needs: notes.md`; the **Role** is the Markdown body;
+   the **Checks** are under `verify:`; the **Deliverables** are under
+   `produces:`. It has no **Dependencies** (`imports:`) and no **Budget**
+   (`budget:`), so it gets exactly one attempt.
+
+3. **Preview it.**
+
+   ```sh
+   apmx handoff.contract.md --on copilot --plan
+   ```
+
+4. **Run it.**
+
+   ```sh
+   apmx handoff.contract.md --on copilot --allow-host-access
+   ```
+
+   `--allow-host-access` is your consent: the agent and the check may use
+   your files, network and logins. A single contract never asks. Without the
+   flag it stops with UNPROVEN (exit 21) and runs nothing.
+
+5. **Find the result.** The agent's output lands under
+   `.apm/runs/<id>/artifacts/`, not over files in your directory. The
+   receipt is `.apm/runs/<id>/receipt.intoto.jsonl`. The run ends like this
+   (example from a real v0.7.1 run of another one-contract factory; your
+   paths, names and times differ):
+
+   ```text title="End of a COMPLETE run (v0.7.1, abridged)"
+   [+] COMPLETE   1/1 contract   1/1 check   2.4s
+
+   Outputs   .apm/chains/<id>/artifacts/
+             handoff.json
+   Receipt   .apm/chains/<id>/receipt.intoto.jsonl
+             provenance  in-toto + SLSA v1
+             checks      in-toto test-result (1)
+             inventory   CycloneDX 1.5 (1 component)
+             outputs     1 delivered file in outputs/
+             unsigned: binds content, not identity; review before sharing
+
+   Next      apmx audit .apm/chains/<id>/receipt.intoto.jsonl
+   ```
+
+   A single contract without a budget writes to `.apm/runs/<id>/`; a factory
+   writes to `.apm/chains/<id>/`.
+
+</Steps>
+
+## Audit the receipt
+
+With no arguments, `apmx audit` picks the newest receipt under `./.apm/` and
+re-hashes its delivered files:
+
+```sh
+apmx audit
+```
+
+```text title="apmx audit (v0.7.1, example output)"
+Receipt   .apm/chains/<id>/receipt.intoto.jsonl   (newest COMPLETE run)   1 contract   unsigned
+
+[i] Policy        none found
+                  no apm-policy.yml in checkws-main and no git origin for org policy
+[+] Integrity     3 statements; line digests computed; evidence 5/5 blobs verified
+[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Factory       definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[i] Revocation    no policy: nothing revoked to check
+[+] Outputs       1/1 delivered files match receipt subjects (re-hashed)
+                  1 file bound: handoff.json
+[!] Identity      unsigned: proves content binding, not who ran it
+
+[+] VALID   (content-bound; not authenticated)
+```
+
+Read the last line first. `VALID (content-bound; not authenticated)` means
+everything checked is consistent and the files match the receipt. On your
+machine, `[!] Identity  unsigned` is expected: a receipt you make on your
+machine is unsigned, so it binds content, not identity. Only a trusted signer
+in CI adds identity.
+
+The next release renames Ingredients to Dependencies and folds Standards into
+Integrity.
+
+## Look inside
+
+```sh
+apmx audit --explain
+```
+
+This prints what the receipt records instead of auditing it. In v0.7.1 the
+topics are `factory`, `stages`, `checks`, `ingredients` and `outputs`; pass
+one to see only that part, for example `apmx audit --explain stages`.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Agent Contracts" description="The six parts of a contract and what each one means." href="/apmx/docs/agent-contracts/" />
+  <LinkCard title="The receipt" description="What the receipt records, and what it does not guarantee." href="/apmx/docs/receipt/" />
+  <LinkCard title="Run a factory in CI" description="Three isolated jobs and a trusted signer." href="/apmx/docs/run-in-ci/" />
+</CardGrid>

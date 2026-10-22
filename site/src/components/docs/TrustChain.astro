@@ -1,0 +1,91 @@
+---
+// From the trust roots to the merge decision, and which policy key
+// constrains which link. Numbers tie each key to the links it constrains.
+import Glyph from './Glyph.astro';
+const chain = [
+  { n: 1, title: 'Trust roots: GitHub Actions OIDC and Sigstore', kind: 'optional', note: 'outside APMX' },
+  { n: 2, title: 'Trusted signer: the attest job', note: 'of danielmeppiel/apmx/.github/workflows/run.yml', kind: 'sheet', seal: true },
+  { n: 3, title: 'Verification summary (SLSA VSA v1): PASSED', note: 'names the factory definition digest and every receipt line by digest' },
+  { n: 4, title: 'Receipt statements', note: 'provenance, check results, inventory' },
+  { n: 5, title: 'Delivered files, by SHA-256' },
+  { n: 6, title: 'Pull request', note: 'every changed file must be a delivered file, with the same bytes, on a current base' },
+];
+const keys = [
+  { key: 'signers', extra: 'with workflow_sha', what: 'which workflow may sign, pinned to a commit', links: [2] },
+  { key: 'require_signed', what: 'a signed summary is required', links: [3] },
+  { key: 'allow', what: 'which factory definition digests count', links: [3, 4] },
+  { key: 'revoked', what: 'skills or instructions that no longer count', links: [4] },
+];
+---
+<figure class="apmx-fig apmx-fig--trust not-content">
+  <div class="cols">
+    <ol class="chain">
+      {chain.map((item) => (
+        <li class:list={['apmx-node', { 'apmx-node--optional': item.kind === 'optional', 'apmx-node--sheet': item.kind === 'sheet' }]}>
+          <span class="num" aria-hidden="true">{item.n}</span>
+          {item.seal && <Glyph name="seal" size={24} />}
+          <span class="txt"><b>{item.title}</b>{item.note && <small>{item.note}</small>}</span>
+        </li>
+      ))}
+    </ol>
+    <div class="apmx-node policy">
+      <p class="ptitle"><code>apm-policy.yml</code>, read from the PR base</p>
+      <ul>
+        {keys.map((k) => (
+          <li>
+            <p><span class="apmx-field">{k.key}</span>{k.extra && <span class="extra"> {k.extra}</span>}</p>
+            <p class="what">{k.what}</p>
+            <p class="links">
+              <span class="apmx-sr">Constrains link {k.links.join(' and ')}.</span>
+              <span aria-hidden="true">constrains {k.links.map((n) => <span class="num">{n}</span>)}</span>
+            </p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+  <p class="bottom"><code>apmx audit</code> checks each link it can. A checked link that is wrong is <code>[x]</code>; a link that could not be checked makes the verdict <code>[!] INCOMPLETE</code>.</p>
+  <figcaption>Trust flows from GitHub's identity for the signer, through a signed summary, to the exact files in the pull request. Your policy decides which signer and which factories count.</figcaption>
+</figure>
+
+<style>
+  .cols { display: grid; grid-template-columns: 1.35fr 1fr; gap: 1rem; align-items: start; }
+  .chain { position: relative; display: flex; flex-direction: column; gap: .6rem; }
+  .chain::before {
+    content: '';
+    position: absolute;
+    left: 1.3rem;
+    top: .75rem;
+    bottom: .75rem;
+    border-left: 2px solid var(--green);
+    opacity: .7;
+  }
+  .chain > li { position: relative; display: flex; align-items: flex-start; gap: .55rem; padding: .55rem .75rem; }
+  .chain > li.apmx-node--optional { background: var(--canvas); }
+  .txt { min-width: 0; overflow-wrap: anywhere; }
+  .txt small { margin-top: .1rem; }
+  .num {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 1.15rem;
+    height: 1.15rem;
+    border-radius: 999px;
+    background: var(--canvas);
+    border: 1px solid var(--green);
+    color: var(--green);
+    font-family: var(--mono);
+    font-size: .68rem;
+  }
+  .links .num { margin-left: .25rem; }
+  .policy { padding: .75rem .875rem; }
+  .ptitle { color: var(--c-ink); margin-bottom: .5rem; }
+  .policy li + li { margin-top: .6rem; padding-top: .6rem; border-top: 1px solid var(--quiet-line); }
+  .extra { color: var(--secondary); font-size: .75rem; }
+  .what { color: var(--secondary); font-size: .8rem; }
+  .links { font-size: .72rem; color: var(--c-muted); margin-top: .2rem; }
+  .bottom { margin-top: .875rem; color: var(--secondary); }
+  @media (max-width: 50rem) {
+    .cols { grid-template-columns: 1fr; }
+  }
+</style>

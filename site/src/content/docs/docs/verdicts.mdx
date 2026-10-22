@@ -1,0 +1,121 @@
+---
+title: What an audit verdict means
+description: "VALID, INVALID, INCOMPLETE: how apmx audit turns its rows into one verdict, and what a VALID receipt does and does not tell you."
+---
+
+import { Badge, Tabs, TabItem } from '@astrojs/starlight/components';
+import AuditLadder from '../../../components/docs/AuditLadder.astro';
+
+`apmx audit` asks one question about a delivery: is this receipt intact,
+from an approved factory, with passing checks, bound to these files, and
+signed by a signer your policy trusts? It answers in rows, then in one final
+line. Read the final line first.
+
+## Three verdicts
+
+| Verdict | Exit | Means |
+| --- | --- | --- |
+| VALID | 0 | Everything checked is consistent. |
+| INVALID | 1 | Something was checked and is wrong. |
+| INCOMPLETE | 2 | Something could not be checked. Never a pass. |
+
+Real final lines, one per kind:
+
+<Tabs syncKey="apmx-release">
+<TabItem label="v0.7.1">
+
+```text title="Final lines of four real audits (v0.7.1)"
+[+] VALID   (content-bound; not authenticated)
+[+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
+[x] INVALID   Factory: definition sha256:0bec0549b9af.. is not on factories.allow
+[!] INCOMPLETE   Identity: signature not checked (offline)
+             Not a pass: the receipt could not be fully audited (exit 2). --offline skips ingredients explicitly.
+```
+
+</TabItem>
+<TabItem label="Next release">
+
+```text title="Final lines of four real audits (main, unreleased)"
+[+] VALID   (content-bound; not authenticated)
+[+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
+[x] INVALID   Factory: definition sha256:0bec0549b9af.. is not on factories.allow
+[!] INCOMPLETE   Identity: signature not checked (offline)
+             Not a pass: the receipt could not be fully audited (exit 2). --offline skips dependencies explicitly.
+```
+
+</TabItem>
+</Tabs>
+
+The reason after INVALID or INCOMPLETE is the first row that failed or could
+not be checked.
+
+## The rows
+
+<AuditLadder />
+
+Each row prints one symbol: `[+]` pass, `[x]` fail, `[!]` warning or not
+checked, `[i]` information or not evaluated.
+
+<Badge text="Since the next release" variant="note" size="small" /> Eight
+rows, named as above. v0.7.1 prints nine: the schema checks are a separate
+Standards row after Integrity, and Dependencies is named Ingredients.
+
+## Two kinds of VALID
+
+- **`VALID (content-bound; not authenticated)`.** The receipt is intact and
+  bound to these files, but nobody your policy trusts signed it. It binds
+  content, not identity: anyone who can write the files can write a
+  self-consistent unsigned receipt, and it still passes. Only
+  `factories.allow` and a trusted signer constrain that.
+- **`VALID (authenticated: <workflow>)`.** A trusted signer your policy names
+  in `factories.signers` signed a verification summary of exactly these
+  receipt lines, covering these files.
+
+## Warnings that keep VALID
+
+These print `[!]` and leave the verdict VALID:
+
+- **Dependencies not audited offline**: `not audited (offline): ...`. Your
+  gate audits them online.
+- **Unsigned, and the policy does not require a signature**:
+  `unsigned: proves content binding, not who ran it`, or
+  `not authenticated: policy names no factories.signers`.
+- **Signers configured but checked offline, without `require_signed`**:
+  `signature not checked (offline)`.
+- **`factories.enforcement: warn`**: Factory, Revocation and Identity
+  violations print `[!]` instead of `[x]`, for a staged rollout.
+
+A signer pinned only by ref (or not pinned) still passes Identity, with a
+note asking you to pin `workflow_sha`.
+
+## When INCOMPLETE is the right answer
+
+INCOMPLETE means APMX could not check something it was asked to. It fails
+closed:
+
+- **The policy cannot be loaded**: a typo, a bad digest, an unreachable
+  `extends`. A policy that cannot be loaded is never treated as a pass.
+- **Dependencies could not be checked**: the bundled APM is missing, or the
+  packages could not be reinstalled (network, authentication, package
+  access).
+- **A required signature could not be checked**: with `require_signed`,
+  `--offline`, a missing delivered file to look it up by, or no `gh` CLI.
+- **Any pull request gate offline**, or a gate whose policy names no
+  `factories.signers`.
+
+`--offline` is not a pass for signatures: with `require_signed`, and always in
+a pull request, the verdict is INCOMPLETE.
+
+## What VALID does not mean
+
+- **Not correctness.** A receipt is evidence of how a change was made, not a
+  guarantee that the code is correct. Checks are the bar: code that passes
+  weak checks still passes.
+- **Not a sandbox.** The run was not confined.
+- **Not permission to merge**, unless your policy and your gate say so. See
+  [auto-merge factory PRs](/apmx/docs/accept-prs/).
+
+Next: every row's exact messages in the
+[`apmx audit` reference](/apmx/docs/reference/audit/#rows), and what to do
+about each one in its
+[troubleshooting table](/apmx/docs/reference/audit/#troubleshooting-invalid-versus-incomplete).

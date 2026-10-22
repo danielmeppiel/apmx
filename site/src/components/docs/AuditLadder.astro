@@ -1,0 +1,111 @@
+---
+// The apmx audit rows as rungs, the outcomes each row can show,
+// and how the rows become one verdict. Row names follow the next release;
+// the two rungs that differ in v0.7.1 say so.
+const all = [
+  { sym: '[+]', cls: 'pass', word: 'pass' },
+  { sym: '[x]', cls: 'fail', word: 'fail' },
+  { sym: '[!]', cls: 'warn', word: 'warning or not checked' },
+  { sym: '[i]', cls: 'info', word: 'info or not evaluated' },
+];
+const rows = [
+  { name: 'Policy', q: 'Which policy applies?', can: ['[+]', '[!]', '[i]'] },
+  { name: 'Integrity', q: 'Is the bundle intact and well-formed?', can: ['[+]', '[x]', '[i]'], tag: 'includes schema checks since the next release (v0.7.1: separate Standards row)' },
+  { name: 'Factory', q: 'Is this the factory, and is it on factories.allow?', can: ['[+]', '[x]', '[!]', '[i]'] },
+  { name: 'Checks', q: 'Did every declared check pass?', can: ['[+]', '[x]', '[i]'] },
+  { name: 'Dependencies', q: 'Do the skills and packages reinstall to the same bytes?', can: ['[+]', '[x]', '[!]', '[i]'], tag: 'v0.7.1: Ingredients' },
+  { name: 'Revocation', q: 'Is any selected skill or instruction revoked?', can: ['[+]', '[x]', '[!]', '[i]'] },
+  { name: 'Outputs', q: 'Are these exactly the delivered files?', can: ['[+]', '[x]', '[!]', '[i]'] },
+  { name: 'Identity', q: 'Did a trusted signer your policy names sign a verification summary that binds it?', can: ['[+]', '[x]', '[!]', '[i]'] },
+];
+const words = (can: string[]) => all.filter((s) => can.includes(s.sym)).map((s) => s.word).join(', ');
+---
+<figure class="apmx-fig apmx-fig--ladder not-content">
+  <ol class="rungs">
+    {rows.map((row) => (
+      <li class="apmx-node">
+        <div class="what">
+          <b>{row.name}</b>
+          <span class="q">{row.q}</span>
+          {row.tag && <span class="tag">{row.tag}</span>}
+        </div>
+        <span class="apmx-sr">Can show: {words(row.can)}.</span>
+        <span class="chips" aria-hidden="true">
+          {all.map((s) => (
+            <span class:list={['apmx-chip', `apmx-chip--${s.cls}`, { 'apmx-chip--off': !row.can.includes(s.sym) }]}>{s.sym}</span>
+          ))}
+        </span>
+      </li>
+    ))}
+  </ol>
+  <ol class="rule">
+    <li class="bar fail">
+      <span class="if">Any <code>[x]</code></span>
+      <span class="then"><code>[x] INVALID</code> exit 1</span>
+    </li>
+    <li class="bar warn">
+      <span class="if">Else, anything that could not be checked</span>
+      <span class="then"><code>[!] INCOMPLETE</code> exit 2</span>
+    </li>
+    <li class="bar pass">
+      <span class="if">Else</span>
+      <span class="then"><code>[+] VALID</code> exit 0</span>
+      <span class="subs">
+        <span class="sub">content-bound; not authenticated</span>
+        <span class="sub">authenticated: <code>&lt;workflow&gt;</code></span>
+      </span>
+    </li>
+  </ol>
+  <p class="note"><code>[!]</code> is either a warning (the verdict stays VALID) or a check that could not run (INCOMPLETE). The final line tells you which. <code>[i]</code> also marks a row not evaluated after an earlier failure.</p>
+  <figcaption>Audit rows, one verdict. Next release: eight; v0.7.1: nine. Any failure wins over anything incomplete.</figcaption>
+</figure>
+
+<style>
+  .rungs { display: flex; flex-direction: column; gap: .4rem; }
+  .rungs > li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: .5rem .75rem;
+  }
+  .what { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .6rem; min-width: 0; }
+  .what b { min-width: 7.25rem; }
+  .q { color: var(--secondary); }
+  .tag { width: 100%; font-family: var(--mono); font-size: .7rem; color: var(--c-muted); padding-left: 7.85rem; }
+  .chips { display: flex; gap: .3rem; flex: none; }
+  .rule { margin-top: 1rem; display: flex; flex-direction: column; gap: .4rem; }
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: .25rem .75rem;
+    padding: .5rem .75rem;
+    border: 1px solid var(--quiet-line);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .bar.fail { border-color: #5a2a2a; }
+  .bar.warn { border-color: #5a4a20; }
+  .bar.pass { border-color: #2c4b39; }
+  .if { color: var(--secondary); flex: 1 1 14rem; }
+  .then code { color: var(--c-ink); }
+  .bar.fail .then code { color: var(--risk); }
+  .bar.warn .then code { color: var(--warn); }
+  .bar.pass .then code { color: var(--green); }
+  .subs { width: 100%; display: flex; flex-wrap: wrap; gap: .35rem; }
+  .sub {
+    font-family: var(--mono);
+    font-size: .7rem;
+    color: var(--c-muted);
+    border: 1px solid var(--quiet-line);
+    border-radius: 999px;
+    padding: .05rem .5rem;
+  }
+  .sub code { color: var(--c-muted); }
+  .note { margin-top: .75rem; color: var(--secondary); font-size: .8rem; }
+  @media (max-width: 50rem) {
+    .rungs > li { flex-direction: column; align-items: flex-start; }
+    .tag { padding-left: 0; }
+  }
+</style>

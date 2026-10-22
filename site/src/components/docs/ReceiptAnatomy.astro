@@ -1,0 +1,107 @@
+---
+// What a receipt holds, what it is bound to, and where the trusted signature
+// lives: beside the receipt, as a GitHub attestation, not as a line in it.
+import Glyph from './Glyph.astro';
+---
+<figure class="apmx-fig apmx-fig--receipt not-content">
+  <div class="layout">
+    <div class="left">
+      <div class="paper">
+        <p class="ptitle"><code>receipt.intoto.jsonl</code></p>
+        <ol class="lines">
+          <li>
+            <span class="where">Line 1</span>
+            <span><b>SLSA Provenance v1</b><small>which factory definition, from which inputs, which harness and models (recorded); selected skills and instructions as capabilities</small></span>
+          </li>
+          <li>
+            <span class="where">Lines 2..n</span>
+            <span><b>in-toto Test Result</b><small>one per check, PASSED</small></span>
+          </li>
+          <li>
+            <span class="where">Last line</span>
+            <span><b>CycloneDX 1.5</b><small>APM package components from the retained lock (agent bill of materials)</small></span>
+          </li>
+        </ol>
+        <p class="unsigned">unsigned: binds content, not identity</p>
+      </div>
+      <div class="apmx-node apmx-node--optional evidence">
+        <code>evidence/</code>: definition, inputs, transcripts, check logs. Optional for a structural <code>apmx audit</code>; required by <code>apmx check</code> and the trusted signer. May contain private data.
+      </div>
+    </div>
+    <div class="right">
+      <div class="files">
+        <p class="ftitle">Delivered files (<code>outputs/</code>)</p>
+        <ul class="sheets" aria-hidden="true">
+          <li></li><li></li><li></li>
+        </ul>
+      </div>
+      <div class="bind">
+        <span class="bracket" aria-hidden="true"></span>
+        <span class="bind-label">every receipt line names these files by SHA-256</span>
+      </div>
+      <div class="apmx-node apmx-node--sheet seal">
+        <Glyph name="seal" size={40} />
+        <p>Verification summary, signed by a trusted signer. CI only. Stored as a GitHub attestation on the delivered files, not a line in the file.</p>
+      </div>
+    </div>
+  </div>
+  <figcaption>One receipt per COMPLETE run, bound to the delivered files. The trusted signature lives beside it, not inside it.</figcaption>
+</figure>
+
+<style>
+  .layout { display: grid; grid-template-columns: 1.3fr 1fr; gap: 1rem; align-items: start; }
+  .paper {
+    background: var(--surface);
+    border: 1px dashed var(--secondary);
+    border-bottom: 0;
+    border-radius: 12px 12px 0 0;
+    padding: .875rem .875rem 1.4rem;
+    -webkit-mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / 14px 100%;
+    mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / 14px 100%;
+  }
+  .ptitle { margin-bottom: .6rem; }
+  .ptitle code { color: var(--c-ink); font-size: .8rem; }
+  .lines { display: flex; flex-direction: column; gap: .5rem; }
+  .lines > li {
+    display: grid;
+    grid-template-columns: 5.25rem 1fr;
+    gap: .5rem;
+    padding-top: .5rem;
+    border-top: 1px solid var(--quiet-line);
+  }
+  .where { font-family: var(--mono); font-size: .7rem; color: var(--c-muted); padding-top: .1rem; }
+  .lines small { display: block; color: var(--secondary); font-size: .78rem; }
+  .unsigned {
+    margin-top: .75rem;
+    font-family: var(--mono);
+    font-size: .72rem;
+    color: var(--warn);
+  }
+  .evidence { margin-top: .75rem; font-size: .8rem; color: var(--secondary); }
+  .right { display: flex; flex-direction: column; gap: .75rem; }
+  .bind { display: flex; align-items: center; gap: .5rem; }
+  .bracket {
+    flex: none;
+    width: .6rem;
+    height: 2.5rem;
+    border: 2px solid var(--green);
+    border-right: 0;
+    border-radius: 6px 0 0 6px;
+  }
+  .bind-label { font-size: .78rem; color: var(--secondary); }
+  .ftitle { margin-bottom: .4rem; }
+  .sheets { display: flex; gap: .5rem; }
+  .sheets li {
+    width: 2rem;
+    height: 2.5rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 4px;
+    background: linear-gradient(var(--quiet-line), var(--quiet-line)) 50% 35% / 60% 2px no-repeat,
+      linear-gradient(var(--quiet-line), var(--quiet-line)) 50% 55% / 60% 2px no-repeat,
+      var(--canvas);
+  }
+  .seal { display: flex; gap: .6rem; align-items: flex-start; font-size: .8rem; }
+  @media (max-width: 50rem) {
+    .layout { grid-template-columns: 1fr; }
+  }
+</style>

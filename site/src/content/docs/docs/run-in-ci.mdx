@@ -1,0 +1,136 @@
+---
+title: Run a factory in CI
+description: "Call APMX's reusable run.yml: the agent works, checks verify, a trusted signer signs, and the delivery reaches a pull request, a branch or a bundle."
+---
+
+import ThreeJobs from '../../../components/docs/ThreeJobs.astro';
+
+Call APMX's reusable `run.yml` from a workflow and you get:
+
+- **Three isolated jobs**: the agent works, checks verify, a trusted signer
+  signs. Each job runs on a fresh runner.
+- **A receipt of record**, written by the job that reruns your checks, not
+  by the agent's job.
+- **A signed summary on every delivered file**: a GitHub attestation from a
+  trusted signer, which your gate can verify.
+
+<ThreeJobs variant="full" />
+
+## Call run.yml
+
+A minimal caller, adapted from
+[`examples/factory-platform/factory.yml`](https://github.com/danielmeppiel/apmx/blob/main/examples/factory-platform/factory.yml):
+
+```yaml title=".github/workflows/factory.yml"
+name: factory
+on:
+  workflow_dispatch:
+    inputs:
+      request: { description: "What the factory should build", required: true, type: string }
+permissions: {}
+jobs:
+  run:
+    uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1
+    permissions: { contents: read, id-token: write, attestations: write }
+    with:
+      factory: danielmeppiel/apmx-demo-factory#v1.0.0
+      request: ${{ inputs.request }}
+    secrets:
+      agent-token: ${{ secrets.COPILOT_TOKEN }}   # produce job only
+```
+
+- Keep `permissions: {}` at the top and grant exactly
+  `contents: read, id-token: write, attestations: write` to the call.
+  `run.yml` declares `permissions: {}` too and grants each job its own subset.
+- `factory` is a directory in your repository, or an APM package pinned to a
+  tag or commit (`owner/repo[/path]#ref`).
+- `agent-token` is the harness token. Only the `produce` job receives it.
+- If your factory's checks need Python packages, pass
+  `checks-requirements` (for example `checks/requirements.txt`).
+
+Every input is in the [run.yml reference](/apmx/docs/reference/run-yml/#inputs).
+
+## Write the intent
+
+The `request` input is your intent. `run.yml` writes it to `request-file`
+(default `request.md`) in the run root before the `produce` and `check` jobs
+run. Treat it as untrusted prompt input: whoever can start the workflow
+writes into the agent's prompt.
+
+## Choose how it is delivered
+
+Without `target-repository`, the run builds against your repository and
+stops at the artifacts: no job pushes anything.
+
+With `target-repository` (which may be your own repository), a `deliver` job
+commits only the delivered files onto the base commit. The `deliver` input
+picks what happens next:
+
+| `deliver` | What happens |
+| --- | --- |
+| `pull-request` (default) | Pushes a branch and opens or updates a pull request. |
+| `branch` | Pushes the branch only. |
+| `bundle` | Pushes nothing and needs no write token. |
+
+Every mode uploads the delivered commit as the `apmx-delivered` git bundle.
+
+`bundle` is often the right choice for your own repository. GitHub rebinds a
+passed `GITHUB_TOKEN` to each called job's own read-only token, and pull
+requests opened with `GITHUB_TOKEN` do not trigger other workflows, so your
+gate would not run. Without a GitHub App or another write token, use
+`bundle` and push the bundle from a job of your own, as
+[apmx-demo-shop](https://github.com/danielmeppiel/apmx-demo-shop/blob/main/.github/workflows/factory.yml)
+does.
+
+## One factory, many repositories
+
+A platform repository can run approved factories against other
+repositories:
+
+- `target-repository` (`owner/name`) is where the factory runs and delivers;
+  `factory` must then be a pinned package.
+- `target-ref` is the branch, tag or commit to build on (default: the
+  default branch). `target-branch` is the branch `deliver` force-pushes
+  (default `apmx/run-<run id>`); never the base or default branch.
+- Credentials: a GitHub App (`target-app-client-id` and the
+  `target-app-private-key` secret), or a `target-token` secret. Only the
+  `target` and `deliver` jobs receive them. GitHub App installation tokens
+  are scoped to the target repository. If you use `target-token` instead,
+  scope it to the minimum required contents and pull-request permissions
+  yourself. Neither credential reaches `produce`.
+- `deliver` never pushes the base or default branch and refuses `.git`,
+  `.github/workflows/` and symlinks.
+
+See [`examples/factory-platform`](https://github.com/danielmeppiel/apmx/tree/main/examples/factory-platform)
+for a dispatch workflow, a weekly schedule and an organization gate.
+
+## What comes out
+
+| Output | Value |
+| --- | --- |
+| `definition-sha256` | the factory definition digest |
+| `receipt-sha256` | the receipt of record's digest |
+| `attestation-url` | the signed verification summary (empty when `attest` is off) |
+| `base-commit` | the commit the factory built on |
+| `delivered-commit` | the delivered commit |
+| `pull-request-url` | the pull request, with `deliver: pull-request` |
+
+| Artifact | Contents | Kept |
+| --- | --- | --- |
+| `apmx-receipt` | the receipt of record, `evidence/` and `outputs/` | default retention |
+| `apmx-delivery` | the delivered files at their repository paths | default retention |
+| `apmx-delivered` | the delivered commit as a git bundle (only with `target-repository`) | default retention |
+| `apmx-producer-receipt` | the agent job's own receipt; untrusted | 7 days |
+| `apmx-target` | the target tree (platform mode) | 1 day |
+
+:::caution[Limits]
+- The `check` job runs your checks on agent-written bytes with host access.
+  It has no write token and no signing identity.
+- The model token is visible to the agent's job.
+- The trusted signer audits offline; your gate re-audits dependencies online
+  and applies your policy.
+- `run.yml` installs only the Copilot CLI.
+:::
+
+Next: [auto-merge factory PRs](/apmx/docs/accept-prs/) in the receiving
+repository, or every input in the [run.yml reference](/apmx/docs/reference/run-yml/).

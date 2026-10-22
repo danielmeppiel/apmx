@@ -1,0 +1,94 @@
+---
+title: Trust model
+description: "Traceability, Portability, Security, Trust: what each promise rests on, where it holds, and its limits."
+---
+
+import ThreeJobs from '../../../components/docs/ThreeJobs.astro';
+import TrustChain from '../../../components/docs/TrustChain.astro';
+
+APMX lets you merge a factory's pull requests on trusted evidence instead of
+re-reading every generated diff. You review the factory once. Each delivery
+is covered by an unsigned receipt of record and by GitHub attestations from a
+trusted signer the agent cannot reach. The verification summary binds every
+receipt line and delivered file by digest, and your repository decides what
+counts. Merge on trusted evidence.
+
+That rests on four promises. Each holds under conditions, stated below.
+
+## Four promises
+
+| Promise | Rests on | Holds when | Limit |
+| --- | --- | --- | --- |
+| **Traceability.** Every delivered file is cryptographically bound to the factory that made it and the checks it passed. | Every receipt line names the delivered files by SHA-256; provenance names the factory definition digest; each check result names the definition and the checker files. `apmx audit` re-verifies all of it. | Always, as content binding. Identity is added only by a trusted signer in CI that your policy names. | A local receipt is unsigned: anyone who can write the files can write a self-consistent one. |
+| **Portability.** Same factory, skills and checks on your choice of harness and model. | The definition digest excludes harness and model; `--on` and `--model` switch them. | Today: GitHub Copilot CLI and OpenCode 1.2.24. | Other harnesses are refused. `run.yml` installs only the Copilot CLI. Harness and model are recorded, not enforced. |
+| **Security.** Agent, checks and signer run apart. The agent cannot sign or change its checks. | Three isolated jobs in `run.yml`; a gate that runs from the base branch and reads policy from the PR base. | In CI through `run.yml`. Locally there is no separation, sandbox or signer. | The check job runs your checks on agent-written bytes with host access. The model token is visible to the agent's job. |
+| **Trust.** Only factories you approved ship: signed provenance, intact files, your checks passed. | `factories.allow`, `require_signed` and `signers` (with `workflow_sha`) in your `apm-policy.yml`, enforced by the PR gate. | All three keys are set and the audit runs online. | Only as strong as your policy and your checks. No SLSA level is claimed. |
+
+**Merge on trusted evidence.**
+
+## Three isolated jobs
+
+<ThreeJobs variant="full" />
+
+Three isolated jobs: the agent works, checks verify, a trusted signer signs.
+APMX's reusable `run.yml` runs each job on a fresh runner:
+
+- **`produce`** is the only job with the agent and the model token. Its
+  `GITHUB_TOKEN` is read-only and it has no signing identity. The model token
+  is visible to the agent's job.
+- **`check`** reruns the factory's checks from your checkout, not the
+  agent's job, on the bytes the agent produced (`apmx check`). The factory
+  definition digest must match, or the receipt is withdrawn. The checks run
+  with host access on agent-written bytes, but this job has no write token
+  and no signing identity.
+- **`attest`** runs no agent and no candidate code. It re-audits the receipt
+  offline, requires VALID with complete evidence, then signs through Sigstore
+  with the workflow's GitHub OIDC identity. This is the trusted signer.
+- **`target`** and **`deliver`** are optional. `deliver` runs no candidate
+  code, never pushes the base or default branch, and refuses changes under
+  `.github/workflows/`.
+
+## The trust chain
+
+<TrustChain />
+
+- **Trust roots.** GitHub Actions OIDC, Sigstore (checked through
+  `gh attestation verify`) and the GitHub REST API, used to resolve tag
+  objects. APMX does not replace them.
+- **The signer pin.** A `signers` entry names the workflow and, with
+  `workflow_sha`, the exact commit. A signer without `workflow_sha` trusts
+  every run of that workflow file.
+- **The summary.** The verification summary names the factory definition
+  digest and every receipt line by digest, so it covers exactly one receipt.
+- **The gate.** In a pull request, `apmx audit` runs from the base branch
+  (`pull_request_target`) and reads `apm-policy.yml` from the PR base commit,
+  never from the PR.
+
+## What it stops, and under which policy
+
+| Attack | Stopped? | Condition |
+| --- | --- | --- |
+| Hand-write or forge a receipt | Yes, with `require_signed` and `signers`, audited online | Offline the verdict is INCOMPLETE. Without `require_signed`, a self-consistent unsigned receipt is VALID with `[!] Identity`. |
+| Add an extra file to the pull request | Yes, in the PR gate | Every changed file must be covered by a signed summary from your signers. |
+| Weaken a check or a contract | Only with `factories.allow` | The definition digest changes, so it is not on the list. Without `allow`, any definition passes the Factory row. |
+| Edit the gate or the policy in the pull request | Yes | The gate runs from the base branch and reads the policy from the PR base commit. |
+| Replay an old delivery onto a moved main | Yes, for the files the PR touches | Each touched file must match its recorded before-image at the PR base, and the recorded base commit must be in the PR base's history. Unrelated changes on main do not block. |
+| Move the `v0.7.1` tag to other code | Yes, with `workflow_sha` | A signer pinned only by ref trusts whatever the ref points to. |
+| A prompt-injected agent writes malicious code | Only as good as your checks | It cannot sign or skip checks, but code that passes weak checks still passes. |
+| Compromise GitHub or Sigstore | No | They are the trust root. |
+
+:::caution[Limits]
+- **Not sandboxed.** A run, local or in CI, can use its host's files,
+  network and logins.
+- **Harness and model are recorded, not enforced.** Each stage records the
+  harness and models it reported. No policy enforces them.
+- **Local receipts are unsigned.** They bind content, not identity.
+- **The signing-time audit is offline.** The trusted signer audits offline;
+  your gate re-audits dependencies online and applies your policy.
+- **No SLSA level** is claimed (`verifiedLevels: []`).
+- **Not for third-party pull requests.** Human and outside PRs fail the gate
+  by design; merge them through your normal review.
+:::
+
+Next: [what an audit verdict means](/apmx/docs/verdicts/), then
+[auto-merge factory PRs](/apmx/docs/accept-prs/).

@@ -1,0 +1,277 @@
+---
+title: Audit a receipt
+description: Check a local run, a CI receipt of record or a delivered file with apmx audit, and verify a receipt without APMX.
+---
+
+import { Badge, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Each section is one task. For what the verdicts and rows mean, see
+[audit verdicts](/apmx/docs/verdicts/).
+
+## Your newest local run
+
+```sh
+apmx audit
+```
+
+With no arguments and outside a pull request, `apmx audit` takes the newest
+receipt under `./.apm/` and, when its sibling `outputs/` is present,
+re-hashes it against the receipt.
+
+<Tabs syncKey="apmx-release">
+<TabItem label="v0.7.1">
+
+```text title="apmx audit (v0.7.1)"
+Receipt   .apm/chains/20261022T180938Z-c5a4aaff9823/receipt.intoto.jsonl   (newest COMPLETE run)   1 contract   unsigned
+
+[i] Policy        none found
+                  no apm-policy.yml in checkws-main and no git origin for org policy
+[+] Integrity     3 statements; line digests computed; evidence 5/5 blobs verified
+[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Factory       definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[i] Revocation    no policy: nothing revoked to check
+[+] Outputs       1/1 delivered files match receipt subjects (re-hashed)
+                  1 file bound: handoff.json
+[!] Identity      unsigned: proves content binding, not who ran it
+
+[+] VALID   (content-bound; not authenticated)
+```
+
+</TabItem>
+<TabItem label="Next release">
+
+```text title="apmx audit (main, unreleased)"
+Receipt   .apm/chains/20261022T180938Z-c5a4aaff9823/receipt.intoto.jsonl   (newest COMPLETE run)   1 contract   unsigned
+
+[i] Policy        none found
+                  no apm-policy.yml in checkws-main and no git origin for org policy
+[+] Integrity     3 statements intact and well-formed; line digests computed; evidence 5/5 blobs verified
+[+] Factory       definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Dependencies  1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[i] Revocation    no policy: nothing revoked to check
+[+] Outputs       1/1 delivered files match receipt subjects (re-hashed)
+                  1 file bound: handoff.json
+[!] Identity      unsigned: proves content binding, not who ran it
+
+[+] VALID   (content-bound; not authenticated)
+```
+
+</TabItem>
+</Tabs>
+
+No receipt under `./.apm/` is a usage error (exit 2); pass the receipt path
+instead.
+
+## A receipt from CI
+
+`run.yml` uploads the receipt of record as the `apmx-receipt` artifact.
+Download it and audit it against the policy of the repository that receives
+the delivery:
+
+```sh
+gh run download RUN_ID -R OWNER/REPO -n apmx-receipt -D apmx-receipt
+apmx audit apmx-receipt --policy apm-policy.yml
+```
+
+A real receipt of record from the `apmx-demo-shop` CI run, audited against
+the shop's policy:
+
+<Tabs syncKey="apmx-release">
+<TabItem label="v0.7.1">
+
+```text title="apmx audit apmx-receipt --policy shop-policy.yml (v0.7.1)"
+Receipt   apmx-receipt   1 contract   signed
+
+[+] Policy        shop-policy.yml (--policy)   factories enforcement block
+[+] Integrity     3 statements; line digests computed; evidence 5/5 blobs verified
+[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Factory       definition sha256:c011c35b5790.. on factories.allow (danielmeppiel/apmx/tests/fixtures/run-workflow-package)
+                  definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[+] Revocation    0 of 0 capabilities revoked; factories.revoked is empty
+[+] Outputs       1 file bound: handoff.json
+[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.7.1 at a70c1939dddc (tag object 917ffb4e5406)
+                  run https://github.com/danielmeppiel/apmx-demo-shop/actions/runs/39740103826/attempts/1
+
+[+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
+```
+
+</TabItem>
+<TabItem label="Next release">
+
+```text title="apmx audit apmx-receipt --policy shop-policy.yml (main, unreleased)"
+Receipt   apmx-receipt   1 contract   signed
+
+[+] Policy        shop-policy.yml (--policy)   factories enforcement block
+[+] Integrity     3 statements intact and well-formed; line digests computed; evidence 5/5 blobs verified
+[+] Factory       definition sha256:c011c35b5790.. on factories.allow (danielmeppiel/apmx/tests/fixtures/run-workflow-package)
+                  definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Dependencies  1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[+] Revocation    0 of 0 capabilities revoked; factories.revoked is empty
+[+] Outputs       1 file bound: handoff.json
+[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.7.1 at a70c1939dddc (tag object 917ffb4e5406)
+                  run https://github.com/danielmeppiel/apmx-demo-shop/actions/runs/39740103826/attempts/1
+
+[+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
+```
+
+</TabItem>
+</Tabs>
+
+Two things differ from the local default:
+
+- An explicit receipt does **not** re-hash `outputs/`; the Outputs row only
+  checks that the statements agree (`1 file bound`). Add `--outputs DIR` to
+  re-hash.
+- Identity looks the signature up by a delivered file's digest. It finds that
+  file in `--outputs DIR` or the receipt's sibling `outputs/`. With neither,
+  it prints `signature not checked: no delivered file to look it up by (--outputs)`.
+
+## Check delivered files
+
+```sh
+apmx audit apmx-receipt --outputs apmx-receipt/outputs
+```
+
+Every file in `DIR` is re-hashed against the receipt's subjects. A match
+prints `[+] Outputs  1/1 delivered files match receipt subjects (re-hashed)`.
+A changed file fails:
+
+```text title="A delivered file edited after the run (v0.7.1 and main)"
+[x] Outputs       handoff.json differs from its receipt subject (SHA-256)
+```
+
+## Without network
+
+```sh
+apmx audit apmx-receipt --offline
+```
+
+`--offline` launches no APM and uses no network. Three things are reported
+as not checked: dependencies (`[!] ... not audited (offline)`), signatures
+(`[!] Identity  signature not checked (offline)`) and org policy
+(`[!] Policy  org policy not checked (offline)`). Only a local `--policy` file
+is read; anything else is a usage error:
+
+```text title="apmx audit receipt.intoto.jsonl --offline --policy org (main, trimmed)"
+Error: --offline can only read a local --policy file; org, owner/repo and URLs need the network.
+```
+
+`--offline` is not a pass for signatures: with `require_signed`, and always
+in a pull request, the verdict is INCOMPLETE.
+
+## See what it records
+
+```sh
+apmx audit --explain             # every topic
+apmx audit --explain outputs     # one topic
+```
+
+`--explain` prints what the receipt records instead of auditing it: no
+policy, no network, no APM. Topics: `factory`, `stages`, `checks`,
+`dependencies`, `outputs`, `all`.
+<Badge text="Since the next release" variant="note" size="small" /> In
+v0.7.1 the topic is `ingredients`, not `dependencies`; each version rejects
+the other spelling as a usage error.
+
+<Tabs syncKey="apmx-release">
+<TabItem label="v0.7.1">
+
+```text title="apmx audit receipt.intoto.jsonl --explain ingredients (v0.7.1)"
+Ingredients
+  capability   python-testing-patterns  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9  body sha256:a1020718f316..
+  component    wshobson/agents  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9
+  component    danielmeppiel/apmx-demo-factory  pkg:generic/apmx-demo-factory@e8e9c5a7b1f11c668860a22d98022591d77cea97
+  retained     apm.lock.yaml  sha256:2aa9ff56bb6d..
+  retained     apm.yml  sha256:5c70a5edec95..
+  retained     imports-apm.yml  sha256:b37d01c6ae86..
+```
+
+</TabItem>
+<TabItem label="Next release">
+
+```text title="apmx audit receipt.intoto.jsonl --explain dependencies (main, unreleased)"
+Dependencies
+  capability   python-testing-patterns  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9  body sha256:a1020718f316..
+  component    wshobson/agents  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9
+  component    danielmeppiel/apmx-demo-factory  pkg:generic/apmx-demo-factory@e8e9c5a7b1f11c668860a22d98022591d77cea97
+  retained     apm.lock.yaml  sha256:2aa9ff56bb6d..
+  retained     apm.yml  sha256:5c70a5edec95..
+  retained     imports-apm.yml  sha256:b37d01c6ae86..
+```
+
+</TabItem>
+</Tabs>
+
+## Export the inventory
+
+`--export abom` writes the receipt's CycloneDX 1.5 inventory (the agent bill
+of materials) to stdout, or to a file with `-o`. It never overwrites a file:
+
+```text title="apmx audit --export abom (v0.7.1)"
+$ apmx audit --export abom -o abom-v071.cdx.json
+[+] CycloneDX 1.5 inventory written to abom-v071.cdx.json
+
+$ apmx audit --export abom -o abom-v071.cdx.json
+Usage: apmx audit [OPTIONS] [RECEIPT]
+Try 'apmx audit --help' for help.
+
+Error: abom-v071.cdx.json exists; refusing to overwrite it.
+```
+
+## Machine-readable output
+
+```sh
+apmx audit --format json
+apmx audit --format sarif
+```
+
+JSON has the keys `schema`, `receipt`, `selection`, `result`, `exitCode`,
+`reason`, `assurance`, `signed`, `rows` and `facts`. The `schema` is
+`apmx-audit/2`.
+<Badge text="Since the next release" variant="note" size="small" /> v0.7.1
+prints `apmx-audit/1`.
+
+SARIF is version 2.1.0, with one result per failed or warning row. Every key
+and rule is in the [`apmx audit` reference](/apmx/docs/reference/audit/#output-formats).
+
+## Verify without APMX
+
+`scripts/verify_evidence.py`, in an APMX source checkout, loads APMX's
+receipt verifier by file path and runs the same structural checks without
+importing the `apmx` package:
+
+```text title="scripts/verify_evidence.py (real output)"
+$ python <repo>/scripts/verify_evidence.py apmx-receipt --require-evidence
+{"assurance": "Unsigned content binding and format compatibility, not authenticated attestation.", "capabilities": 0, "definitionSha256": "c011c35b5790bc327355f427b73b56192e37b9e096d95bbf5dd9e6117480d05b", "evidence": "complete", "outputs": 1, "statements": 3, "status": "passed"}
+```
+
+The stock GitHub CLI can verify the trusted signer's verification summary on
+a delivered file. Download the attestations first, then verify against the
+downloaded bundle:
+
+```text title="gh attestation (gh 2.102.0, real output)"
+$ gh attestation download handoff.json --repo danielmeppiel/apmx-demo-shop
+Wrote attestations to file sha256:4bfe1f7daa11fc9590f14ecb1c9a04abd749b10dd1f421aa85a850aaa27c00c5.jsonl.
+Any previous content has been overwritten
+
+The trusted metadata is now available at sha256:4bfe1f7daa11fc9590f14ecb1c9a04abd749b10dd1f421aa85a850aaa27c00c5.jsonl
+
+$ gh attestation verify handoff.json --repo danielmeppiel/apmx-demo-shop --bundle sha256:4bfe1f7daa11fc9590f14ecb1c9a04abd749b10dd1f421aa85a850aaa27c00c5.jsonl --signer-workflow danielmeppiel/apmx/.github/workflows/run.yml --predicate-type https://slsa.dev/verification_summary/v1
+```
+
+The second command exits 0. Verifying directly, without `--bundle`, fails
+with `HTTP 422: Invalid Argument - predicate_type invalid predicate type
+provided`: GitHub's attestation list API rejects that predicate-type filter.
+
+Next: [audit verdicts](/apmx/docs/verdicts/), or the
+[troubleshooting table](/apmx/docs/reference/audit/#troubleshooting-invalid-versus-incomplete).

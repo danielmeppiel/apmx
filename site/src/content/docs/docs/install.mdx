@@ -1,0 +1,137 @@
+---
+title: Install APMX
+description: Download and verify the APMX v0.7.1 native bundle, or set it up in GitHub Actions.
+---
+
+import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+APMX ships as one self-contained native bundle per platform. The bundle
+includes its pinned APM 0.33.0, so you do not install APM, and APMX itself
+needs no Python.
+
+## Before you start
+
+- **Git.**
+- **A harness**, authenticated on its own. Today: GitHub Copilot CLI
+  ([quickstart](https://docs.github.com/en/copilot/get-started/cli-quickstart))
+  or OpenCode 1.2.24.
+- **Python**, for your factory's checks. APMX runs your checks; the examples'
+  checks call `python3`.
+- **Model access** through that harness. Model usage may cost money; APMX
+  does not cap it.
+
+## Download and verify
+
+The [v0.7.1 release](https://github.com/danielmeppiel/apmx/releases/tag/v0.7.1)
+publishes five archives, each with a same-name `.sha256` file, and a
+`release-manifest.json`.
+
+| Machine | Archive |
+| --- | --- |
+| macOS, Apple Silicon | `apmx-0.7.1-macos-arm64.tar.gz` |
+| macOS, Intel | `apmx-0.7.1-macos-x86_64.tar.gz` |
+| Linux, x86-64 | `apmx-0.7.1-linux-x86_64.tar.gz` |
+| Linux, ARM64 | `apmx-0.7.1-linux-arm64.tar.gz` |
+| Windows, x86-64 | `apmx-0.7.1-windows-x86_64.zip` |
+
+<Tabs syncKey="os">
+<TabItem label="macOS and Linux">
+
+<Steps>
+
+1. Download the archive and its checksum into a new directory. Set `target`
+   to your row of the table (`macos-arm64`, `macos-x86_64`, `linux-x86_64`
+   or `linux-arm64`).
+
+   ```sh
+   version=0.7.1
+   target=macos-arm64
+   archive="apmx-$version-$target.tar.gz"
+   install_dir="$HOME/.local/share/apmx/$version"
+   release_url="https://github.com/danielmeppiel/apmx/releases/download/v$version"
+   mkdir -p "$HOME/.local/share/apmx" &&
+   mkdir "$install_dir" &&
+   (
+     cd "$install_dir" &&
+     curl --fail --location --output "$archive" "$release_url/$archive" &&
+     curl --fail --location --output "$archive.sha256" "$release_url/$archive.sha256"
+   )
+   ```
+
+2. Verify the checksum **before** you extract. On macOS:
+
+   ```sh
+   (cd "$install_dir" && shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive")
+   ```
+
+   On Linux:
+
+   ```sh
+   (cd "$install_dir" && sha256sum -c "$archive.sha256" && tar -xzf "$archive")
+   ```
+
+3. Put the extracted directory on your `PATH` (this terminal only):
+
+   ```sh
+   export APMX_NATIVE_ROOT="$install_dir/apmx-$target"
+   export PATH="$APMX_NATIVE_ROOT:$PATH"
+   ```
+
+</Steps>
+
+Stop on any failed download, checksum or extraction.
+
+</TabItem>
+<TabItem label="Windows">
+
+Use PowerShell, Git for Windows and the native `copilot.exe`. The steps
+(download, verify with `Get-FileHash`, extract) are in the repository:
+[Windows native installation](https://github.com/danielmeppiel/apmx/blob/main/docs/install.md#windows-native-installation).
+
+</TabItem>
+</Tabs>
+
+## Keep the bundle together
+
+The extracted directory holds the `apmx` binary and, beside it, the bundled
+APM at `libexec/apm/apm`. APMX uses that exact APM to install and audit
+skills and packages. Keep the directory whole; do not copy the binary alone.
+
+## Check it
+
+```sh
+apmx --version
+```
+
+```text title="apmx --version (v0.7.1)"
+apmx, version 0.7.1
+```
+
+## In GitHub Actions
+
+The `setup` action downloads the same archive for the runner, checks it
+against its `.sha256` file and `release-manifest.json`, and adds `apmx` to
+`PATH`. It does not use pip.
+
+```yaml title=".github/workflows/your-workflow.yml (step)"
+- uses: danielmeppiel/apmx/.github/actions/setup@v0.7.1
+  with:
+    version: "0.7.1"
+    # Optional: also pin the archive digest for this runner's target.
+    # This is the published digest of apmx-0.7.1-linux-x86_64.tar.gz.
+    sha256: 222fd72b969191493c5c437ffc1f9542e93ca98bd04a806ede7e8138680129e9
+```
+
+Both `with:` keys are optional; `version` defaults to `0.7.1`. See
+[run.yml and actions](/apmx/docs/reference/run-yml/#setup-action) for its
+inputs and outputs.
+
+## From source
+
+You can run the current source checkout instead; follow
+[Run the current source checkout](https://github.com/danielmeppiel/apmx/blob/main/docs/install.md#run-the-current-source-checkout).
+A source install has no bundled APM: point `APMX_APM_BACKEND` at the pinned
+APM executable, as that guide explains. Without it, `apmx audit` cannot
+check dependencies and ends INCOMPLETE (exit 2).
+
+Next: [your first run](/apmx/docs/quickstart/).
