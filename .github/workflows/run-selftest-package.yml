@@ -7,6 +7,7 @@ name: run.yml package self-test
 # receipt of record's definition must pin the package commit.
 on:
   pull_request:
+    paths-ignore: ["site/**", ".github/workflows/site.yml"]
   push:
     branches: [main]
   workflow_dispatch:

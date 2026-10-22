@@ -5,8 +5,9 @@ name: Actions
 # end to end by run.yml.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+    paths-ignore: ["site/**", ".github/workflows/site.yml"]
 
 permissions:
   contents: read
