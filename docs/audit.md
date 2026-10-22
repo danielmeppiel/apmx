@@ -32,11 +32,35 @@ no receipt. Each run's `Next` line prints the exact audit command.
 | Where | What | Outputs | Policy |
 | --- | --- | --- | --- |
 | Your machine | The newest COMPLETE run's `receipt.intoto.jsonl` under `./.apm/` (run ids start with a UTC timestamp). | Its `outputs/` are re-hashed. | Discovered (below). |
-| A GitHub pull request (`pull_request` or `pull_request_target`) | The PR carries **code only**. Its changed files are looked up by SHA-256 in the attestation store of `factories.signers` (below). | The PR's own change is bound to the signed delivery. | Discovered; the repository file is read from the PR **base**. |
+| A GitHub pull request (`pull_request_target`, or `pull_request`) | The PR carries **code only**. Its changed files are looked up by SHA-256 in the attestation store of `factories.signers` (below). Only a valid factory delivery passes. | The PR's own change is bound to the signed delivery. | Discovered; the repository file is read from the PR **base**. Nothing in the PR's working tree is read. |
 
 Ambiguity is never guessed: no receipt is exit 2 with a message saying what to pass.
 
 ### Pull requests: the gate
+
+**Green means accepted by proof, and nothing else.** The required `audit`
+check is the merge signal, so it passes only a PR that is exactly a valid
+factory delivery, and auto-merge on it is safe. Every other PR fails it:
+
+```text
+[x] Identity      not a factory delivery: none of 1 changed file digest(s) carries a factory attestation in acme/factories
+
+[x] Not a factory delivery: no changed file carries an attestation from factories.signers. This check only passes factory deliveries; merge other PRs through your normal review process (e.g. a ruleset bypass for maintainers).
+```
+
+Merge human PRs through the repository's normal path: a ruleset or branch
+protection bypass for maintainers, after their usual review. Or keep
+factories delivering to dedicated repositories or branches that only they
+write to. apmx posts no reviews or comments.
+
+Before verifying anything, apmx asks the store of every `factories.signers`
+repository whether any added or modified file carries a factory attestation
+(apmx's receipt bundle or a SLSA VSA, from any workflow). If none does, the PR
+is not a factory delivery (exit 1, above). If any does, the PR must be
+**exactly** a valid delivery: a delivery plus human edits fails, and so does
+a human PR that copies an attested file byte-for-byte. A lookup that fails
+(network, API, authentication) is INCOMPLETE, exit 2; it stops at the first
+attested file, and more than 1000 lookups is INCOMPLETE too.
 
 A factory PR (opened from `run.yml`'s `apmx-delivery`) contains only the
 delivered files, no receipt folder. In a PR, apmx reads the event's base and
@@ -67,19 +91,27 @@ head commits, diffs `merge-base..head`, and:
 6. **deletions:** a file the PR deletes must be in the provenance's recorded
    deletions, with its before-image at base.
 
-A PR that also edits `backdoor.py`, `apm-policy.yml` or a check script has no
-summary covering it: `[x] Identity  no PASSED verification summary from
+A factory PR that also edits `backdoor.py`, `apm-policy.yml` or a check script
+has no summary covering it: `[x] Identity  no PASSED verification summary from
 factories.signers covers every changed file (backdoor.py is not a delivered
 file)`, exit 1. Delivered files the PR leaves out are noted, not required.
 Use `actions/checkout` with `fetch-depth: 0` so both commits are present; a
-missing commit is exit 2. Nothing from the PR is executed.
+missing commit is exit 2. Nothing from the PR is executed or read as
+configuration: apmx hashes the PR's bytes from Git objects, reads
+`apm-policy.yml` from the base commit (never the working tree, even when the
+base has none), runs the bundled APM for policy discovery in an empty project
+that shares only the `origin` remote, refuses a `--policy` file inside the
+checkout, and reinstalls ingredients from the attested lock in a temporary
+project with `APM_NO_SCRIPTS=1`.
 
 The gate needs `factories.signers`: without them there is nothing to look
 attestations up from, and the result is INCOMPLETE (exit 2).
 
 ```yaml
 # .github/workflows/audit.yml in the receiving repository
-on: pull_request
+on:
+  pull_request_target:            # runs the base branch's copy of this file
+    types: [opened, synchronize, reopened]
 permissions:
   contents: read
   attestations: read
@@ -89,12 +121,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}   # bytes to hash; never executed
           fetch-depth: 0
+          persist-credentials: false
       - uses: danielmeppiel/apmx/.github/actions/setup@v0.7.0   # installs apmx 0.7.0
       - run: apmx audit
         env:
           GH_TOKEN: ${{ github.token }}   # gh attestation verify
 ```
+
+### A PR cannot rewrite its own gate
+
+Use `pull_request_target`, never `pull_request`. A `pull_request` workflow
+runs the **PR's own copy** of the workflow file, so a PR can edit it to `exit
+0`, or delete it. `pull_request_target` runs the copy on the base branch.
+It runs with the base repository's token and secrets, which is why the job
+above has read-only permissions, checks the PR head out without credentials,
+and runs nothing but `apmx audit`: no scripts, no package installs, nothing
+from the PR.
+
+What was measured on `danielmeppiel/apmx-demo-shop` (branch protection
+requiring the check `audit` from GitHub Actions, October 2026):
+
+| PR | Check runs named `audit` on the PR head | Merge state |
+| --- | --- | --- |
+| Gate on `pull_request`; the PR adds a `pull_request` job named `audit` that exits 0 | gate failure, spoof success (also when the spoof ran last) | `BLOCKED` |
+| Gate on `pull_request`; the PR also deletes its copy of `audit.yml` | spoof success only | `CLEAN`: **mergeable** |
+| Gate on `pull_request_target`; the PR adds the spoof and rewrites its `audit.yml` to exit 0 | base gate failure, spoof success, rewritten copy success | `BLOCKED` |
+
+GitHub requires every check run with the required name (from the expected
+source) to pass, so an extra same-name success cannot override the base
+gate's failure. Pin the required check's expected source to **GitHub
+Actions** so no other app can report it. Repository rulesets and branch
+protection pin a required check to an app, not to a workflow file: any
+workflow in the repository can report a check named `audit`. That is safe
+only while the base gate always runs and reports, which
+`pull_request_target` guarantees; do not put an `if:` on the job (a skipped
+required job counts as passed). Whoever can change the gate on the default
+branch can still change the gate.
+
+For organizations, prefer an **organization ruleset with *Require workflows
+to pass***, pointing at the gate in a central repository pinned to a commit
+([`examples/factory-platform`](../examples/factory-platform)): the
+repository's own maintainers cannot edit or remove it, and its run is
+identified by workflow file, not by a check name.
 
 The setup action downloads the native release archive for the runner and
 installs it only if its SHA-256 matches the release's `.sha256` file, the
@@ -114,8 +184,9 @@ apmx has no policy file of its own. It reads the same `apm-policy.yml` that
 
 1. `--policy SOURCE`, if given: `org`, `owner/repo`, an `https://` URL or a file.
 2. `apm-policy.yml` at the repository's Git top level. In a pull request it is
-   read from the **PR base commit**, so a PR cannot loosen its own gate. It may
-   `extends: org` (or any APM policy source).
+   read from the **PR base commit**, so a PR cannot loosen its own gate; a
+   policy the PR adds is ignored. It may `extends: org` (or any APM policy
+   source).
 3. The organization policy repository APM discovers from the `origin` remote
    (`.github-private`, `.github`, `.apm`, `_apm`).
 
@@ -223,7 +294,7 @@ apmx audit [RECEIPT] --export abom [-o FILE]
 | Option | Overrides |
 | --- | --- |
 | `RECEIPT` | A `receipt.intoto.jsonl` (or its run directory). In a PR, the PR's change is bound to it, relative to its `<root>/.apm/` workspace or the repository root. |
-| `--policy SOURCE` | Policy discovery. A relative file is resolved from your current directory. |
+| `--policy SOURCE` | Policy discovery. A relative file is resolved from your current directory. In a PR, a file inside the checkout is refused (exit 2): it is the PR's own copy. |
 | `--outputs DIR` | Re-hash the delivered files in `DIR` against the subjects (instead of the PR binding). |
 | `--offline` | Network use. APM is not launched and nothing is fetched: Ingredients reads `not audited (offline)`, signatures `not checked (offline)`. Only a local policy file is read. |
 | `--format json` | Machine output: `{"schema": "apmx-audit/1", "receipt", "selection", "result", "exitCode", "reason", "rows", "facts", "signed"}`. `facts.stages` lists each stage's harness, version and models. |
@@ -238,10 +309,13 @@ apmx audit [RECEIPT] --export abom [-o FILE]
 | Code | Meaning |
 | --- | --- |
 | 0 | VALID: every row passed. Warnings (`--offline`, `factories.enforcement: warn`, an unsigned local receipt without `require_signed`) still count as valid. |
-| 1 | INVALID: a structural row failed, outputs differ, the PR changes files no signed delivery covers or is built on a stale base, reinstalled ingredients differ, `apm audit --ci` failed, or a `factories` rule rejected the delivery. |
-| 2 | Not a pass: usage error, missing receipt, a PR change that could not be read, a policy that could not be loaded, a PR gate without signers, or ingredients or signatures that could not be checked (network or authentication). |
+| 1 | INVALID: a structural row failed, outputs differ, a PR is not a factory delivery, the PR changes files no signed delivery covers or is built on a stale base, reinstalled ingredients differ, `apm audit --ci` failed, or a `factories` rule rejected the delivery. |
+| 2 | Not a pass: usage error, missing receipt, a PR change that could not be read, a policy that could not be loaded, a PR gate without signers, attestations that could not be looked up, or ingredients or signatures that could not be checked (network or authentication). |
 
-The final line is `VALID`, `INVALID <first reason>` or `INCOMPLETE <reason>`.
+The final line is `VALID`, `INVALID <first reason>` or `INCOMPLETE <reason>`;
+for a PR that is not a factory delivery it is the `[x] Not a factory
+delivery: ...` message above (`--format json`: `"result": "invalid"`, that
+message as `reason`, and `facts.delivery`).
 Output is printable ASCII and uses the `[+]`, `[x]`, `[!]` and `[i]` symbols.
 Colour appears only on a terminal, and never when `NO_COLOR` is set.
 
@@ -312,7 +386,7 @@ https://slsa.dev/verification_summary/v1`.
 | Verified, signer pinned only by `@<ref>` or not pinned | as above, plus `[!] signer pinned by mutable ref <ref>; pin workflow_sha` | pass (a warning) |
 | Verified from an allowed workflow, but not at its `workflow_sha` | `[x] signed by <workflow> at <sha12>, policy requires <sha12>`, exit 1 (`[!]` with `factories.enforcement: warn`) | same |
 | Signed by an annotated tag object that could not be resolved | `[!] signer commit could not be checked against workflow_sha`, INCOMPLETE, exit 2 | same |
-| None that covers these files (locally: `[!] unsigned`; in a PR: `[x]`, exit 1) | `[!] unsigned: no attestation from factories.signers` | `[x]`, exit 1 |
+| None that covers these files (locally: `[!] unsigned`; in a PR: `[x]`, exit 1, or `Not a factory delivery` when no changed file carries any factory attestation) | `[!] unsigned: no attestation from factories.signers` | `[x]`, exit 1 |
 | Could not be checked (no `gh`, network, auth, `--offline`) | `[!] signature could not be checked` | INCOMPLETE, exit 2 |
 
 `--format json` records the signer in `facts.identity`: `signer`, `signerRef`,

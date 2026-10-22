@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Security
+
+- **A PR can no longer rewrite its own gate.** The shipped gate workflows
+  (`examples/accept-factory-prs/audit.yml`, `examples/factory-platform/audit.yml`)
+  ran on `pull_request`, which runs the PR's own copy: a PR could edit it to
+  `exit 0` or delete it, and the required `audit` check turned green
+  (reproduced on apmx-demo-shop). They now run on `pull_request_target` (the
+  base branch's copy) with read-only permissions, check the PR head out
+  without credentials and execute nothing but `apmx audit`. Update your
+  `audit.yml` the same way.
+- In a pull request, `apmx audit` no longer reads the PR's working tree for
+  policy: with no `apm-policy.yml` at the base, a policy the PR adds was used;
+  now org discovery applies. APM's policy discovery runs in an empty project
+  that shares only the `origin` remote, and a `--policy` file inside the
+  checkout is refused (exit 2).
+
+### Changed
+
+- A PR none of whose changed files carries a factory attestation now fails
+  with `[x] Not a factory delivery: no changed file carries an attestation
+  from factories.signers. This check only passes factory deliveries; merge
+  other PRs through your normal review process (e.g. a ruleset bypass for
+  maintainers).` (still exit 1; JSON `facts.delivery`). A failed lookup is
+  INCOMPLETE (exit 2). Green means accepted by proof only.
+
 ## 0.7.0 - 2026-10-22
 
 Receipts are one standard in-toto bundle; PRs carry only code; run factories

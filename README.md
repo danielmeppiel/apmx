@@ -209,7 +209,10 @@ factories:
 
 `run.yml` signs a SLSA Verification Summary over the delivered files and
 attests the receipt bundle beside it, so the factory's PR carries **code only**.
-The receiving repository gates every pull request with one step: `apmx audit`
+The receiving repository gates every pull request with one step on
+`pull_request_target` (the base branch's copy runs, so a PR cannot rewrite its
+gate). Green means accepted by proof only; human PRs fail it as `Not a factory
+delivery` and are merged through the repository's normal path. `apmx audit`
 looks the PR's changed files up by SHA-256 in the signer's attestation store,
 requires each to be a subject of one PASSED summary from an allowed signer,
 checks the statements it binds against the policy read from the PR base, and

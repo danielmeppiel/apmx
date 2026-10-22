@@ -396,13 +396,23 @@ class Store:
         self.documents = documents
         self.workflow = workflow
         self.calls: list[list[str]] = []
+        self.fail: bytes | None = None
 
     def __call__(self, argv: list[str]) -> tuple[int, bytes, bytes]:
         self.calls.append(argv)
         if argv[:2] == ["gh", "api"]:
+            if self.fail is not None:
+                return 1, b"", self.fail
             digest = argv[2].split("sha256:", 1)[1].split("?", 1)[0]
             listed = [
-                {"bundle": {"fixture": item}}
+                {
+                    "bundle": {
+                        "dsseEnvelope": {
+                            "payload": base64.b64encode(json.dumps(item).encode()).decode()
+                        },
+                        "fixture": item,
+                    }
+                }
                 for item in self.documents
                 if digest in {s["digest"]["sha256"] for s in item["subject"]}
             ]
@@ -563,11 +573,11 @@ def test_gate_without_signers_is_incomplete(pull, receipt) -> None:
     assert "factories.signers" in audit.rows["Identity"].detail
 
 
+POLICY = f"factories:\n  signers:\n    - workflow: {WORKFLOW}\n      repo: acme/platform\n"
+
+
 def test_gate_is_the_default_in_a_pull_request(pull, receipt, monkeypatch) -> None:
-    pull()
-    (Path.cwd() / "apm-policy.yml").write_text(
-        f"factories:\n  signers:\n    - workflow: {WORKFLOW}\n      repo: acme/platform\n"
-    )
+    pull(base={"apm-policy.yml": POLICY})
     store = _store(receipt)
     monkeypatch.setattr(identity, "_gh", store)
     result = _audit("--offline")
@@ -606,3 +616,110 @@ def test_a_recorded_base_commit_must_be_in_the_pr_base_history(pull, receipt) ->
     result = _audit(receipt, "--offline")
     assert result.exit_code == 2, result.output
     assert "is not in this checkout" in result.output
+
+
+# ------------------------------------------------------------------ not a factory delivery
+
+
+def _human(root: Path, files: dict[str, str | None] | None = None) -> None:
+    """Undo the delivery: the PR becomes an ordinary human edit (plus ``files``)."""
+    _write(root, BASELINE)
+    (root / "src/new.py").unlink()
+    _write(root, {"docs/contributing.md": "Be kind.\n"} if files is None else files)
+
+
+def _others(audit) -> set[str]:
+    return {
+        audit.rows[name].status for name in command.DISPLAY if name not in ("Policy", "Identity")
+    }
+
+
+def test_a_pr_no_factory_attestation_covers_fails_as_not_a_factory_delivery(pull, receipt) -> None:
+    store = _store(receipt)
+    audit = _gate(pull(head=_human), store)
+    assert (audit.result, audit.exit_code) == ("invalid", 1), command.to_text(audit)
+    assert audit.reason == command.NOT_FACTORY
+    assert audit.rows["Identity"].status == "fail"
+    assert audit.rows["Identity"].detail.startswith("not a factory delivery: none of 1 changed")
+    assert _others(audit) == {"skipped"}
+    assert command.to_text(audit).endswith(
+        "[x] Not a factory delivery: no changed file carries an attestation from "
+        "factories.signers. This check only passes factory deliveries; merge other PRs "
+        "through your normal review process (e.g. a ruleset bypass for maintainers)."
+    )
+    data = json.loads(command.to_json(audit))
+    assert (data["result"], data["exitCode"], data["reason"]) == ("invalid", 1, command.NOT_FACTORY)
+    assert data["facts"]["delivery"] == {
+        "factory": False,
+        "lookedUp": 1,
+        "repositories": ["acme/platform"],
+    }
+    assert store.kinds() == []  # nothing to verify
+
+
+def test_a_deletion_only_pr_is_not_a_factory_delivery(pull, receipt) -> None:
+    def delete(root: Path) -> None:
+        _human(root, {})
+        (root / "docs/guide.md").unlink()
+
+    audit = _gate(pull(head=delete), _store(receipt))
+    assert (audit.result, audit.exit_code, audit.reason) == ("invalid", 1, command.NOT_FACTORY)
+
+
+@pytest.mark.parametrize("human", [True, False], ids=["human-pr", "factory-pr"])
+def test_a_failed_lookup_is_incomplete_never_a_verdict(pull, receipt, human) -> None:
+    store = _store(receipt)
+    store.fail = b"gh: Bad Gateway (HTTP 502)\n"
+    audit = _gate(pull(head=_human if human else None), store)
+    assert (audit.result, audit.exit_code) == ("incomplete", 2), command.to_text(audit)
+    assert audit.rows["Identity"].detail == "attestations could not be looked up"
+    assert "HTTP 502" in " ".join(audit.rows["Identity"].notes)
+
+
+def test_a_delivery_plus_human_edits_fails(pull, receipt) -> None:
+    change = pull(head=lambda root: (root / "docs/contributing.md").write_text("Be kind.\n"))
+    audit = _gate(change, _store(receipt))
+    assert (audit.result, audit.exit_code) == ("invalid", 1)
+    assert "(docs/contributing.md is not a delivered file)" in audit.rows["Identity"].detail
+
+
+def test_copying_an_attested_file_into_a_human_pr_does_not_help(pull, receipt) -> None:
+    copied = {"src/new.py": CHANGED["src/new.py"], "docs/contributing.md": "Be kind.\n"}
+    audit = _gate(pull(head=lambda root: _human(root, copied)), _store(receipt))
+    assert (audit.result, audit.exit_code) == ("invalid", 1), command.to_text(audit)
+    assert audit.facts["delivery"]["attested"] == "src/new.py"
+    assert "(docs/contributing.md is not a delivered file)" in audit.rows["Identity"].detail
+
+
+# ------------------------------------------------------------------ a PR cannot rewrite its gate
+
+GATE = ".github/workflows/audit.yml"
+PASSING_GATE = "on: pull_request\njobs:\n  audit:\n    steps:\n      - run: exit 0\n"
+
+
+@pytest.mark.parametrize("delivery", [True, False], ids=["with-delivery", "alone"])
+def test_a_pr_modified_gate_workflow_and_policy_have_no_effect(
+    pull, receipt, monkeypatch, delivery
+) -> None:
+    """The PR's own audit.yml and apm-policy.yml are only bytes to hash: never read or run."""
+    lenient = "factories:\n  signers:\n    - workflow: evil/x/.github/workflows/sign.yml\n"
+
+    def rewrite(root: Path) -> None:
+        if not delivery:
+            _human(root, {})
+        _write(root, {GATE: PASSING_GATE, "apm-policy.yml": lenient})
+
+    change = pull(base={"apm-policy.yml": POLICY, GATE: "on: pull_request_target\n"}, head=rewrite)
+    monkeypatch.setattr(identity, "_gh", _store(receipt))
+    monkeypatch.setattr(policy, "_apm_status", lambda root, source: {"outcome": "empty"})
+    result = _audit("--format", "json")
+    data = json.loads(result.output)
+    assert (result.exit_code, data["result"]) == (1, "invalid"), result.output
+    assert data["facts"]["policy"]["source"].startswith(
+        f"apm-policy.yml (repository, PR base {change.pull.base[:12]})"
+    )
+    identity_row = next(row for row in data["rows"] if row["name"] == "Identity")
+    if delivery:
+        assert "is not a delivered file" in identity_row["detail"]
+    else:
+        assert data["reason"] == command.NOT_FACTORY

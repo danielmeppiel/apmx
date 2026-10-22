@@ -127,6 +127,11 @@ file up by SHA-256 in the signer's attestation store. Show two pull requests'
 "The delivered files are signed. The extra file is not: this PR is more than
 the factory delivered, so it cannot merge."
 
+A human PR (say a documentation fix) fails the same check as `Not a factory
+delivery`: the check only passes factory deliveries, so green can drive
+auto-merge. A maintainer merges human PRs through the normal path, a ruleset
+bypass after review.
+
 ### Honest limits
 
 Say at least one. Local receipts are unsigned. A signature says which workflow
