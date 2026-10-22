@@ -9,6 +9,7 @@ name: run.yml self-test
 # no receipt file, finds and verifies everything by the changed file's digest.
 on:
   pull_request:
+    paths-ignore: ["site/**", ".github/workflows/site.yml"]
   push:
     branches: [main]
   workflow_dispatch:
