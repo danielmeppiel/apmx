@@ -63,6 +63,20 @@ class PromotionTests(unittest.TestCase):
         self.assertIn("blob/v0.6.0/CHANGELOG.md", notes)
         self.assertNotIn("## Changes in v0.5.0", notes)
 
+    def test_v070_notes_headline_receipt_bundle_and_code_only_prs(self):
+        notes = promotion.release_notes("0.7.0", "a" * 40)
+        self.assertIn("## Changes in v0.7.0: One receipt bundle, code-only PRs", notes)
+        self.assertIn("**Breaking:**", notes)
+        self.assertIn("receipt.intoto.jsonl", notes)
+        self.assertIn("SLSA Verification Summary", notes)
+        self.assertIn("target-repository", notes)
+        self.assertIn("deliver: pull-request|branch|bundle", notes)
+        self.assertIn("workflow_sha", notes)
+        self.assertIn("not yet enforced", notes)
+        self.assertIn("@v0.7.0", notes)
+        self.assertIn("blob/v0.7.0/CHANGELOG.md", notes)
+        self.assertNotIn("## Changes in v0.6.0", notes)
+
     def test_v042_notes_preserve_failed_v041_candidate_truth(self):
         notes = promotion.release_notes("0.4.2", "a" * 40)
         self.assertIn("No GitHub release or native assets were published for v0.4.1", notes)

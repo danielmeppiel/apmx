@@ -2,9 +2,28 @@
 
 ## [Unreleased]
 
-Receipts v2: one standard in-toto bundle per run, and pull requests that carry
-code only. There are no compatibility readers: v1 receipt folders are not
-accepted by this release.
+## 0.7.0 - 2026-10-22
+
+Receipts are one standard in-toto bundle; PRs carry only code; run factories
+centrally across repos.
+
+- **One receipt, any verifier.** A run's evidence is one
+  `receipt.intoto.jsonl` (SLSA provenance, in-toto test results, CycloneDX)
+  plus content-addressed `evidence/`, readable by stock in-toto and SLSA
+  tooling (#41).
+- **Review code, not paperwork.** Factory PRs carry only the delivered files;
+  `apmx audit` finds their signed verification summary by file digest (#41).
+- **One platform, many repositories.** A platform repository runs factories
+  against other repositories through `run.yml` and a GitHub App, and delivers
+  a pull request, a branch or a bundle (#40, `examples/factory-platform`).
+- **A signer pin nobody can move.** `factories.signers[].workflow_sha` pins the
+  reviewed `run.yml` commit; a commit or the annotated tag object both match
+  (#38).
+- Stages record their harness, its reported version and the requested and
+  observed models. They are recorded only: no policy enforces them yet (#39).
+
+**Breaking:** v1 receipt folders (`receipt/`) are no longer read, and there is
+no compatibility reader or migration. apmx has no users of the v1 format.
 
 ### Changed
 

@@ -6,7 +6,7 @@ section and one workflow step.
 
 1. **Produce in CI.** The factory repository (here `acme/factories`) calls
    [`run.yml`](../../.github/workflows/run.yml)
-   (`danielmeppiel/apmx/.github/workflows/run.yml@v0.6.0`): the agent runs in one job,
+   (`danielmeppiel/apmx/.github/workflows/run.yml@v0.7.0`): the agent runs in one job,
    `apmx check` reruns the checks in a fresh job without the agent, and the
    attest job signs a SLSA Verification Summary over the delivered files, and
    the receipt bundle it binds, with the workflow's OIDC identity. Open a pull
@@ -34,7 +34,7 @@ Receipt   attestations for PR #42   (looked up by file digest)   5 contracts   s
 [+] Factory       definition sha256:0bec0549b9af.. on factories.allow (acme/checkout-factory)
 [+] Revocation    0 of 1 capability revoked; factories.revoked is empty
 [+] Outputs       PR #42: 4 changed files = delivered files at head 9f8e7d6c5b4a; before-images match base 1a2b3c4d5e6f
-[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.6.0 at cadfa207e464 (tag object 367ca846435d)
+[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.7.0 at <commit12> (tag object <tag12>)
 
 [+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
 ```
