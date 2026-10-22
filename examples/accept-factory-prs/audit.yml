@@ -1,7 +1,8 @@
 # .github/workflows/audit.yml in the receiving repository.
 # pull_request_target runs THIS file from the base branch, never the PR's copy,
 # so a PR cannot rewrite its own gate. Nothing from the PR is executed: the PR
-# head is checked out as bytes for `apmx audit` to hash, with no credentials.
+# head is fetched with the job's read-only GITHUB_TOKEN, which is not persisted,
+# and checked out only as bytes for `apmx audit` to hash.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]

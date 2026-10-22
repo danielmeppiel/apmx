@@ -34,20 +34,34 @@ section and one workflow step.
    their usual review, or factories deliver to a repository or branch only
    they write to.
 
-An excerpt of the gate's output:
+The gate's output, verbatim, on a real factory PR
+([danielmeppiel/apmx-demo-shop#11](https://github.com/danielmeppiel/apmx-demo-shop/pull/11)),
+audited with apmx 0.7.1:
 
 ```text
-Receipt   attestations for PR #42   (looked up by file digest)   5 contracts   signed
+$ apmx audit
+Receipt   attestations for PR #11   (looked up by file digest)   1 contract   signed
 
-[+] Policy        apm-policy.yml (repository, PR base 1a2b3c4d5e6f)   factories enforcement block
-[+] Integrity     12 statements; line digests computed; the VSA binds every other line; evidence not present (optional)
-[+] Factory       definition sha256:0bec0549b9af.. on factories.allow (acme/checkout-factory)
-[+] Revocation    0 of 1 capability revoked; factories.revoked is empty
-[+] Outputs       PR #42: 4 changed files = delivered files at head 9f8e7d6c5b4a; before-images match base 1a2b3c4d5e6f
+[+] Policy        apm-policy.yml (repository, PR base 4fed7ee21e1d)   factories enforcement block
+[+] Integrity     4 statements; line digests computed; the VSA binds every other line; evidence not present (optional)
+[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5, SLSA VSA v1: schema-valid
+[+] Factory       definition sha256:c011c35b5790.. on factories.allow (danielmeppiel/apmx/tests/fixtures/run-workflow-package)
+                  definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[+] Revocation    0 of 0 capabilities revoked; factories.revoked is empty
+[+] Outputs       PR #11: 1 changed file = delivered files at head d85c418bdf11; before-images match base 4fed7ee21e1d
+                  built on 2ca997db3993, in the PR base's history
+                  1 file bound: handoff.json
 [+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.7.1 at a70c1939dddc (tag object 917ffb4e5406)
+                  run https://github.com/danielmeppiel/apmx-demo-shop/actions/runs/39740103826/attempts/1
 
 [+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
 ```
+
+Since the next release, Standards is part of the Integrity row and
+Ingredients is named Dependencies.
 
 A factory PR that also edits anything else, changes `apm-policy.yml`, was not signed
 by the allowed signer at its commit, was built on a base that has since

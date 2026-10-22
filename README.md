@@ -19,13 +19,17 @@ installation and model access remain external prerequisites.
 
 ```sh
 apmx ./feature-factory --plan     # see the contracts, handoffs and checks; no agents, no installs
-apmx ./feature-factory            # run: each contract loops until its checks pass
+apmx ./feature-factory            # run: one attempt per contract unless its budget allows retries
 apmx audit <receipt>              # verify what was produced, from what, and how
 ```
 
 The same commands work for a single contract (`apmx build.contract.md`) or a
 Git package (`apmx --from owner/repo`). `--on copilot|opencode` selects the
-harness; Copilot is the default.
+harness; Copilot is the default. A fourth command, `apmx check <receipt>`,
+reruns a factory's own checks on the outputs another run recorded, with no
+agent; [`run.yml`](#accept-factory-prs-by-proof) uses it to write the receipt
+of record. The [docs](https://danielmeppiel.github.io/apmx/) cover every
+command in depth.
 
 ## 1. A contract binds a task to its checks
 
@@ -148,40 +152,51 @@ Every statement names the same subjects: the delivered files at their project
 paths, which `outputs/` holds. For a factory that produces patches, those are
 the files the patches produce (`src/pricing.py`), not the patch. Inputs, stage
 outputs, transcripts, rejected attempts and raw check logs are kept by digest in
-`evidence/sha256/`, optional for verification. The receipt of the five-stage
-example is 1 bundle (37 KB) plus 31 evidence blobs (188 KB), instead of 232 files (1.3 MB).
+`evidence/sha256/`, optional for verification. The checked-in receipt of the
+five-stage example is one 37 KB bundle of 11 lines
+([`receipt-v2`](tests/unit/contracts/golden/receipt-v2/receipt.intoto.jsonl));
+its evidence is not checked in.
 
-Anyone holding the delivered files and the bundle can verify them without
-rerunning the factory:
+Anyone holding the bundle can verify it without rerunning the factory. Here
+v0.7.1 audits that receipt; add `--outputs <dir>` to re-hash the delivered
+files as well:
 
 ```text
-$ apmx audit feature-factory/.apm/chains/<id>/receipt.intoto.jsonl --outputs ./delivered
-Receipt   feature-factory/.apm/chains/<id>/receipt.intoto.jsonl   5 contracts   unsigned
+$ apmx audit receipt-v2/receipt.intoto.jsonl
+Receipt   receipt-v2/receipt.intoto.jsonl   5 contracts   unsigned
 
 [i] Policy        none found
-                  APM reports absent: no apm-policy.yml applies
-[+] Integrity     11 statements intact and well-formed; line digests computed; evidence 31/31 blobs verified
-[+] Factory       definition sha256:...  5 contracts, 9 checks
+                  no apm-policy.yml in project and no git origin for org policy
+[+] Integrity     11 statements; line digests computed; evidence not present (optional)
+[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Factory       definition sha256:0bec0549b9af..  danielmeppiel/apmx-demo-factory#v1.0.0  5 contracts, 9 checks
 [+] Checks        9/9 passed (in-toto test-result)
-[+] Dependencies  1 APM dependency   apm audit --ci: clean (content, lock, drift)
+[+] Ingredients   2 APM dependencies   apm audit --ci: clean (content, lock, drift)
                   installed bytes match CycloneDX inventory and recorded hashes
 [i] Revocation    no policy: nothing revoked to check
-[+] Outputs       4/4 delivered files match receipt subjects (re-hashed)
-                  4 files bound: docs/checkout.md src/checkout.py src/pricing.py ...
+[+] Outputs       4 files bound: docs/checkout.md src/checkout.py src/pricing.py tests/test_free_shipping.py
 [!] Identity      unsigned: proves content binding, not who ran it
 
 [+] VALID   (content-bound; not authenticated)
 ```
 
+Since the next release, Standards is part of the Integrity row and Ingredients
+is named Dependencies.
+
 `apmx audit --explain` prints what the receipt records (factory, stages,
-checks, dependencies, outputs); `apmx audit --export abom` writes the CycloneDX
+checks, ingredients, outputs; the `ingredients` topic is `dependencies` since
+the next release); `apmx audit --export abom` writes the CycloneDX
 inventory as a standalone file for SBOM tools.
 
 For dependencies, `apmx audit` reinstalls the recorded lock with the bundled
-APM and runs `apm audit --ci` under your discovered `apm-policy.yml`.
+APM and runs `apm audit --ci`. It passes your discovered `apm-policy.yml` with
+`--policy` only when that policy has APM rules; with no policy, or one that
+has only a `factories:` section, it runs `apm audit --ci --no-policy`.
+`--offline` skips this step.
 `--format json|sarif` suits CI gates. Local receipts are **unsigned**: they
 prove content binding, not who ran the factory. `evidence/` includes captured
-inputs and transcripts, so review it before sharing. See [audit](docs/audit.md).
+inputs and transcripts, so review it before sharing. See [audit](docs/audit.md)
+and the [`apmx audit` reference](https://danielmeppiel.github.io/apmx/docs/reference/audit/).
 
 **Local execution is not a sandbox.** Agents and checks can use host files,
 network and logins; model usage may cost money. An interactive factory asks
@@ -193,7 +208,8 @@ failed after a COMPLETE run. See [results](docs/results.md).
 
 Run the factory in CI with [`run.yml`](.github/workflows/run.yml)
 (`uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1`). The agent,
-the checks of record and the signature each run in a separate job. The
+the checks of record (`apmx check`) and the signature each run in a separate
+job. The
 receiving repository pins what it accepts in its `apm-policy.yml`:
 
 ```yaml

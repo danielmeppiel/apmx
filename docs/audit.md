@@ -296,7 +296,7 @@ apmx audit [RECEIPT] --export abom [-o FILE]
 | `--policy SOURCE` | Policy discovery. A relative file is resolved from your current directory. In a PR, a file inside the checkout is refused (exit 2): it is the PR's own copy. |
 | `--outputs DIR` | Re-hash the delivered files in `DIR` against the subjects (instead of the PR binding). |
 | `--offline` | Network use. APM is not launched and nothing is fetched: Dependencies reads `not audited (offline)`, signatures `not checked (offline)`. Only a local policy file is read. |
-| `--format json` | Machine output: `{"schema": "apmx-audit/2", "receipt", "selection", "result", "exitCode", "reason", "rows", "facts", "signed"}`. `facts.stages` lists each stage's harness, version and models. |
+| `--format json` | Machine output: `{"schema": "apmx-audit/2", "receipt", "selection", "result", "exitCode", "reason", "assurance", "signed", "rows", "facts"}`; `assurance` is the text in the final line's parentheses, such as `content-bound; not authenticated`. `facts.stages` lists each stage's harness, version and models. |
 | `--format sarif` | SARIF 2.1.0 for GitHub code scanning: one result per `[x]` (error) or `[!]` (warning) row. |
 | `--explain [TOPIC]` | Print what the receipt records (factory, stages, checks, dependencies, outputs; default all), after it verifies structurally. `factory` names the standards the statements are schema-valid against. Replaces v1's `summary.md`. |
 | `--export abom` | Write the inline CycloneDX 1.5 inventory as a standalone file for SBOM tools (stdout, or `-o FILE`; never overwrites). |
@@ -307,7 +307,7 @@ apmx audit [RECEIPT] --export abom [-o FILE]
 
 | Code | Meaning |
 | --- | --- |
-| 0 | VALID: every row passed. Warnings (`--offline`, `factories.enforcement: warn`, an unsigned local receipt without `require_signed`) still count as valid. |
+| 0 | VALID: every row passed. Warnings (`factories.enforcement: warn`, an unsigned local receipt without `require_signed`, dependencies `not audited (offline)`) still count as valid. `--offline` stays valid only for a local receipt whose policy does not set `require_signed`: in a PR, or with `require_signed`, the signature is `not checked (offline)` and the verdict is INCOMPLETE, exit 2. |
 | 1 | INVALID: a structural row failed, outputs differ, a PR is not a factory delivery, the PR changes files no signed delivery covers or is built on a stale base, reinstalled dependencies differ, `apm audit --ci` failed, or a `factories` rule rejected the delivery. |
 | 2 | Not a pass: usage error, missing receipt, a PR change that could not be read, a policy that could not be loaded, a PR gate without signers, attestations that could not be looked up, or dependencies or signatures that could not be checked (network or authentication). |
 
@@ -385,7 +385,7 @@ https://slsa.dev/verification_summary/v1`.
 | Verified from an allowed workflow, but not at its `workflow_sha` | `[x] signed by <workflow> at <sha12>, policy requires <sha12>`, exit 1 (`[!]` with `factories.enforcement: warn`) | same |
 | Signed by an annotated tag object that could not be resolved | `[!] signer commit could not be checked against workflow_sha`, INCOMPLETE, exit 2 | same |
 | None that covers these files (locally: `[!] unsigned`; in a PR: `[x]`, exit 1, or `Not a factory delivery` when no changed file carries any factory attestation) | `[!] unsigned: no attestation from factories.signers` | `[x]`, exit 1 |
-| Could not be checked (no `gh`, network, auth, `--offline`) | `[!] signature could not be checked` | INCOMPLETE, exit 2 |
+| Could not be checked | `--offline`: `[!] signature not checked (offline)`; no `gh`: `[!] signature not checked: the GitHub CLI (gh) is not installed`; a named receipt without `--outputs`: `[!] signature not checked: no delivered file to look it up by (--outputs)`; network or authentication failure: `[!] signature could not be checked` | INCOMPLETE, exit 2 |
 
 `--format json` records the signer in `facts.identity`: `signer`, `signerRef`,
 `signerSha` (the certificate's Build Signer Digest), `signerCommit`,
@@ -541,10 +541,13 @@ For an audit, apmx:
    and, with `--policy`, org policy.
 5. Deletes the temporary project.
 
-**Policy decision.** When no policy is discovered, the audit runs with
-`--no-policy` and the Policy row says so. When one is discovered, apmx passes
-that same source to `apm audit --ci --policy` and requires evidence that APM
-actually enforced it. APM skips enforcement with only a warning and exits 0
+**Policy decision.** When no policy is discovered, or the discovered policy
+has no APM rules (for example only a `factories:` section), the audit runs
+with `--no-policy`. The Policy row reads `none found` (or names the
+factories-only policy); `--format json` records
+`facts.apmAudit.policy: "none (--no-policy)"`. When the policy has APM rules
+(APM reports it `found`), apmx passes that same source to
+`apm audit --ci --policy` and requires evidence that APM actually enforced it. APM skips enforcement with only a warning and exits 0
 when an explicit policy cannot be loaded
 ([microsoft/apm#3195](https://github.com/microsoft/apm/issues/3195)), so apmx
 reports such a run as `INCOMPLETE` (exit 2), never as a pass. The temporary
