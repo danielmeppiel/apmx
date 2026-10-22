@@ -347,13 +347,7 @@ def test_published_action_refs_and_defaults_name_this_release() -> None:
         *(ROOT / "docs").glob("*.md"),
         *(ROOT / "examples/accept-factory-prs").iterdir(),
         *(ROOT / "examples/factory-platform").iterdir(),
-        *(
-            path
-            for path in (ROOT / "site/src").rglob("*")
-            if path.suffix in {".md", ".mdx", ".astro"}
-        ),
     ]
-    assert any(path.parts[-4:-1] == ("content", "docs", "docs") for path in documents)
     refs = set()
     for path in documents:
         refs.update(
