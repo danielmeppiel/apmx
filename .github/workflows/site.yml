@@ -1,0 +1,48 @@
+name: Site
+
+# Builds the APMX site in site/ and fails on build errors or broken internal
+# links. Deploys to GitHub Pages only from main.
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/site.yml"]
+  pull_request:
+    paths: ["site/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build, check internal links, upload the Pages artifact
+        uses: withastro/action@3eafd002e65cc31b4f0eae0bb05450d521562247 # v6.1.3
+        with:
+          path: site
+          node-version: "24"
+          build-cmd: npm run build && npm run check-links
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
