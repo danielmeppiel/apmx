@@ -11,7 +11,7 @@ import json
 
 from . import stages, verifier
 
-TOPICS = ("factory", "stages", "checks", "ingredients", "outputs")
+TOPICS = ("factory", "stages", "checks", "dependencies", "outputs")
 
 
 def _ascii(text: object) -> str:
@@ -30,6 +30,7 @@ def _factory(receipt: verifier.Receipt) -> list[str]:
     lines = [
         "Factory",
         f"  definition   sha256:{receipt.definition_sha256}",
+        f"  standards    {verifier.standards(receipt)}: schema-valid",
         f"  package      {factory['package'] or '(local factory directory)'}",
         f"  commit       {factory['commit'] or '-'}",
         f"  builder      {details['builder']['id']}  "
@@ -106,8 +107,8 @@ def _checks(receipt: verifier.Receipt) -> list[str]:
     return lines
 
 
-def _ingredients(receipt: verifier.Receipt) -> list[str]:
-    lines = ["Ingredients"]
+def _dependencies(receipt: verifier.Receipt) -> list[str]:
+    lines = ["Dependencies"]
     for binding in receipt.bindings:
         lines.append(
             f"  capability   {binding['capability']}  {binding['purl']}  "
@@ -137,7 +138,7 @@ def explain(receipt: verifier.Receipt, topic: str = "all") -> str:
         "factory": _factory,
         "stages": _stages,
         "checks": _checks,
-        "ingredients": _ingredients,
+        "dependencies": _dependencies,
         "outputs": _outputs,
     }
     chosen = TOPICS if topic == "all" else (topic,)

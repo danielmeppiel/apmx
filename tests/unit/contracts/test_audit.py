@@ -1,4 +1,4 @@
-"""`apmx audit`: row-by-row receipt verification with APM-owned ingredient trust."""
+"""`apmx audit`: row-by-row receipt verification with APM-owned dependency trust."""
 
 import base64
 import hashlib
@@ -106,12 +106,13 @@ def test_dependency_free_receipt_is_valid_offline_and_launches_nothing(
     assert result.exit_code == 0, result.output
     rows = _rows(result.output)
     assert list(rows) == list(command.DISPLAY)
-    assert rows["Integrity"].startswith("[+] Integrity") and "3 statements" in rows["Integrity"]
+    assert rows["Integrity"].startswith("[+] Integrity")
+    assert "3 statements intact and well-formed" in rows["Integrity"]
     assert "evidence" in rows["Integrity"]
-    assert "in-toto Statement v1, SLSA Provenance v1, in-toto Test Result" in rows["Standards"]
+    assert "Standards" not in result.output
     assert "1 contract, 1 check" in rows["Factory"]
     assert "1/1 passed (in-toto test-result)" in rows["Checks"]
-    assert rows["Ingredients"].startswith("[+]") and "0 APM dependencies" in rows["Ingredients"]
+    assert rows["Dependencies"].startswith("[+]") and "0 APM dependencies" in rows["Dependencies"]
     assert "1 file bound: result.txt" in rows["Outputs"]
     assert rows["Identity"].startswith("[!] Identity") and "unsigned" in rows["Identity"]
     assert result.output.rstrip().endswith("[+] VALID   (content-bound; not authenticated)")
@@ -124,8 +125,8 @@ def test_dependency_receipt_is_audited_by_the_pinned_apm(deps_receipt) -> None:
     result = _audit(deps_receipt)
     assert result.exit_code == 0, result.output
     rows = _rows(result.output)
-    assert rows["Ingredients"].startswith("[+]")
-    assert "1 APM dependency   apm audit --ci: clean" in rows["Ingredients"]
+    assert rows["Dependencies"].startswith("[+]")
+    assert "1 APM dependency   apm audit --ci: clean" in rows["Dependencies"]
     assert "installed bytes match CycloneDX inventory" in result.output
     assert not list(Path(tempfile.gettempdir()).glob("apmx-audit-*"))
 
@@ -136,9 +137,9 @@ def test_changed_dependency_content_is_invalid(deps_receipt, tmp_path) -> None:
     skill.write_text(skill.read_text() + "Injected instruction.\n")
     result = _audit(deps_receipt)
     assert result.exit_code == 1, result.output
-    assert "[x] Ingredients" in result.output
+    assert "[x] Dependencies" in result.output
     assert "reinstalled content differs from the receipt" in result.output
-    assert "[x] INVALID   Ingredients:" in result.output
+    assert "[x] INVALID   Dependencies:" in result.output
 
 
 @needs_backend
@@ -151,13 +152,13 @@ def test_unreachable_dependency_is_unavailable_never_a_pass(deps_receipt, tmp_pa
 
 
 @needs_backend
-def test_offline_skips_ingredients_with_a_warning(deps_receipt, monkeypatch) -> None:
+def test_offline_skips_dependencies_with_a_warning(deps_receipt, monkeypatch) -> None:
     monkeypatch.setattr(
         apm_backend, "locate_backend", lambda: pytest.fail("APM must not be launched")
     )
     result = _audit(deps_receipt, "--offline")
     assert result.exit_code == 0, result.output
-    assert "[!] Ingredients   not audited (offline): 1 APM dependency" in result.output
+    assert "[!] Dependencies  not audited (offline): 1 APM dependency" in result.output
     assert "[+] VALID" in result.output
 
 
@@ -178,14 +179,14 @@ def test_policy_that_cannot_be_loaded_is_unavailable(deps_receipt) -> None:
     assert result.exit_code == 2, result.output
     rows = _rows(result.output)
     assert rows["Policy"].startswith("[!] Policy") and "could not be loaded" in rows["Policy"]
-    assert "not evaluated (policy could not be loaded)" in rows["Ingredients"]
+    assert "not evaluated (policy could not be loaded)" in rows["Dependencies"]
     assert "INCOMPLETE   Policy:" in result.output
 
 
 @needs_backend
 def test_no_policy_audit_reports_only_baseline_checks(deps_receipt, tmp_path) -> None:
     """A new no-policy check name would otherwise be mistaken for an enforced policy."""
-    from apmx.audit.ingredients import _BASELINE_CHECKS
+    from apmx.audit.dependencies import _BASELINE_CHECKS
 
     receipt, failure = verifier.inspect(deps_receipt)
     assert failure is None, failure
@@ -258,7 +259,7 @@ def _lock(owner: str, digest: str = "a" * 64) -> bytes:
 
 
 def test_frozen_replay_may_reassign_a_shared_skill_owner() -> None:
-    from apmx.audit.ingredients import _drifted
+    from apmx.audit.dependencies import _drifted
 
     # APM 0.33.0 attributes a package-bundled transitive skill to either entry.
     assert _drifted(_lock("package"), _lock("style")) == []
@@ -280,8 +281,8 @@ def test_tampered_evidence_fails_integrity(plain_receipt) -> None:
     result = _audit(plain_receipt)
     assert result.exit_code == 1
     assert "[x] Integrity     Evidence blob" in result.output
-    assert "[i] Standards     not evaluated (earlier failure)" in result.output
-    assert "[i] Ingredients   not evaluated (receipt invalid; APM not launched)" in result.output
+    assert "[i] Factory       not evaluated (earlier failure)" in result.output
+    assert "[i] Dependencies  not evaluated (receipt invalid; APM not launched)" in result.output
     assert "[x] INVALID   Integrity: Evidence blob" in result.output
 
 
@@ -312,10 +313,10 @@ def test_noncanonical_line_fails_integrity(plain_receipt) -> None:
         (
             0,
             lambda data: data.update(_type="https://example.invalid/Statement"),
-            "Standards",
+            "Integrity",
             "",
         ),
-        (0, lambda data: data.update(subject=[]), "Standards", ""),
+        (0, lambda data: data.update(subject=[]), "Integrity", ""),
         (
             0,
             lambda data: data["predicate"]["buildDefinition"].update(buildType="x"),
@@ -359,7 +360,7 @@ def test_noncanonical_line_fails_integrity(plain_receipt) -> None:
         (
             2,
             lambda data: data["predicate"].update(components=[{"name": "no-type"}]),
-            "Standards",
+            "Integrity",
             "CycloneDX 1.5 schema violation",
         ),
         (
@@ -420,7 +421,7 @@ def test_verification_summary_must_bind_every_other_line(plain_receipt) -> None:
         bad["predicate"][field] = value
         plain_receipt.write_bytes(verifier.bundle_bytes([*statements, bad]))
         report = json.loads(_audit(plain_receipt, "--format", "json").output)
-        assert report["reason"].startswith("Standards:") and reason in report["reason"], report
+        assert report["reason"].startswith("Integrity:") and reason in report["reason"], report
 
 
 def test_outputs_are_rehashed_only_when_requested(plain_receipt, tmp_path) -> None:
@@ -446,7 +447,7 @@ def test_json_format_is_machine_readable(plain_receipt) -> None:
     result = _audit(plain_receipt, "--format", "json")
     assert result.exit_code == 0, result.output
     report = json.loads(result.output)
-    assert report["schema"] == "apmx-audit/1"
+    assert report["schema"] == "apmx-audit/2"
     assert (report["result"], report["exitCode"], report["signed"]) == ("valid", 0, False)
     assert [row["name"] for row in report["rows"]] == list(command.DISPLAY)
     assert {row["status"] for row in report["rows"]} == {"pass", "warn", "info"}
@@ -551,9 +552,16 @@ def test_bundled_schemas_are_the_pinned_upstream_bytes() -> None:
 def test_explain_replaces_the_summary(plain_receipt) -> None:
     result = _audit(plain_receipt, "--explain")
     assert result.exit_code == 0, result.output
-    for heading in ("Factory", "Stages", "Checks", "Ingredients", "Outputs"):
+    for heading in ("Factory", "Stages", "Checks", "Dependencies", "Outputs"):
         assert f"\n{heading}\n" in f"\n{result.output}"
     assert "copilot" in result.output and "result.txt" in result.output
+    assert (
+        "  standards    in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, "
+        "CycloneDX 1.5: schema-valid\n" in result.output
+    )
+    dependencies = _audit(plain_receipt, "--explain", "dependencies")
+    assert dependencies.exit_code == 0 and dependencies.output.startswith("Dependencies\n")
+    assert _audit(plain_receipt, "--explain", "ingredients").exit_code == 2
     stages = _audit(plain_receipt, "--explain", "stages")
     assert stages.exit_code == 0 and stages.output.startswith("Stages\n")
     assert "Checks" not in stages.output

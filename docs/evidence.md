@@ -110,7 +110,7 @@ Where each fact lives, and why:
 - **Inputs and capabilities** are `resolvedDependencies` too: caller-provided
   inputs by digest (bytes in `evidence/`), each selected capability by its
   CycloneDX `purl` and `SKILL.md` digest, and the run's `apm.yml` and
-  `apm.lock.yaml` inline (`content`), so ingredients can be audited without
+  `apm.lock.yaml` inline (`content`), so dependencies can be audited without
   `evidence/`.
 - **Checks.** A Test Result's `configuration` is the list of checker files it
   ran, by digest, with the check name, command, stage and definition in
@@ -120,7 +120,7 @@ Where each fact lives, and why:
   validated against reconstructed candidate files at export.
 - **Rejected attempts** become provenance `byproducts`: a record of each, by
   digest, with its outputs, check results and models in `evidence/`.
-- **Ingredients.** The official APM CycloneDX 1.5 export is the last line's
+- **Dependencies.** The official APM CycloneDX 1.5 export is the last line's
   predicate. Without a retained APM lock it lists zero components and says so
   in `metadata.properties` (`apmx:apm-dependencies` = `0`). `apmx audit
   --export abom` writes it as a standalone file.

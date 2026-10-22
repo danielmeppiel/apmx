@@ -182,7 +182,7 @@ def test_factory_allowlist_from_the_repository_policy(plain_receipt, tmp_path, m
     assert result.exit_code == 1, result.output
     assert _rows(result.output)["Factory"].startswith("[x] Factory       definition sha256:")
     assert "INVALID   Factory:" in result.output and "not on factories.allow" in result.output
-    assert "not evaluated (receipt invalid" in _rows(result.output)["Ingredients"]
+    assert "not evaluated (receipt invalid" in _rows(result.output)["Dependencies"]
 
 
 def test_require_signed_is_a_gate_that_top_level_warn_cannot_soften(

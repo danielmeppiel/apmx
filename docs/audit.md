@@ -1,7 +1,7 @@
 # Auditing a delivery: `apmx audit`
 
 `apmx audit` answers one question. Someone handed you files a factory
-produced: can you trust that this factory, with these ingredients, produced
+produced: can you trust that this factory, with these dependencies, produced
 them, and that its checks passed? It needs no flags:
 
 ```text
@@ -9,11 +9,10 @@ $ apmx audit
 Receipt   .apm/chains/20261021T184925Z-67361d3ba1d4/receipt.intoto.jsonl   (newest COMPLETE run)   5 contracts   unsigned
 
 [i] Policy        none found
-[+] Integrity     11 statements; line digests computed; evidence 31/31 blobs verified
-[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Integrity     11 statements intact and well-formed; line digests computed; evidence 31/31 blobs verified
 [+] Factory       definition sha256:0bec0549b9af..  danielmeppiel/apmx-demo-factory#v1.0.0  5 contracts, 9 checks
 [+] Checks        9/9 passed (in-toto test-result)
-[+] Ingredients   2 APM dependencies   apm audit --ci: clean (content, lock, drift)
+[+] Dependencies  2 APM dependencies   apm audit --ci: clean (content, lock, drift)
 [i] Revocation    no policy: nothing revoked to check
 [+] Outputs       4/4 delivered files match receipt subjects (re-hashed)
                   4 files bound: docs/checkout.md src/checkout.py src/pricing.py tests/test_free_shipping.py
@@ -101,7 +100,7 @@ configuration: apmx hashes the PR's bytes from Git objects, reads
 `apm-policy.yml` from the base commit (never the working tree, even when the
 base has none), runs the bundled APM for policy discovery in an empty project
 that shares only the `origin` remote, refuses a `--policy` file inside the
-checkout, and reinstalls ingredients from the attested lock in a temporary
+checkout, and reinstalls dependencies from the attested lock in a temporary
 project with `APM_NO_SCRIPTS=1`.
 
 The gate needs `factories.signers`: without them there is nothing to look
@@ -190,7 +189,7 @@ apmx has no policy file of its own. It reads the same `apm-policy.yml` that
 3. The organization policy repository APM discovers from the `origin` remote
    (`.github-private`, `.github`, `.apm`, `_apm`).
 
-APM keeps owning its own keys: the Ingredients row runs `apm audit --ci
+APM keeps owning its own keys: the Dependencies row runs `apm audit --ci
 --policy` with that same policy. apmx owns exactly one top-level section,
 `factories`, and reads it from the raw document itself. It reuses the bundled
 APM only to locate the policy and to learn whether APM can load it
@@ -201,7 +200,7 @@ apart from `extends` and a top-level `enforcement: off`.
 # apm-policy.yml (repository or org)
 enforcement: block                       # APM's own switch for APM's rules
 dependencies:
-  deny: [acme/compromised-skill]         # APM's rule, enforced in the Ingredients row
+  deny: [acme/compromised-skill]         # APM's rule, enforced in the Dependencies row
 factories:                               # apmx's section
   allow:                                 # approved definitions; null = no opinion, [] = none
     - "acme/checkout-factory@sha256:0311c27f3d7b..."
@@ -275,7 +274,7 @@ is `factories` as `empty`; apmx still applies its rules and runs
 | Situation | Result |
 | --- | --- |
 | No policy anywhere (APM reports `absent`, `no_git_remote` or `disabled`, or an `empty` policy without `factories`) | Structural audit only: `[i] Policy  none found`. Exit 0 if valid. |
-| Policy found | Its `factories` rules apply; APM's rules apply in Ingredients. |
+| Policy found | Its `factories` rules apply; APM's rules apply in Dependencies. |
 | Policy found but unloadable (malformed, unreachable `extends`, an unknown `factories` key, a bad digest, or no bundled APM) | `INCOMPLETE`, exit 2. Never a pass. |
 | `require_signed` and an unsigned delivery | Identity `[x]`, exit 1 (`[!]` with `factories.enforcement: warn`). |
 
@@ -287,7 +286,7 @@ and `https://` URLs. Any other host is unloadable (exit 2).
 
 ```text
 apmx audit [RECEIPT] [--policy SOURCE] [--outputs DIR] [--offline] [--format text|json|sarif]
-apmx audit [RECEIPT] --explain [factory|stages|checks|ingredients|outputs]
+apmx audit [RECEIPT] --explain [factory|stages|checks|dependencies|outputs]
 apmx audit [RECEIPT] --export abom [-o FILE]
 ```
 
@@ -296,10 +295,10 @@ apmx audit [RECEIPT] --export abom [-o FILE]
 | `RECEIPT` | A `receipt.intoto.jsonl` (or its run directory). In a PR, the PR's change is bound to it, relative to its `<root>/.apm/` workspace or the repository root. |
 | `--policy SOURCE` | Policy discovery. A relative file is resolved from your current directory. In a PR, a file inside the checkout is refused (exit 2): it is the PR's own copy. |
 | `--outputs DIR` | Re-hash the delivered files in `DIR` against the subjects (instead of the PR binding). |
-| `--offline` | Network use. APM is not launched and nothing is fetched: Ingredients reads `not audited (offline)`, signatures `not checked (offline)`. Only a local policy file is read. |
-| `--format json` | Machine output: `{"schema": "apmx-audit/1", "receipt", "selection", "result", "exitCode", "reason", "rows", "facts", "signed"}`. `facts.stages` lists each stage's harness, version and models. |
+| `--offline` | Network use. APM is not launched and nothing is fetched: Dependencies reads `not audited (offline)`, signatures `not checked (offline)`. Only a local policy file is read. |
+| `--format json` | Machine output: `{"schema": "apmx-audit/2", "receipt", "selection", "result", "exitCode", "reason", "rows", "facts", "signed"}`. `facts.stages` lists each stage's harness, version and models. |
 | `--format sarif` | SARIF 2.1.0 for GitHub code scanning: one result per `[x]` (error) or `[!]` (warning) row. |
-| `--explain [TOPIC]` | Print what the receipt records (factory, stages, checks, ingredients, outputs; default all), after it verifies structurally. Replaces v1's `summary.md`. |
+| `--explain [TOPIC]` | Print what the receipt records (factory, stages, checks, dependencies, outputs; default all), after it verifies structurally. `factory` names the standards the statements are schema-valid against. Replaces v1's `summary.md`. |
 | `--export abom` | Write the inline CycloneDX 1.5 inventory as a standalone file for SBOM tools (stdout, or `-o FILE`; never overwrites). |
 
 `audit` is a reserved word. To run a local directory named `audit`, write `./audit`.
@@ -309,8 +308,8 @@ apmx audit [RECEIPT] --export abom [-o FILE]
 | Code | Meaning |
 | --- | --- |
 | 0 | VALID: every row passed. Warnings (`--offline`, `factories.enforcement: warn`, an unsigned local receipt without `require_signed`) still count as valid. |
-| 1 | INVALID: a structural row failed, outputs differ, a PR is not a factory delivery, the PR changes files no signed delivery covers or is built on a stale base, reinstalled ingredients differ, `apm audit --ci` failed, or a `factories` rule rejected the delivery. |
-| 2 | Not a pass: usage error, missing receipt, a PR change that could not be read, a policy that could not be loaded, a PR gate without signers, attestations that could not be looked up, or ingredients or signatures that could not be checked (network or authentication). |
+| 1 | INVALID: a structural row failed, outputs differ, a PR is not a factory delivery, the PR changes files no signed delivery covers or is built on a stale base, reinstalled dependencies differ, `apm audit --ci` failed, or a `factories` rule rejected the delivery. |
+| 2 | Not a pass: usage error, missing receipt, a PR change that could not be read, a policy that could not be loaded, a PR gate without signers, attestations that could not be looked up, or dependencies or signatures that could not be checked (network or authentication). |
 
 The final line is `VALID`, `INVALID <first reason>` or `INCOMPLETE <reason>`;
 for a PR that is not a factory delivery it is the `[x] Not a factory
@@ -321,18 +320,17 @@ Colour appears only on a terminal, and never when `NO_COLOR` is set.
 
 ## Rows
 
-Structural rows (Integrity, Standards, Factory, Checks, Outputs) run in order
+Structural rows (Integrity, Factory, Checks, Outputs) run in order
 and stop at the first failure. Later rows show `[i] not evaluated`, and APM is
 never launched for a receipt that is already invalid.
 
 | Row | What it checks |
 | --- | --- |
 | Policy | Which policy applies, from where, and the `factories` enforcement; `none found` is reported, never assumed. |
-| Integrity | Every line is a canonical unsigned DSSE envelope of an in-toto statement; one provenance, one CycloneDX, at most one VSA, whose `inputAttestations` bind exactly the other lines by SHA-256. Every `evidence/sha256/<hex>` blob present matches its name (evidence is optional). |
-| Standards | in-toto Statement v1 (upstream protobuf bindings), SLSA Provenance v1, in-toto Test Result v0.1, SLSA VSA v1, and CycloneDX 1.5 against the pinned JSON Schema. |
+| Integrity | Every line is a canonical unsigned DSSE envelope of an in-toto statement; one provenance, one CycloneDX, at most one VSA, whose `inputAttestations` bind exactly the other lines by SHA-256. Every `evidence/sha256/<hex>` blob present matches its name (evidence is optional). Then every statement is well-formed against its standard: in-toto Statement v1 (upstream protobuf bindings), SLSA Provenance v1, in-toto Test Result v0.1, SLSA VSA v1, and CycloneDX 1.5 against the pinned JSON Schema. A schema failure is an Integrity failure. |
 | Factory | Build type `.../build/factory/v2`, the factory definition digest and stages; with the definition in `evidence/`, its stages, checks and outputs agree; capability bindings agree with the CycloneDX inventory. With `factories.allow`, the digest must be on the list. |
 | Checks | One PASSED Test Result per declared check of the final candidate, whose configuration names the check, command, stage and definition. |
-| Ingredients | Dependency trust, delegated to APM (see below). |
+| Dependencies | Dependency trust, delegated to APM (see below). |
 | Revocation | No selected capability matches a `factories.revoked` entry (exact `purl` and `bodySha256`). |
 | Outputs | Every statement names the same delivered files; before-images, creations and deletions are consistent. Locally the files are re-hashed; in a PR the change is bound (gate above). |
 | Identity | With `factories.signers`, a signed VSA over the delivered files from those workflows (below). Without signers, `[!]`: content binding only. |
@@ -513,7 +511,7 @@ platform model with this repository as both platform and target. It uses
 `deliver: bundle` and pushes from its own job, because a `GITHUB_TOKEN` passed
 to `run.yml` becomes each called job's own read-only token.
 
-## Ingredients: APM owns dependency trust
+## Dependencies: APM owns dependency trust
 
 apmx does not reimplement dependency auditing. The provenance carries the
 run's exact `apm.yml` and `apm.lock.yaml` inline (`resolvedDependencies` with
@@ -555,14 +553,14 @@ does in your repository.
 
 Local-path dependencies resolve on the auditor's machine at the absolute
 paths recorded in the lock. When those paths do not exist there, the
-ingredients are unavailable (exit 2). Remote dependencies need network and
+dependencies are unavailable (exit 2). Remote dependencies need network and
 package access with your normal APM authentication.
 
 ## What VALID does not mean
 
 A local receipt is **unsigned**. VALID then means the receipt is internally
 consistent and its files are bound by content to this factory definition,
-these ingredients and these check results. Anyone who can rewrite every file
+these dependencies and these check results. Anyone who can rewrite every file
 and hash can forge a self-consistent receipt; `factories.allow` limits which
 definitions are accepted, and only a summary signed by an allowed CI workflow
 (`require_signed` with `signers`) says who produced it. VALID is not a sandbox,

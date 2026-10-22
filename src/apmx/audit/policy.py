@@ -9,7 +9,7 @@ There is one governance file, ``apm-policy.yml``, found the way APM finds it:
 3. The organization policy repository APM discovers from the ``origin`` remote
    (``.github-private``, ``.github``, ``.apm``, ``_apm``), following ``extends:``.
 
-APM owns its own keys and enforces them in the Ingredients row (``apm audit
+APM owns its own keys and enforces them in the Dependencies row (``apm audit
 --ci --policy``). apmx owns exactly one top-level section, ``factories``, and
 reads it from the raw documents itself; it never reads or reinterprets APM's
 keys (except top-level ``enforcement: off`` and ``extends``). The bundled APM
@@ -358,7 +358,7 @@ def _apm_status(root: Path, source: str | None) -> dict:
     from apmx.contracts.models import ContractError, ContractLimits
     from apmx.install import apm_backend
 
-    from .ingredients import _last_line, _run
+    from .dependencies import _last_line, _run
 
     try:
         executable = apm_backend.locate_backend()

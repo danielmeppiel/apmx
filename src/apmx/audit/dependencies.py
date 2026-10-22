@@ -1,4 +1,4 @@
-"""Ingredients row: APM, the canonical owner of dependency trust, audits retained inputs.
+"""Dependencies row: APM, the canonical owner of dependency trust, audits retained inputs.
 
 APMX does not reimplement dependency trust. The receipt's provenance carries
 the exact ``apm.yml`` and ``apm.lock.yaml`` used by the run inline, bound by
@@ -53,7 +53,7 @@ _DIAGNOSTIC_BYTES = 64 * 1024
 
 
 @dataclass
-class Ingredients:
+class Dependencies:
     status: str
     detail: str
     notes: list[str] = field(default_factory=list)
@@ -201,14 +201,14 @@ def _adopt_origin(stage: Path, origin: str) -> None:
             return
 
 
-def audit_ingredients(
+def audit_dependencies(
     receipt: verifier.Receipt,
     *,
     policy: str | None,
     offline: bool,
     limits: ContractLimits | None = None,
     origin: str | None = None,
-) -> Ingredients:
+) -> Dependencies:
     """Delegate dependency trust to the bundled pinned APM; never pass silently."""
     from apmx.contracts.evidence import lock_dependencies
     from apmx.install import apm_backend
@@ -219,34 +219,34 @@ def audit_ingredients(
     lock_name = next((name for name in _LOCK_NAMES if _retained(receipt, name) is not None), None)
     if lock_name is None:
         if recorded or (recorded is None and receipt.bom.get("components")):
-            return Ingredients(
+            return Dependencies(
                 FAIL,
                 f"receipt lists {_dependencies(len(recorded))} but retains no APM lock",
             )
         if receipt.bom.get("components"):
-            return Ingredients(FAIL, "CycloneDX lists components but no APM lock was retained")
-        return Ingredients(
+            return Dependencies(FAIL, "CycloneDX lists components but no APM lock was retained")
+        return Dependencies(
             PASS, "0 APM dependencies   nothing to audit", facts={"apmDependencies": 0}
         )
     lock_raw = _retained(receipt, lock_name)
     manifest = _retained(receipt, "imports-apm.yml") or _retained(receipt, "apm.yml")
     inventory_manifest = _retained(receipt, "apm.yml")
     if manifest is None or inventory_manifest is None:
-        return Ingredients(FAIL, "the retained APM lock has no retained apm.yml")
+        return Dependencies(FAIL, "the retained APM lock has no retained apm.yml")
     try:
         lock = LockFile.from_yaml(lock_raw.decode("utf-8"))
         projected = lock_dependencies(lock)
     except (ValueError, TypeError, KeyError, UnicodeDecodeError):
-        return Ingredients(FAIL, "the retained APM lock is malformed")
+        return Dependencies(FAIL, "the retained APM lock is malformed")
     if recorded is not None and projected != recorded:
-        return Ingredients(FAIL, "the retained APM lock disagrees with the factory definition")
+        return Dependencies(FAIL, "the retained APM lock disagrees with the factory definition")
     count = len(projected)
     facts: dict[str, object] = {"apmDependencies": count}
     if count == 0:
-        return Ingredients(PASS, "0 APM dependencies   nothing to audit", facts=facts)
+        return Dependencies(PASS, "0 APM dependencies   nothing to audit", facts=facts)
     label = _dependencies(count)
     if offline:
-        return Ingredients(
+        return Dependencies(
             WARN,
             f"not audited (offline): {label}; retained lock matches the definition",
             facts={**facts, "apmAudit": "skipped-offline"},
@@ -255,7 +255,7 @@ def audit_ingredients(
         executable = apm_backend.locate_backend()
         identity = apm_backend.backend_identity(executable)
     except ContractError as exc:
-        return Ingredients(UNAVAILABLE, f"bundled APM unavailable: {exc}", facts=facts)
+        return Dependencies(UNAVAILABLE, f"bundled APM unavailable: {exc}", facts=facts)
     facts["apmVersion"] = identity["version"]
     env = apm_backend.backend_child_env(dict(os.environ))
     for name in ("FORCE_COLOR", "CLICOLOR_FORCE", "PY_COLORS"):
@@ -289,7 +289,7 @@ def audit_ingredients(
                 limits,
             )
             if not finished or code != 0:
-                return Ingredients(
+                return Dependencies(
                     UNAVAILABLE,
                     f"{label}: apm install --frozen could not reinstall them "
                     f"({_last_line(capture)})",
@@ -306,7 +306,7 @@ def audit_ingredients(
             (stage / lock_name).write_bytes(lock_raw)
             if drifted:
                 name = Path(drifted[0]).name or drifted[0]
-                return Ingredients(
+                return Dependencies(
                     FAIL,
                     f"{label}: reinstalled content differs from the receipt ({name})",
                     facts={**facts, "drifted": [Path(item).name for item in drifted]},
@@ -314,7 +314,7 @@ def audit_ingredients(
             for binding in receipt.bindings:
                 body = stage / ".agents/skills" / binding["capability"] / "SKILL.md"
                 if not body.is_file() or _sha(body.read_bytes()) != binding["bodySha256"]:
-                    return Ingredients(
+                    return Dependencies(
                         FAIL,
                         f"{label}: reinstalled skill {binding['capability']} does not "
                         "match the receipt's bodySha256",
@@ -324,7 +324,7 @@ def audit_ingredients(
                 inventory_manifest, lock_raw, expected_backend=identity, limits=limits
             )
             if _components(exported) != _components(json.dumps(receipt.bom).encode("utf-8")):
-                return Ingredients(
+                return Dependencies(
                     FAIL,
                     f"{label}: CycloneDX components differ from what the pinned APM "
                     "derives from the retained lock",
@@ -340,14 +340,14 @@ def audit_ingredients(
             except (ValueError, KeyError, TypeError):
                 report = None
             if not finished or report is None or code not in (0, 1):
-                return Ingredients(
+                return Dependencies(
                     UNAVAILABLE,
                     f"{label}: apm audit --ci did not produce a result ({_last_line(capture)})",
                     facts={**facts, "apmAudit": "unavailable"},
                 )
             names = {str(item.get("name")) for item in checks if isinstance(item, dict)}
             if policy and not names - _BASELINE_CHECKS:
-                return Ingredients(
+                return Dependencies(
                     UNAVAILABLE,
                     f"{label}: policy {safe_text(policy, limit=120)} was not enforced "
                     f"({_policy_diagnostic(capture)})",
@@ -378,7 +378,7 @@ def audit_ingredients(
                             f"{safe_text(str(item.get('name')), limit=80)}: "
                             f"{safe_text(str(item.get('message')), limit=160)}"
                         )
-                return Ingredients(
+                return Dependencies(
                     FAIL,
                     f"{label}   apm audit --ci{' --policy' if policy else ''}: "
                     f"{_plural(len(failing) or 1, 'failing check')} "
@@ -388,12 +388,12 @@ def audit_ingredients(
                 )
             notes.append("installed bytes match CycloneDX inventory and recorded hashes")
             scope = "policy, content, lock, drift" if policy else "content, lock, drift"
-            return Ingredients(
+            return Dependencies(
                 PASS, f"{label}   apm audit --ci: clean ({scope})", notes, facts=facts
             )
     except ContractError as exc:
-        return Ingredients(UNAVAILABLE, f"{label}: {exc}", facts=facts)
+        return Dependencies(UNAVAILABLE, f"{label}: {exc}", facts=facts)
     except OSError:
-        return Ingredients(
+        return Dependencies(
             UNAVAILABLE, f"{label}: the temporary audit project could not be used", facts=facts
         )

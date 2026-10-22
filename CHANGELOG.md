@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`apmx audit` rows (breaking).** The `Ingredients` row is now
+  `Dependencies` everywhere: terminal output, JSON and SARIF row names
+  (`apmx-audit/dependencies`), and `--explain dependencies` (`--explain
+  ingredients` is gone; no alias). The separate `Standards` row is removed:
+  the same schema validation (in-toto Statement v1, SLSA Provenance v1, in-toto
+  Test Result, CycloneDX 1.5, SLSA VSA v1) now runs inside `Integrity`, after
+  its existing checks, so a schema failure is an `Integrity` failure with the
+  same message, and a passing row reads `N statements intact and well-formed`.
+  `--explain factory` lists the standards. Rows are now Policy, Integrity,
+  Factory, Checks, Dependencies, Revocation, Outputs, Identity. The JSON
+  schema is `apmx-audit/2`; update anything that parses rows by name.
+
 ## 0.7.1 - 2026-10-22
 
 A PR cannot rewrite its own gate; green means accepted by proof, and nothing
