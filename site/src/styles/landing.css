@@ -87,7 +87,7 @@ svg .chip { fill: var(--canvas); stroke: var(--line-strong); stroke-width: 1.5; 
 .pains span:not(.pn) { display: block; margin-top: 8px; font-size: 18px; color: var(--secondary); line-height: 1.4; }
 .resolved .pains { margin-top: 56px; }
 
-/* accept by proof */
+/* merge on trusted evidence */
 .machines { list-style: none; padding: 0; display: grid; grid-template-columns: 1fr 48px 1fr 48px 1fr; align-items: stretch; margin: 72px 0 0; }
 .machines .m { background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: 12px; padding: 22px 24px; }
 .machines .m.agent { background: var(--exec-field); border-color: #2c4b39; }

@@ -1,13 +1,24 @@
 ---
-title: Accept factory PRs by proof
-description: Review the factory once. Its pull requests carry code only and merge on one required check, signed in CI by a workflow the agent cannot reach.
+title: Auto-merge factory PRs on trusted evidence
+description: Review the factory once. Its pull requests carry code only and merge on one required check of evidence signed by a trusted signer the agent cannot reach.
 ---
 
-Review the factory once, then accept its pull requests by proof instead of
-re-reading every generated diff. The receiving side is one policy section and
-one workflow step.
+Review the factory once, then merge its pull requests on trusted evidence
+instead of re-reading every generated diff. Automated merging is the outcome
+APMX's four promises unlock:
 
-## 1. Produce in CI
+- **Traceability.** Every delivered file is cryptographically bound to the
+  factory that made it and the checks it passed.
+- **Portability.** Same factory, skills and checks on your choice of harness
+  and model.
+- **Security.** Agent, checks and signer run apart. The agent cannot sign or
+  change its checks.
+- **Trust.** Only factories you approved ship: signed provenance, intact
+  files, your checks passed.
+
+The receiving side is one policy section and one workflow step.
+
+## 1. Run agent, checks and signer apart
 
 The factory repository calls the reusable
 [`run.yml`](https://github.com/danielmeppiel/apmx/blob/main/.github/workflows/run.yml)
@@ -22,12 +33,14 @@ fresh machine:
 | `attest` | no | no | no | **yes**, after `apmx audit --offline` is VALID |
 | `deliver` | no | no | **yes** (target only) | no |
 
-Three isolated roles: the agent produces, the checks rerun without it, and a
-**trusted signer** signs. The agent cannot sign and cannot change the checks.
-In v0.7.1 the trusted signer is the `attest` job: it signs a SLSA Verification
-Summary over the delivered files with the workflow's GitHub OIDC identity
-through Sigstore, and your policy pins that workflow (step 2). The pull request carries
-**code only**; never commit a receipt.
+Three isolated jobs: the agent works (`produce`), the checks verify without
+it (`check`), and a **trusted signer** signs (`attest`). The agent cannot sign
+and cannot change the checks. In v0.7.1 the trusted signer is a GitHub Actions
+workflow, APMX's reusable `run.yml`, signing through Sigstore with the
+workflow's GitHub OIDC identity: its `attest` job signs a SLSA Verification
+Summary over the delivered files. Your policy pins it by workflow ref and
+commit (step 2). The pull request carries **code only**; never commit a
+receipt.
 
 ## 2. Pin what you accept
 
@@ -65,8 +78,8 @@ credentials, and executes nothing from it.
   env: { GH_TOKEN: "${{ github.token }}" }
 ```
 
-**Green means accepted by proof, and nothing else**, so auto-merge on the
-check is safe.
+**Green means accepted on trusted evidence, and nothing else**, so auto-merge
+on the check is safe.
 
 ## 4. A real pair
 

@@ -10,7 +10,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'APMX',
-      description: 'APMX runs Agentic Software Factories from Agent Contracts and accepts their work by proof.',
+      description: 'APMX runs agentic software factories built from Agent Contracts and ships every change with signed evidence of how it was made.',
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/danielmeppiel/apmx' }],
       customCss: [
         '@fontsource-variable/mona-sans/wdth.css',
@@ -36,7 +36,7 @@ export default defineConfig({
             { label: 'Write an Agent Contract', slug: 'docs/agent-contracts' },
             { label: 'Run a factory on any harness', slug: 'docs/any-harness' },
             { label: 'Read the receipt', slug: 'docs/receipt' },
-            { label: 'Accept factory PRs by proof', slug: 'docs/accept-prs' },
+            { label: 'Auto-merge factory PRs on trusted evidence', slug: 'docs/accept-prs' },
           ],
         },
         {

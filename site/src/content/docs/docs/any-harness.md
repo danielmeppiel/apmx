@@ -1,12 +1,14 @@
 ---
 title: Run a factory on any harness
-description: Chain contracts into a factory, preview it, run it on GitHub Copilot CLI or OpenCode, and read the outcome literally.
+description: Chain contracts into a factory, preview it, run it on your choice of harness and model (GitHub Copilot CLI or OpenCode), and read the outcome literally.
 ---
 
-A **factory** is a directory of contracts and checks. Contracts hand off
-through files: one that `needs: plan.md` waits for the one that
+An **agentic software factory** is a set of agents that turns intent into an
+outcome, usually software. In APMX it is a directory of contracts and checks.
+Contracts hand off through files: one that `needs: plan.md` waits for the one that
 `produces: plan.md` and receives that exact checked file. No pipeline file
-is needed. The factory starts from your intent, written in `request.md`. The checkout example adds free delivery from a 5000-cent subtotal:
+is needed. The factory starts from your intent, written in `request.md`. The
+checkout example adds free delivery from a 5000-cent subtotal:
 
 ```text
 request.md -> plan.md -> specification.md
@@ -24,7 +26,7 @@ apmx audit <receipt>              # verify what was produced, from what, and how
 
 The same commands work for a single contract (`apmx build.contract.md`) or a
 Git package (`apmx --from owner/repo`). `--on copilot|opencode` selects the
-harness; Copilot is the default.
+harness, the coding-agent runtime; Copilot is the default.
 
 ## Preview
 
@@ -42,6 +44,9 @@ Factory  danielmeppiel/apmx-demo-factory#v1.0.0   5 contracts   copilot / defaul
 (Abridged; `*` marks an earlier contract's checked output.)
 
 ## Switch the harness, keep the factory
+
+**Portability:** same factory, skills and checks on your choice of harness
+and model.
 
 ```sh
 apmx --from 'danielmeppiel/apmx-demo-factory#v1.0.0' --on opencode --model github-copilot/gpt-5.6-sol

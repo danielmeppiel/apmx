@@ -1,10 +1,14 @@
 ---
 title: Read the receipt
-description: One in-toto bundle per run, tied to the exact files it describes, in SBOM and SLSA formats. What it records, how to verify it, and what it does not prove.
+description: One in-toto bundle per run (SLSA provenance, SBOM, check results, VSA), bound to the exact files it describes. What it records, how to verify it, and what it does not guarantee.
 ---
 
-Every COMPLETE run writes a **receipt** next to its record. Think of a food
-label: what went in, how it was built, what was checked. It has three parts:
+Every COMPLETE run writes a **receipt** next to its record: one in-toto
+bundle bound to the delivered files. It keeps the **Traceability** promise:
+every delivered file is cryptographically bound to the factory that made it
+and the checks it passed. It is evidence of where a change came from and what
+it passed, not a guarantee that the code is correct. Think of a food label:
+what went in, how it was built, what was checked. It has three parts:
 
 | Part | What it is | Who needs it |
 | --- | --- | --- |
@@ -21,12 +25,11 @@ REJECTED and HALTED runs get no receipt.
 | 1 | SLSA Provenance v1 | built by this factory, from these inputs, by this harness and model |
 | 2..n | in-toto Test Result v0.1, one per check | check X ran on these files: PASSED |
 | last | CycloneDX 1.5 SBOM (the agent bill of materials) | the APM packages and skills the agents were given, from the APM lockfile |
-| (CI) | SLSA Verification Summary v1, signed | the verifier checked every other line: PASSED |
+| (signer) | SLSA Verification Summary v1, signed | the verifier checked every other line: PASSED |
 
 The last statement comes from a **trusted signer**, a job the agent cannot
-reach. In v0.7.1 that signer is a GitHub Actions workflow, APMX's reusable
-`run.yml`, signing through Sigstore with the workflow's GitHub OIDC identity.
-Your policy pins it by workflow and commit (`factories.signers`).
+reach, which your policy pins (`factories.signers`). See
+[which signer v0.7.1 uses](../accept-prs/#1-run-agent-checks-and-signer-apart).
 
 **Every statement names the same subjects: the delivered files** (for a
 factory that writes patches, the files the patches produce, not the `.diff`).
@@ -98,12 +101,12 @@ see [docs/evidence.md](https://github.com/danielmeppiel/apmx/blob/main/docs/evid
 Local receipts are **unsigned, same-user observations**. They provide
 inspectability and content binding, not an authenticated signer, an SLSA
 level, a sandbox, an independent witness, general software correctness or
-permission to merge or deploy. A summary signed in CI by an allowed workflow
-is what says who produced it.
+permission to merge or deploy. A summary signed by a trusted signer your
+policy allows is what says who produced it.
 :::
 
 `evidence/` holds transcripts, inputs and the files the run started from.
 They can contain private code or secrets: **review before sharing**, and never
 put `evidence/` in a pull request.
 
-Next: [accept factory PRs by proof](../accept-prs/).
+Next: [auto-merge factory PRs on trusted evidence](../accept-prs/).
