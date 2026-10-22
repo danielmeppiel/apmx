@@ -10,6 +10,6 @@ factories:
     # (`git rev-parse v0.7.0^{commit}`). A tag can move; this SHA cannot.
     # Re-pin when you upgrade the run.yml your factory calls.
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to that commit
+      workflow_sha: 315491bff45f653e728c91c7ad1fc07465b97535   # git rev-parse v0.7.0^{commit}
       repo: acme/factories   # where the factory ran: its attestations are stored there
   revoked: []

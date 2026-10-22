@@ -137,7 +137,7 @@ factories:                               # apmx's section
   require_signed: true                   # reject deliveries that are not signed (see Identity)
   signers:                               # who may sign; null = no opinion, [] = none
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml   # optional @<ref>
-      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to `git rev-parse v0.7.0^{commit}`
+      workflow_sha: 315491bff45f653e728c91c7ad1fc07465b97535   # git rev-parse v0.7.0^{commit}
       repo: acme/factories                 # where the factory ran (default: this repository)
   revoked:                               # capability content revoked by incident response
     - purl: "pkg:github/acme/style@3f2a..."
@@ -165,9 +165,8 @@ is `factories` as `empty`; apmx still applies its rules and runs
 - `workflow_sha` (40 hex) pins the signer workflow's code. Whoever controls the
   workflow's repository can move a tag or a branch, so `@<ref>` alone does not
   pin the reviewed `run.yml`; `workflow_sha` does. Pin the **commit**: `git
-  rev-parse v0.7.0^{commit}` for apmx's `run.yml@v0.7.0` (the all-zero SHA in
-  the examples is a placeholder for it; for `run.yml@v0.6.0` it was
-  `cadfa207e4645306199ddb85271c5f3e13340924`). `workflow: <file>.yml@<40-hex sha>` is the
+  rev-parse v0.7.0^{commit}`; for apmx's `run.yml@v0.7.0` that is
+  `315491bff45f653e728c91c7ad1fc07465b97535`. `workflow: <file>.yml@<40-hex sha>` is the
   same pin. apmx compares it with the signing certificate's Build Signer Digest
   (Fulcio extension OID `1.3.6.1.4.1.57264.1.10`, the OIDC `job_workflow_sha`
   claim; `gh attestation verify --format json` shows it as
@@ -430,7 +429,7 @@ the target. Each target's gate pins the platform as the signer:
 ```yaml
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: `git rev-parse v0.7.0^{commit}` (or the tag object)
+      workflow_sha: 315491bff45f653e728c91c7ad1fc07465b97535   # or the tag object SHA
       repo: acme/factory-platform
 ```
 
