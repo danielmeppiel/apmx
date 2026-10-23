@@ -9,17 +9,29 @@ $ apmx audit
 Receipt   .apm/chains/20261021T184925Z-67361d3ba1d4/receipt.intoto.jsonl   (newest COMPLETE run)   5 contracts   unsigned
 
 [i] Policy        none found
-[+] Integrity     11 statements intact and well-formed; line digests computed; evidence 31/31 blobs verified
+                  no apm-policy.yml in shop and no git origin for org policy
+[+] Integrity     11 statements; line digests computed; evidence not present (optional)
+[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
 [+] Factory       definition sha256:0bec0549b9af..  danielmeppiel/apmx-demo-factory#v1.0.0  5 contracts, 9 checks
 [+] Checks        9/9 passed (in-toto test-result)
-[+] Dependencies  2 APM dependencies   apm audit --ci: clean (content, lock, drift)
+[+] Ingredients   2 APM dependencies   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
 [i] Revocation    no policy: nothing revoked to check
-[+] Outputs       4/4 delivered files match receipt subjects (re-hashed)
-                  4 files bound: docs/checkout.md src/checkout.py src/pricing.py tests/test_free_shipping.py
+[+] Outputs       4 files bound: docs/checkout.md src/checkout.py src/pricing.py tests/test_free_shipping.py
 [!] Identity      unsigned: proves content binding, not who ran it
 
 [+] VALID   (content-bound; not authenticated)
 ```
+
+That is apmx 0.7.1 auditing the checked-in five-stage receipt
+([`receipt-v2`](../tests/unit/contracts/golden/receipt-v2/receipt.intoto.jsonl)),
+placed under `.apm/chains/<id>/` without its `outputs/` or `evidence/`.
+
+**Since the next release**, the Standards checks are part of the Integrity
+row, the Ingredients row is named Dependencies, `--explain ingredients` is
+`--explain dependencies`, and `--format json` reports `apmx-audit/2` (v0.7.1:
+`apmx-audit/1`). The rest of this page uses the next-release names; on v0.7.1,
+read Dependencies as Ingredients.
 
 Every COMPLETE run writes a [receipt](evidence.md) next to its record:
 `receipt.intoto.jsonl`, `outputs/` and `evidence/` in `.apm/runs/<id>/`,
@@ -30,16 +42,19 @@ no receipt. Each run's `Next` line prints the exact audit command.
 
 | Where | What | Outputs | Policy |
 | --- | --- | --- | --- |
-| Your machine | The newest COMPLETE run's `receipt.intoto.jsonl` under `./.apm/` (run ids start with a UTC timestamp). | Its `outputs/` are re-hashed. | Discovered (below). |
+| Your machine | The newest COMPLETE run's `receipt.intoto.jsonl` under `./.apm/` (run ids start with a UTC timestamp). | Its `outputs/` are re-hashed when present. | Discovered (below). |
 | A GitHub pull request (`pull_request_target`, or `pull_request`) | The PR carries **code only**. Its changed files are looked up by SHA-256 in the attestation store of `factories.signers` (below). Only a valid factory delivery passes. | The PR's own change is bound to the signed delivery. | Discovered; the repository file is read from the PR **base**. Nothing in the PR's working tree is read. |
 
 Ambiguity is never guessed: no receipt is exit 2 with a message saying what to pass.
 
 ### Pull requests: the gate
 
-**Green means accepted by proof, and nothing else.** The required `audit`
-check is the merge signal, so it passes only a PR that is exactly a valid
-factory delivery, and auto-merge on it is safe. Every other PR fails it:
+**Green means accepted on trusted evidence, and nothing else.** The required
+`audit` check is the merge signal, so it passes only a PR that is exactly a
+valid factory delivery: auto-merge on this check merges only factory
+deliveries that verify against your policy. It is not a guarantee that the
+code is correct; that is as good as the checks your policy approved. Every
+other PR fails it:
 
 ```text
 [x] Identity      not a factory delivery: none of 1 changed file digest(s) carries a factory attestation in acme/factories
@@ -153,8 +168,8 @@ source) to pass, so an extra same-name success cannot override the base
 gate's failure. Pin the required check's expected source to **GitHub
 Actions** so no other app can report it. Repository rulesets and branch
 protection pin a required check to an app, not to a workflow file: any
-workflow in the repository can report a check named `audit`. That is safe
-only while the base gate always runs and reports, which
+workflow in the repository can report a check named `audit`. Such a check
+cannot override the gate only while the base gate always runs and reports, which
 `pull_request_target` guarantees; do not put an `if:` on the job (a skipped
 required job counts as passed). Whoever can change the gate on the default
 branch can still change the gate.
@@ -286,7 +301,7 @@ and `https://` URLs. Any other host is unloadable (exit 2).
 
 ```text
 apmx audit [RECEIPT] [--policy SOURCE] [--outputs DIR] [--offline] [--format text|json|sarif]
-apmx audit [RECEIPT] --explain [factory|stages|checks|dependencies|outputs]
+apmx audit [RECEIPT] --explain [factory|stages|checks|dependencies|outputs]   # v0.7.1: ingredients, not dependencies
 apmx audit [RECEIPT] --export abom [-o FILE]
 ```
 
@@ -296,7 +311,7 @@ apmx audit [RECEIPT] --export abom [-o FILE]
 | `--policy SOURCE` | Policy discovery. A relative file is resolved from your current directory. In a PR, a file inside the checkout is refused (exit 2): it is the PR's own copy. |
 | `--outputs DIR` | Re-hash the delivered files in `DIR` against the subjects (instead of the PR binding). |
 | `--offline` | Network use. APM is not launched and nothing is fetched: Dependencies reads `not audited (offline)`, signatures `not checked (offline)`. Only a local policy file is read. |
-| `--format json` | Machine output: `{"schema": "apmx-audit/2", "receipt", "selection", "result", "exitCode", "reason", "assurance", "signed", "rows", "facts"}`; `assurance` is the text in the final line's parentheses, such as `content-bound; not authenticated`. `facts.stages` lists each stage's harness, version and models. |
+| `--format json` | Machine output (`apmx-audit/1` on v0.7.1): `{"schema": "apmx-audit/2", "receipt", "selection", "result", "exitCode", "reason", "assurance", "signed", "rows", "facts"}`; `assurance` is the text in the final line's parentheses, such as `content-bound; not authenticated`. `facts.stages` lists each stage's harness, version and models. |
 | `--format sarif` | SARIF 2.1.0 for GitHub code scanning: one result per `[x]` (error) or `[!]` (warning) row. |
 | `--explain [TOPIC]` | Print what the receipt records (factory, stages, checks, dependencies, outputs; default all), after it verifies structurally. `factory` names the standards the statements are schema-valid against. Replaces v1's `summary.md`. |
 | `--export abom` | Write the inline CycloneDX 1.5 inventory as a standalone file for SBOM tools (stdout, or `-o FILE`; never overwrites). |
@@ -327,10 +342,10 @@ never launched for a receipt that is already invalid.
 | Row | What it checks |
 | --- | --- |
 | Policy | Which policy applies, from where, and the `factories` enforcement; `none found` is reported, never assumed. |
-| Integrity | Every line is a canonical unsigned DSSE envelope of an in-toto statement; one provenance, one CycloneDX, at most one VSA, whose `inputAttestations` bind exactly the other lines by SHA-256. Every `evidence/sha256/<hex>` blob present matches its name (evidence is optional). Then every statement is well-formed against its standard: in-toto Statement v1 (upstream protobuf bindings), SLSA Provenance v1, in-toto Test Result v0.1, SLSA VSA v1, and CycloneDX 1.5 against the pinned JSON Schema. A schema failure is an Integrity failure. |
+| Integrity | (Since the next release this row includes the schema checks; v0.7.1 reports them as a separate Standards row.) Every line is a canonical unsigned DSSE envelope of an in-toto statement; one provenance, one CycloneDX, at most one VSA, whose `inputAttestations` bind exactly the other lines by SHA-256. Every `evidence/sha256/<hex>` blob present matches its name (evidence is optional). Then every statement is well-formed against its standard: in-toto Statement v1 (upstream protobuf bindings), SLSA Provenance v1, in-toto Test Result v0.1, SLSA VSA v1, and CycloneDX 1.5 against the pinned JSON Schema. A schema failure is an Integrity failure. |
 | Factory | Build type `.../build/factory/v2`, the factory definition digest and stages; with the definition in `evidence/`, its stages, checks and outputs agree; capability bindings agree with the CycloneDX inventory. With `factories.allow`, the digest must be on the list. |
 | Checks | One PASSED Test Result per declared check of the final candidate, whose configuration names the check, command, stage and definition. |
-| Dependencies | Dependency trust, delegated to APM (see below). |
+| Dependencies | Dependency trust, delegated to APM (see below). Named Ingredients on v0.7.1. |
 | Revocation | No selected capability matches a `factories.revoked` entry (exact `purl` and `bodySha256`). |
 | Outputs | Every statement names the same delivered files; before-images, creations and deletions are consistent. Locally the files are re-hashed; in a PR the change is bound (gate above). |
 | Identity | With `factories.signers`, a signed VSA over the delivered files from those workflows (below). Without signers, `[!]`: content binding only. |

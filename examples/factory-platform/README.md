@@ -60,8 +60,9 @@ thing: the platform's runs of a reviewed `run.yml`.
      deliveries: every human PR fails it with `Not a factory delivery`, so
      add repository maintainers (or a team) as bypass actors and merge human
      PRs through the bypass after their normal review, or scope the ruleset
-     to the repositories factories deliver to. Auto-merge on the gate is safe:
-     green only ever means a valid delivery. A required workflow is identified
+     to the repositories factories deliver to. Auto-merge on the gate merges
+     only factory deliveries that verify against the platform's policy;
+     green never means more than that. A required workflow is identified
      by its file, so a pull request cannot satisfy it with a job of the same
      name, and repository admins cannot edit it.
    - *apmx branches*: target all repositories, `refs/heads/apmx/**`;

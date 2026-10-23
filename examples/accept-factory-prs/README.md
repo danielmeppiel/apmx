@@ -1,15 +1,16 @@
-# Accept factory PRs by proof
+# Accept factory PRs on trusted evidence
 
-Review the factory once, then accept its pull requests by proof instead of
-re-reading every generated diff. This is the whole receiving side: one policy
+Review the factory once, then merge its pull requests on trusted evidence
+instead of re-reading every generated diff. This is the whole receiving side: one policy
 section and one workflow step.
 
 1. **Produce in CI.** The factory repository (here `acme/factories`) calls
    [`run.yml`](../../.github/workflows/run.yml)
    (`danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1`): the agent runs in one job,
-   `apmx check` reruns the checks in a fresh job without the agent, and the
-   attest job signs a SLSA Verification Summary over the delivered files, and
-   the receipt bundle it binds, with the workflow's OIDC identity. Open a pull
+   `apmx check` reruns the checks in a fresh job without the agent, and a
+   trusted signer, the attest job, signs a SLSA Verification Summary over the
+   delivered files, and the receipt bundle it binds, with the workflow's
+   GitHub Actions OIDC identity through Sigstore. Open a pull
    request to the receiving repository from the `apmx-delivery` artifact: it
    holds **code only**, the delivered files at their repository paths (for a
    factory that writes patches, the patched files themselves), plus an
@@ -27,8 +28,10 @@ section and one workflow step.
    allowed signer, checks the receipt statements it binds against the policy
    read from the PR base, and refuses a PR built on a stale base. Exit 0 is
    the pass.
-4. **Merge everything else the normal way.** Green means accepted by proof
-   and nothing else, so auto-merge on the check is safe. A human PR fails it
+4. **Merge everything else the normal way.** Green means accepted on trusted
+   evidence and nothing else, so auto-merge on this check merges only factory
+   deliveries that verify against your policy; it is not a guarantee that the
+   code is correct. A human PR fails it
    with `Not a factory delivery: no changed file carries an attestation from
    factories.signers`; maintainers merge it through a ruleset bypass after
    their usual review, or factories deliver to a repository or branch only

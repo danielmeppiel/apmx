@@ -22,9 +22,11 @@ the evidence and v1 sizes measured in development (31 blobs, 188 KB, against
 ## What is inside `receipt.intoto.jsonl`
 
 Locally each envelope has `"payloadType": "application/vnd.in-toto+json"` and
-`"signatures": []`, which is honest about being unsigned. In CI the bundle and
-a verification summary that binds every line are signed with Sigstore and
-stored in GitHub's attestation store (see
+`"signatures": []`, which is honest about being unsigned, and the file stays
+unsigned in CI too. There a **trusted signer** (today the `attest` job of
+`run.yml`, a GitHub Actions workflow signing through Sigstore) attests the
+bundle and a verification summary that binds every line, and stores both in
+GitHub's attestation store (see
 [signed deliveries](audit.md#signed-deliveries)). **Every statement names
 the same subjects: the delivered files.** For a factory that produces patches
 (`git diff --full-index`, as the `export_changes` tool writes), those are the
@@ -206,8 +208,8 @@ Local receipts are **unsigned, same-user observations**. They provide
 inspectability and content binding, not an authenticated signer, an SLSA
 level, a sandbox, an independent witness, general software correctness or
 permission to merge or deploy. A person who can rewrite every file and hash can
-forge a self-consistent receipt; a summary signed in CI by an allowed workflow
-is what says who produced it.
+forge a self-consistent receipt; a verification summary from a trusted signer
+your policy names is what says who produced it.
 
 `evidence/` includes transcripts, inputs, intermediate stage outputs and the
 files the run started from, and the bundle carries the APM manifest and lock.

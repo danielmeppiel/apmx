@@ -1,13 +1,14 @@
 # A three-act demo
 
 **Story:** "Make delivery free from $50. Here are the contracts and the checks.
-Don't trust the agent; trust the proof." About 10 minutes:
+Don't trust the agent; trust the evidence." About 10 minutes:
 
 1. **Run the factory** on a laptop with a native harness.
-2. **Prove it** with `apmx audit`, then the same factory on another harness.
-3. **Accept the PR by proof:** the factory runs in CI, signs what it
-   delivered, and opens a code-only pull request whose only gate is that same
-   audit.
+2. **Check the evidence** with `apmx audit`, then the same factory on another harness.
+3. **Merge on trusted evidence:** the factory runs in CI, a trusted signer
+   (today a GitHub Actions workflow, through Sigstore) signs what it
+   delivered, and a code-only pull request is opened whose only gate is that
+   same audit.
 
 The macOS/Linux kit below separates machine preparation from the presentation.
 It uses a genuine native APMX bundle, its official APM backend and an unchanged
@@ -52,7 +53,7 @@ code and documentation patches, and the receipt they are bound to. Add
 `--verbose` to stream agent activity and checker output; inspect it before
 projecting, because native metadata can be sensitive.
 
-### Act 2: Prove it
+### Act 2: Check the evidence
 
 Run the printed `Next` command:
 
@@ -60,13 +61,15 @@ Run the printed `Next` command:
 apmx audit .apm/chains/<run-id>/receipt.intoto.jsonl
 ```
 
-Walk the rows: **Integrity** (one in-toto bundle, its evidence blobs
-verified by digest, every statement schema-valid against in-toto, SLSA v1 and
-CycloneDX 1.5), **Factory** (the definition digest of these contracts, checks
-and package commit),
-**Checks**, **Dependencies** (APM reinstalls the pinned capability and runs
-`apm audit`), **Outputs**, and **Identity**: `[!] unsigned`. A laptop receipt
-proves content binding, not who ran it. Act 3 adds the signature. `apmx audit
+Walk the rows the kit's apmx 0.7.1 prints: **Integrity** (one in-toto
+bundle, its evidence blobs verified by digest), **Standards** (every statement
+schema-valid against in-toto, SLSA v1 and CycloneDX 1.5), **Factory** (the
+definition digest of these contracts, checks and package commit),
+**Checks**, **Ingredients** (APM reinstalls the pinned capability and runs
+`apm audit`), **Outputs**, and **Identity**: `[!] unsigned`. Since the next
+release, Standards is part of Integrity and Ingredients is named
+Dependencies. A laptop receipt is evidence of content binding, not of who ran
+it. Act 3 adds the signature. `apmx audit
 --explain stages` shows the harness and models each stage reported. See
 [audit](audit.md).
 
@@ -91,13 +94,13 @@ The definition digest matches the Copilot run: same contracts, checks,
 capabilities and budget. The generated code may differ. For a tight talk, run
 one harness live and label the other as a prepared run.
 
-### Act 3: Accept the PR by proof
+### Act 3: Merge on trusted evidence
 
 The receiving repository's `apm-policy.yml` pins the reviewed factory
 definition digest (the one Act 2 printed), `require_signed: true`, and the
 signer workflow `danielmeppiel/apmx/.github/workflows/run.yml`. Its only PR
-gate is `apmx audit`. See [Accept factory PRs by
-proof](../examples/accept-factory-prs/README.md).
+gate is `apmx audit`. See [Accept factory PRs on trusted
+evidence](../examples/accept-factory-prs/README.md).
 
 The factory runs in CI through `run.yml@v0.7.1` with `factory:
 "danielmeppiel/apmx-demo-factory#v1.0.0"` and `checks-requirements:`, as three
@@ -108,7 +111,8 @@ jobs:
 - **check:** a fresh runner and no agent; `apmx check` reruns the checks on
   the output bytes and writes the receipt of record: one
   `receipt.intoto.jsonl` bundle (SLSA provenance, test results, CycloneDX).
-- **attest:** OIDC signs a SLSA Verification Summary over the delivered files
+- **attest:** the trusted signer: GitHub Actions OIDC, through Sigstore,
+  signs a SLSA Verification Summary over the delivered files
   and attests the receipt bundle beside it, with no candidate code present.
 
 The pull request carries **code only**: the delivered files (the patched
@@ -128,8 +132,8 @@ file up by SHA-256 in the signer's attestation store. Show two pull requests'
 the factory delivered, so it cannot merge."
 
 A human PR (say a documentation fix) fails the same check as `Not a factory
-delivery`: the check only passes factory deliveries, so green can drive
-auto-merge. A maintainer merges human PRs through the normal path, a ruleset
+delivery`: the check only passes factory deliveries, so auto-merge on it
+merges only factory deliveries that verify against the policy. A maintainer merges human PRs through the normal path, a ruleset
 bypass after review.
 
 ### Honest limits
@@ -140,7 +144,7 @@ trustworthy, and checks assess only their stated scope. Native execution is not
 a sandbox. Every workflow that calls `run.yml` at the pinned ref can sign; the
 policy pins the reusable workflow, not its caller. Never present exit 20, 21,
 22 or 23 as success. With no network, `apmx audit --offline` still checks
-Integrity, Factory, Checks and Outputs.
+Integrity, Standards, Factory, Checks and Outputs.
 
 ## Reset and relaunch
 
