@@ -27,7 +27,7 @@ The same commands work for a single contract (`apmx build.contract.md`) or a
 Git package (`apmx --from owner/repo`). `--on copilot|opencode` selects the
 harness; Copilot is the default. A fourth command, `apmx check <receipt>`,
 reruns a factory's own checks on the outputs another run recorded, with no
-agent; [`run.yml`](#accept-factory-prs-by-proof) uses it to write the receipt
+agent; [`run.yml`](#accept-factory-prs-on-trusted-evidence) uses it to write the receipt
 of record. The [docs](https://danielmeppiel.github.io/apmx/) cover every
 command in depth.
 
@@ -137,7 +137,7 @@ through each harness. Both produced actual code and documentation patches and
 loaded the selected testing skill. These are source-route observations, not a
 claim about the older downloads.
 
-## 3. A receipt proves what was produced
+## 3. A receipt is evidence of what was produced
 
 Every **COMPLETE** run writes a [receipt](docs/evidence.md) next to its record:
 one standard in-toto bundle, `receipt.intoto.jsonl`, with one signed-ready
@@ -204,13 +204,14 @@ before it executes, defaulting to No. Exit codes: **0** COMPLETE, **20**
 REJECTED, **21** UNPROVEN (never success), **22** HALTED, **23** receipt export
 failed after a COMPLETE run. See [results](docs/results.md).
 
-## Accept factory PRs by proof
+## Accept factory PRs on trusted evidence
 
 Run the factory in CI with [`run.yml`](.github/workflows/run.yml)
 (`uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1`). The agent,
 the checks of record (`apmx check`) and the signature each run in a separate
-job. The
-receiving repository pins what it accepts in its `apm-policy.yml`:
+job. The signature comes from a **trusted signer**: today the `attest` job of
+`run.yml`, a GitHub Actions workflow signing through Sigstore. The receiving
+repository pins what it accepts in its `apm-policy.yml`:
 
 ```yaml
 factories:
@@ -226,7 +227,8 @@ factories:
 attests the receipt bundle beside it, so the factory's PR carries **code only**.
 The receiving repository gates every pull request with one step on
 `pull_request_target` (the base branch's copy runs, so a PR cannot rewrite its
-gate). Green means accepted by proof only; human PRs fail it as `Not a factory
+gate). Green means accepted on trusted evidence, and nothing else: it is not
+a guarantee that the code is correct. Human PRs fail it as `Not a factory
 delivery` and are merged through the repository's normal path. `apmx audit`
 looks the PR's changed files up by SHA-256 in the signer's attestation store,
 requires each to be a subject of one PASSED summary from an allowed signer,

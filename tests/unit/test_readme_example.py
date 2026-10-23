@@ -111,7 +111,7 @@ def test_accept_factory_prs_example_is_a_valid_policy_and_one_step_gate() -> Non
     keys = policy.document_keys((example / "apm-policy.yml").read_text(), "example")
     assert keys["require_signed"] and keys["signers"][0].repo == "acme/factories"
     readme = (ROOT / "README.md").read_text()
-    section = readme[readme.index("## Accept factory PRs by proof") :]
+    section = readme[readme.index("## Accept factory PRs on trusted evidence") :]
     snippet = re.findall(r"```yaml\n(.*?)\n```", section, re.DOTALL)[0]
     documented = policy.document_keys(snippet.replace("<definition digest>", "0" * 64), "readme")
     assert documented["signers"] == keys["signers"]
