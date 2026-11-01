@@ -61,14 +61,14 @@ Run the printed `Next` command:
 apmx audit .apm/chains/<run-id>/receipt.intoto.jsonl
 ```
 
-Walk the rows the kit's apmx 0.7.1 prints: **Integrity** (one in-toto
-bundle, its evidence blobs verified by digest), **Standards** (every statement
-schema-valid against in-toto, SLSA v1 and CycloneDX 1.5), **Factory** (the
+Walk the rows the kit's apmx 0.8.0 prints: **Integrity** (one in-toto
+bundle, its evidence blobs verified by digest, every statement schema-valid
+against in-toto, SLSA v1 and CycloneDX 1.5), **Factory** (the
 definition digest of these contracts, checks and package commit),
-**Checks**, **Ingredients** (APM reinstalls the pinned capability and runs
-`apm audit`), **Outputs**, and **Identity**: `[!] unsigned`. Since the next
-release, Standards is part of Integrity and Ingredients is named
-Dependencies. A laptop receipt is evidence of content binding, not of who ran
+**Checks**, **Dependencies** (APM reinstalls the pinned capability and runs
+`apm audit`), **Outputs**, and **Identity**: `[!] unsigned`. apmx 0.7.1
+printed the schema checks as a separate Standards row and named Dependencies
+Ingredients. A laptop receipt is evidence of content binding, not of who ran
 it. Act 3 adds the signature. `apmx audit
 --explain stages` shows the harness and models each stage reported. See
 [audit](audit.md).
@@ -102,7 +102,7 @@ signer workflow `danielmeppiel/apmx/.github/workflows/run.yml`. Its only PR
 gate is `apmx audit`. See [Accept factory PRs on trusted
 evidence](../examples/accept-factory-prs/README.md).
 
-The factory runs in CI through `run.yml@v0.7.1` with `factory:
+The factory runs in CI through `run.yml@v0.8.0` with `factory:
 "danielmeppiel/apmx-demo-factory#v1.0.0"` and `checks-requirements:`, as three
 jobs:
 
@@ -222,7 +222,7 @@ From the source checkout, supply the trusted archive hash and checker interprete
 
 ```sh
 python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
-  --archive /absolute/path/to/apmx-0.7.1-macos-arm64.tar.gz \
+  --archive /absolute/path/to/apmx-0.8.0-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --python /absolute/path/to/checker-environment/bin/python \
   --verifier-python /absolute/path/to/independent-verifier/bin/python \
@@ -245,7 +245,7 @@ pinned remote package instead of the local example copy:
 
 ```sh
 python scripts/demo.py prepare "$HOME/Repos/apmx-demo" \
-  --archive /absolute/path/to/apmx-0.7.1-macos-arm64.tar.gz \
+  --archive /absolute/path/to/apmx-0.8.0-macos-arm64.tar.gz \
   --sha256 EXPECTED_ARCHIVE_SHA256 \
   --python /absolute/path/to/checker-environment/bin/python \
   --verifier-python /absolute/path/to/independent-verifier/bin/python \

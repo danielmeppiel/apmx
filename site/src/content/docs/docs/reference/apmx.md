@@ -26,7 +26,7 @@ directory with either name as `./audit` or `./check`.
 <summary>Full <code>apmx --help</code> (v0.7.1)</summary>
 
 The capture ran the binary under the name `apmx-v071`; the text is otherwise
-verbatim and identical on main.
+verbatim and identical in v0.8.0.
 
 ```text
 Usage: apmx-v071 [OPTIONS] [FACTORY_OR_CONTRACT_OR_PACKAGE]
@@ -100,7 +100,7 @@ Error: No factory selected. Pass a local directory, .contract.md file, Git packa
 | `--allow-unproven-inputs` | | Factories only: permit fully checked handoffs between contracts ("not certification"). A single contract ignores it. Required, with `--allow-host-access`, for unattended factory runs. |
 | `--allow-host-access` | | Consent: the harness, APM and your checks may use host files, network and logins. |
 | `-v`, `--verbose` | | Stream debug logs and process details. |
-| `--version` | | Print `apmx, version 0.7.1`. Root command only. |
+| `--version` | | Print `apmx, version 0.8.0`. Root command only. |
 | `-h`, `--help` | | Show help. Works on all three commands. |
 
 ## Consent

@@ -22,6 +22,17 @@ line. Read the final line first.
 Real final lines, one per kind:
 
 <Tabs syncKey="apmx-release">
+<TabItem label="v0.8.0">
+
+```text title="Final lines of four real audits (v0.8.0)"
+[+] VALID   (content-bound; not authenticated)
+[+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
+[x] INVALID   Factory: definition sha256:0bec0549b9af.. is not on factories.allow
+[!] INCOMPLETE   Identity: signature not checked (offline)
+             Not a pass: the receipt could not be fully audited (exit 2). --offline skips dependencies explicitly.
+```
+
+</TabItem>
 <TabItem label="v0.7.1">
 
 ```text title="Final lines of four real audits (v0.7.1)"
@@ -30,17 +41,6 @@ Real final lines, one per kind:
 [x] INVALID   Factory: definition sha256:0bec0549b9af.. is not on factories.allow
 [!] INCOMPLETE   Identity: signature not checked (offline)
              Not a pass: the receipt could not be fully audited (exit 2). --offline skips ingredients explicitly.
-```
-
-</TabItem>
-<TabItem label="Next release">
-
-```text title="Final lines of four real audits (main, unreleased)"
-[+] VALID   (content-bound; not authenticated)
-[+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
-[x] INVALID   Factory: definition sha256:0bec0549b9af.. is not on factories.allow
-[!] INCOMPLETE   Identity: signature not checked (offline)
-             Not a pass: the receipt could not be fully audited (exit 2). --offline skips dependencies explicitly.
 ```
 
 </TabItem>
@@ -56,7 +56,7 @@ not be checked.
 Each row prints one symbol: `[+]` pass, `[x]` fail, `[!]` warning or not
 checked, `[i]` information or not evaluated.
 
-<Badge text="Since the next release" variant="note" size="small" /> Eight
+<Badge text="Since v0.8.0" variant="note" size="small" /> Eight
 rows, named as above. v0.7.1 prints nine: the schema checks are a separate
 Standards row after Integrity, and Dependencies is named Ingredients.
 

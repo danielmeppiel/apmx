@@ -61,13 +61,13 @@ temporary workspace. Every contract starts from `request.md`, your intent;
 
 <Steps>
 
-1. **Get the example.** Clone the v0.7.1 tag and copy the first-contract
+1. **Get the example.** Clone the v0.8.0 tag and copy the first-contract
    example into a new directory outside the clone:
 
    ```sh
-   git clone --depth 1 --branch v0.7.1 https://github.com/danielmeppiel/apmx.git apmx-v0.7.1
+   git clone --depth 1 --branch v0.8.0 https://github.com/danielmeppiel/apmx.git apmx-v0.8.0
    mkdir "$HOME/apmx-first-contract-demo"
-   cp -R apmx-v0.7.1/examples/contracts/first-contract/. "$HOME/apmx-first-contract-demo/"
+   cp -R apmx-v0.8.0/examples/contracts/first-contract/. "$HOME/apmx-first-contract-demo/"
    cd "$HOME/apmx-first-contract-demo"
    ```
 
@@ -176,7 +176,7 @@ machine, `[!] Identity  unsigned` is expected: a receipt you make on your
 machine is unsigned, so it binds content, not identity. Only a trusted signer
 in CI adds identity.
 
-The next release renames Ingredients to Dependencies and folds Standards into
+Since v0.8.0, Ingredients is named Dependencies and Standards is folded into
 Integrity.
 
 ## Look inside
@@ -185,9 +185,9 @@ Integrity.
 apmx audit --explain
 ```
 
-This prints what the receipt records instead of auditing it. In v0.7.1 the
-topics are `factory`, `stages`, `checks`, `ingredients` and `outputs`; pass
-one to see only that part, for example `apmx audit --explain stages`.
+This prints what the receipt records instead of auditing it. The topics are
+`factory`, `stages`, `checks`, `dependencies` and `outputs` (v0.7.1:
+`ingredients` instead of `dependencies`); pass one to see only that part, for example `apmx audit --explain stages`.
 
 ## Next steps
 

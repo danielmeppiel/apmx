@@ -37,8 +37,8 @@ factories:
     - "danielmeppiel/apmx-demo-factory#v1.0.0@sha256:0bec0549b9af1e093c5204610163203ca6a58ea7602ad1021cdd381c042b039e"
   require_signed: true
   signers:
-    - workflow: danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.7.1   # optional @ref
-      workflow_sha: a70c1939dddc6f5d7888b76fd5bb8bab3e69e886                  # git rev-parse v0.7.1^{commit}
+    - workflow: danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.8.0   # optional @ref
+      workflow_sha: "0000000000000000000000000000000000000000"  # placeholder: `git rev-parse v0.8.0^{commit}`
       repo: acme/factories            # repository where run.yml ran (attestations stored there)
   revoked: []
   enforcement: block
@@ -77,7 +77,7 @@ In a pull request, step 2 reads the file from the **PR base commit** only,
 never from the PR. A `--policy` file inside the checkout is refused, so the
 audit is INCOMPLETE:
 
-```text title="apmx audit --policy apm-policy.yml in a PR (main, trimmed to the row)"
+```text title="apmx audit --policy apm-policy.yml in a PR (v0.8.0, trimmed to the row)"
 [!] Policy        apm-policy.yml (--policy) could not be loaded: in a pull request, --policy must not name a file in the checkout: that is the PR's own copy
                   A policy that cannot be loaded is never treated as a pass.
 ```
@@ -126,7 +126,7 @@ section is reported by APM 0.33.0 as `empty`, and `apm audit` then runs with
 `--no-policy`. JSON shows which: `facts.apmAudit.policy` is
 `"none (--no-policy)"` for the demo shop's factories-only policy.
 
-:::note[Since the next release]
+:::note[Since v0.8.0]
 That audit row is named Dependencies. In v0.7.1 it is named Ingredients.
 :::
 

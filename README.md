@@ -9,7 +9,7 @@ Share not just the skills for doing the work, but the goals and checks for
 accepting it.**
 
 **Install** the experimental
-[v0.7.1 release](https://github.com/danielmeppiel/apmx/releases/tag/v0.7.1)
+[v0.8.0 release](https://github.com/danielmeppiel/apmx/releases/tag/v0.8.0)
 with the [native installation guide](docs/install.md#install-a-prebuilt-archive).
 It runs contracts through native Copilot or the native
 [OpenCode profile](docs/opencode.md); authenticate in your chosen harness, whose
@@ -158,7 +158,7 @@ five-stage example is one 37 KB bundle of 11 lines
 its evidence is not checked in.
 
 Anyone holding the bundle can verify it without rerunning the factory. Here
-v0.7.1 audits that receipt; add `--outputs <dir>` to re-hash the delivered
+v0.8.0 audits that receipt; add `--outputs <dir>` to re-hash the delivered
 files as well:
 
 ```text
@@ -167,11 +167,10 @@ Receipt   receipt-v2/receipt.intoto.jsonl   5 contracts   unsigned
 
 [i] Policy        none found
                   no apm-policy.yml in project and no git origin for org policy
-[+] Integrity     11 statements; line digests computed; evidence not present (optional)
-[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Integrity     11 statements intact and well-formed; line digests computed; evidence not present (optional)
 [+] Factory       definition sha256:0bec0549b9af..  danielmeppiel/apmx-demo-factory#v1.0.0  5 contracts, 9 checks
 [+] Checks        9/9 passed (in-toto test-result)
-[+] Ingredients   2 APM dependencies   apm audit --ci: clean (content, lock, drift)
+[+] Dependencies  2 APM dependencies   apm audit --ci: clean (content, lock, drift)
                   installed bytes match CycloneDX inventory and recorded hashes
 [i] Revocation    no policy: nothing revoked to check
 [+] Outputs       4 files bound: docs/checkout.md src/checkout.py src/pricing.py tests/test_free_shipping.py
@@ -180,12 +179,12 @@ Receipt   receipt-v2/receipt.intoto.jsonl   5 contracts   unsigned
 [+] VALID   (content-bound; not authenticated)
 ```
 
-Since the next release, Standards is part of the Integrity row and Ingredients
-is named Dependencies.
+v0.7.1 printed the schema checks as a separate Standards row and named the
+Dependencies row Ingredients.
 
 `apmx audit --explain` prints what the receipt records (factory, stages,
-checks, ingredients, outputs; the `ingredients` topic is `dependencies` since
-the next release); `apmx audit --export abom` writes the CycloneDX
+checks, dependencies, outputs; the `dependencies` topic is `ingredients` on
+v0.7.1); `apmx audit --export abom` writes the CycloneDX
 inventory as a standalone file for SBOM tools.
 
 For dependencies, `apmx audit` reinstalls the recorded lock with the bundled
@@ -207,7 +206,7 @@ failed after a COMPLETE run. See [results](docs/results.md).
 ## Accept factory PRs on trusted evidence
 
 Run the factory in CI with [`run.yml`](.github/workflows/run.yml)
-(`uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1`). The agent,
+(`uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.8.0`). The agent,
 the checks of record (`apmx check`) and the signature each run in a separate
 job. The signature comes from a **trusted signer**: today the `attest` job of
 `run.yml`, a GitHub Actions workflow signing through Sigstore. The receiving
@@ -219,7 +218,7 @@ factories:
   require_signed: true
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: a70c1939dddc6f5d7888b76fd5bb8bab3e69e886   # git rev-parse v0.7.1^{commit}
+      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to `git rev-parse v0.8.0^{commit}`
       repo: acme/factories
 ```
 
@@ -236,7 +235,7 @@ checks the statements it binds against the policy read from the PR base, and
 refuses a PR built on a stale base:
 
 ```yaml
-- uses: danielmeppiel/apmx/.github/actions/setup@v0.7.1   # installs apmx 0.7.1
+- uses: danielmeppiel/apmx/.github/actions/setup@v0.8.0   # installs apmx 0.8.0
 - run: apmx audit
   env: { GH_TOKEN: "${{ github.token }}" }
 ```

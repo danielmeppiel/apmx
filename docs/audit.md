@@ -10,11 +10,10 @@ Receipt   .apm/chains/20261021T184925Z-67361d3ba1d4/receipt.intoto.jsonl   (newe
 
 [i] Policy        none found
                   no apm-policy.yml in shop and no git origin for org policy
-[+] Integrity     11 statements; line digests computed; evidence not present (optional)
-[+] Standards     in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid
+[+] Integrity     11 statements intact and well-formed; line digests computed; evidence not present (optional)
 [+] Factory       definition sha256:0bec0549b9af..  danielmeppiel/apmx-demo-factory#v1.0.0  5 contracts, 9 checks
 [+] Checks        9/9 passed (in-toto test-result)
-[+] Ingredients   2 APM dependencies   apm audit --ci: clean (content, lock, drift)
+[+] Dependencies  2 APM dependencies   apm audit --ci: clean (content, lock, drift)
                   installed bytes match CycloneDX inventory and recorded hashes
 [i] Revocation    no policy: nothing revoked to check
 [+] Outputs       4 files bound: docs/checkout.md src/checkout.py src/pricing.py tests/test_free_shipping.py
@@ -23,14 +22,14 @@ Receipt   .apm/chains/20261021T184925Z-67361d3ba1d4/receipt.intoto.jsonl   (newe
 [+] VALID   (content-bound; not authenticated)
 ```
 
-That is apmx 0.7.1 auditing the checked-in five-stage receipt
+That is apmx 0.8.0 auditing the checked-in five-stage receipt
 ([`receipt-v2`](../tests/unit/contracts/golden/receipt-v2/receipt.intoto.jsonl)),
 placed under `.apm/chains/<id>/` without its `outputs/` or `evidence/`.
 
-**Since the next release**, the Standards checks are part of the Integrity
+**Since v0.8.0**, the Standards checks are part of the Integrity
 row, the Ingredients row is named Dependencies, `--explain ingredients` is
 `--explain dependencies`, and `--format json` reports `apmx-audit/2` (v0.7.1:
-`apmx-audit/1`). The rest of this page uses the next-release names; on v0.7.1,
+`apmx-audit/1`). The rest of this page uses the v0.8.0 names; on v0.7.1,
 read Dependencies as Ingredients.
 
 Every COMPLETE run writes a [receipt](evidence.md) next to its record:
@@ -138,7 +137,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}   # bytes to hash; never executed
           fetch-depth: 0
           persist-credentials: false
-      - uses: danielmeppiel/apmx/.github/actions/setup@v0.7.1   # installs apmx 0.7.1
+      - uses: danielmeppiel/apmx/.github/actions/setup@v0.8.0   # installs apmx 0.8.0
       - run: apmx audit
         env:
           GH_TOKEN: ${{ github.token }}   # gh attestation verify
@@ -183,7 +182,7 @@ identified by workflow file, not by a check name.
 The setup action downloads the native release archive for the runner and
 installs it only if its SHA-256 matches the release's `.sha256` file, the
 release manifest and, if you give one, the `sha256` input. Reference the
-actions and `run.yml` by an immutable release tag such as `@v0.7.1`, or by
+actions and `run.yml` by an immutable release tag such as `@v0.8.0`, or by
 that tag's commit SHA. apmx publishes no moving major tag (`@v1`).
 
 **Offline route.** Off GitHub, ship the bundle with the files and run
@@ -222,7 +221,7 @@ factories:                               # apmx's section
   require_signed: true                   # reject deliveries that are not signed (see Identity)
   signers:                               # who may sign; null = no opinion, [] = none
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml   # optional @<ref>
-      workflow_sha: a70c1939dddc6f5d7888b76fd5bb8bab3e69e886   # git rev-parse v0.7.1^{commit}
+      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to `git rev-parse v0.8.0^{commit}`
       repo: acme/factories                 # where the factory ran (default: this repository)
   revoked:                               # capability content revoked by incident response
     - purl: "pkg:github/acme/style@3f2a..."
@@ -243,15 +242,16 @@ is `factories` as `empty`; apmx still applies its rules and runs
   entry's package is a label; an unpinned pattern such as `acme/*` allows
   nothing yet, and the Factory row says so.
 - `signers`: `workflow: owner/repo/.github/workflows/<file>.yml`, optionally
-  pinned to the signer's ref with `@<ref>` (for example `@refs/tags/v0.7.1`), an
+  pinned to the signer's ref with `@<ref>` (for example `@refs/tags/v0.8.0`), an
   optional `workflow_sha`, and an optional `repo: owner/repo`: the repository
   the factory ran in, where its attestations are stored. `repo` defaults to the
   repository being audited.
 - `workflow_sha` (40 hex) pins the signer workflow's code. Whoever controls the
   workflow's repository can move a tag or a branch, so `@<ref>` alone does not
   pin the reviewed `run.yml`; `workflow_sha` does. Pin the **commit**: `git
-  rev-parse v0.7.1^{commit}`; for apmx's `run.yml@v0.7.1` that is
-  `a70c1939dddc6f5d7888b76fd5bb8bab3e69e886`. `workflow: <file>.yml@<40-hex sha>` is the
+  rev-parse v0.8.0^{commit}` for apmx's `run.yml@v0.8.0` (the all-zero SHA in
+  the examples is a placeholder for it; for `run.yml@v0.7.1` it was
+  `a70c1939dddc6f5d7888b76fd5bb8bab3e69e886`). `workflow: <file>.yml@<40-hex sha>` is the
   same pin. apmx compares it with the signing certificate's Build Signer Digest
   (Fulcio extension OID `1.3.6.1.4.1.57264.1.10`, the OIDC `job_workflow_sha`
   claim; `gh attestation verify --format json` shows it as
@@ -261,7 +261,7 @@ is `factories` as `empty`; apmx still applies its rules and runs
   resolves that tag object read-only with `gh api
   repos/<owner>/<repo>/git/tags/<sha>`, and the pin matches if the tag names
   that commit; the row says `at <commit12> (tag object <sha12>)`. Pinning the
-  tag object itself (`git rev-parse v0.7.1`) also works, without the lookup;
+  tag object itself (`git rev-parse v0.8.0`) also works, without the lookup;
   it hashes its target commit, so it is just as immutable. If the lookup
   fails, the audit is INCOMPLETE (exit 2), never a pass. Re-pin when you upgrade
   the `run.yml` you call.
@@ -342,7 +342,7 @@ never launched for a receipt that is already invalid.
 | Row | What it checks |
 | --- | --- |
 | Policy | Which policy applies, from where, and the `factories` enforcement; `none found` is reported, never assumed. |
-| Integrity | (Since the next release this row includes the schema checks; v0.7.1 reports them as a separate Standards row.) Every line is a canonical unsigned DSSE envelope of an in-toto statement; one provenance, one CycloneDX, at most one VSA, whose `inputAttestations` bind exactly the other lines by SHA-256. Every `evidence/sha256/<hex>` blob present matches its name (evidence is optional). Then every statement is well-formed against its standard: in-toto Statement v1 (upstream protobuf bindings), SLSA Provenance v1, in-toto Test Result v0.1, SLSA VSA v1, and CycloneDX 1.5 against the pinned JSON Schema. A schema failure is an Integrity failure. |
+| Integrity | (Since v0.8.0 this row includes the schema checks; v0.7.1 reports them as a separate Standards row.) Every line is a canonical unsigned DSSE envelope of an in-toto statement; one provenance, one CycloneDX, at most one VSA, whose `inputAttestations` bind exactly the other lines by SHA-256. Every `evidence/sha256/<hex>` blob present matches its name (evidence is optional). Then every statement is well-formed against its standard: in-toto Statement v1 (upstream protobuf bindings), SLSA Provenance v1, in-toto Test Result v0.1, SLSA VSA v1, and CycloneDX 1.5 against the pinned JSON Schema. A schema failure is an Integrity failure. |
 | Factory | Build type `.../build/factory/v2`, the factory definition digest and stages; with the definition in `evidence/`, its stages, checks and outputs agree; capability bindings agree with the CycloneDX inventory. With `factories.allow`, the digest must be on the list. |
 | Checks | One PASSED Test Result per declared check of the final candidate, whose configuration names the check, command, stage and definition. |
 | Dependencies | Dependency trust, delegated to APM (see below). Named Ingredients on v0.7.1. |
@@ -432,7 +432,7 @@ keeps the agent away from both:
 ```yaml
 jobs:
   factory:
-    uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1
+    uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.8.0
     with:
       factory: path/to/factory
       checks-requirements: checks/requirements.txt   # optional, inside the factory
@@ -516,7 +516,7 @@ the target. Each target's gate pins the platform as the signer:
 ```yaml
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: a70c1939dddc6f5d7888b76fd5bb8bab3e69e886   # or the tag object SHA
+      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: `git rev-parse v0.8.0^{commit}` (or the tag object)
       repo: acme/factory-platform
 ```
 

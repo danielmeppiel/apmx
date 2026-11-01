@@ -14,7 +14,7 @@ Reruns a factory's checks, from your checkout, on the outputs another run
 recorded, and writes a new receipt: the **receipt of record**. No agent runs.
 
 <details>
-<summary>Full <code>apmx check --help</code> (v0.7.1, identical on main)</summary>
+<summary>Full <code>apmx check --help</code> (v0.7.1, identical in v0.8.0)</summary>
 
 ```text
 Usage: apmx check [OPTIONS] PRODUCER_RECEIPT [FACTORY]
@@ -94,7 +94,7 @@ producer bundle's digest is recorded as a `producer-receipt` input.
 
 A real re-check of a CI producer receipt:
 
-```text title="apmx check (v0.7.1; identical on main apart from ids and times)"
+```text title="apmx check (v0.7.1; identical in v0.8.0 apart from ids and times)"
 $ apmx check ../art/apmx-producer-receipt --from danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1
 [i] Replaying 1 recorded output file from ../art/apmx-producer-receipt (definition sha256:c011c35b5790..); no agent runs here.
   [>] Installing packages with APM 0.33.0

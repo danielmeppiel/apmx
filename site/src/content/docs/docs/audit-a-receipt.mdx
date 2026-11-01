@@ -19,6 +19,27 @@ receipt under `./.apm/` and, when its sibling `outputs/` is present,
 re-hashes it against the receipt.
 
 <Tabs syncKey="apmx-release">
+<TabItem label="v0.8.0">
+
+```text title="apmx audit (v0.8.0)"
+Receipt   .apm/chains/20261022T180938Z-c5a4aaff9823/receipt.intoto.jsonl   (newest COMPLETE run)   1 contract   unsigned
+
+[i] Policy        none found
+                  no apm-policy.yml in checkws-main and no git origin for org policy
+[+] Integrity     3 statements intact and well-formed; line digests computed; evidence 5/5 blobs verified
+[+] Factory       definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Dependencies  1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[i] Revocation    no policy: nothing revoked to check
+[+] Outputs       1/1 delivered files match receipt subjects (re-hashed)
+                  1 file bound: handoff.json
+[!] Identity      unsigned: proves content binding, not who ran it
+
+[+] VALID   (content-bound; not authenticated)
+```
+
+</TabItem>
 <TabItem label="v0.7.1">
 
 ```text title="apmx audit (v0.7.1)"
@@ -31,27 +52,6 @@ Receipt   .apm/chains/20261022T180938Z-c5a4aaff9823/receipt.intoto.jsonl   (newe
 [+] Factory       definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
 [+] Checks        1/1 passed (in-toto test-result)
 [+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
-                  installed bytes match CycloneDX inventory and recorded hashes
-[i] Revocation    no policy: nothing revoked to check
-[+] Outputs       1/1 delivered files match receipt subjects (re-hashed)
-                  1 file bound: handoff.json
-[!] Identity      unsigned: proves content binding, not who ran it
-
-[+] VALID   (content-bound; not authenticated)
-```
-
-</TabItem>
-<TabItem label="Next release">
-
-```text title="apmx audit (main, unreleased)"
-Receipt   .apm/chains/20261022T180938Z-c5a4aaff9823/receipt.intoto.jsonl   (newest COMPLETE run)   1 contract   unsigned
-
-[i] Policy        none found
-                  no apm-policy.yml in checkws-main and no git origin for org policy
-[+] Integrity     3 statements intact and well-formed; line digests computed; evidence 5/5 blobs verified
-[+] Factory       definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
-[+] Checks        1/1 passed (in-toto test-result)
-[+] Dependencies  1 APM dependency   apm audit --ci: clean (content, lock, drift)
                   installed bytes match CycloneDX inventory and recorded hashes
 [i] Revocation    no policy: nothing revoked to check
 [+] Outputs       1/1 delivered files match receipt subjects (re-hashed)
@@ -82,6 +82,27 @@ A real receipt of record from the `apmx-demo-shop` CI run, audited against
 the shop's policy:
 
 <Tabs syncKey="apmx-release">
+<TabItem label="v0.8.0">
+
+```text title="apmx audit apmx-receipt --policy shop-policy.yml (v0.8.0)"
+Receipt   apmx-receipt   1 contract   signed
+
+[+] Policy        shop-policy.yml (--policy)   factories enforcement block
+[+] Integrity     3 statements intact and well-formed; line digests computed; evidence 5/5 blobs verified
+[+] Factory       definition sha256:c011c35b5790.. on factories.allow (danielmeppiel/apmx/tests/fixtures/run-workflow-package)
+                  definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
+[+] Checks        1/1 passed (in-toto test-result)
+[+] Dependencies  1 APM dependency   apm audit --ci: clean (content, lock, drift)
+                  installed bytes match CycloneDX inventory and recorded hashes
+[+] Revocation    0 of 0 capabilities revoked; factories.revoked is empty
+[+] Outputs       1 file bound: handoff.json
+[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.7.1 at a70c1939dddc (tag object 917ffb4e5406)
+                  run https://github.com/danielmeppiel/apmx-demo-shop/actions/runs/39740103826/attempts/1
+
+[+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
+```
+
+</TabItem>
 <TabItem label="v0.7.1">
 
 ```text title="apmx audit apmx-receipt --policy shop-policy.yml (v0.7.1)"
@@ -94,27 +115,6 @@ Receipt   apmx-receipt   1 contract   signed
                   definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
 [+] Checks        1/1 passed (in-toto test-result)
 [+] Ingredients   1 APM dependency   apm audit --ci: clean (content, lock, drift)
-                  installed bytes match CycloneDX inventory and recorded hashes
-[+] Revocation    0 of 0 capabilities revoked; factories.revoked is empty
-[+] Outputs       1 file bound: handoff.json
-[+] Identity      signed by danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.7.1 at a70c1939dddc (tag object 917ffb4e5406)
-                  run https://github.com/danielmeppiel/apmx-demo-shop/actions/runs/39740103826/attempts/1
-
-[+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
-```
-
-</TabItem>
-<TabItem label="Next release">
-
-```text title="apmx audit apmx-receipt --policy shop-policy.yml (main, unreleased)"
-Receipt   apmx-receipt   1 contract   signed
-
-[+] Policy        shop-policy.yml (--policy)   factories enforcement block
-[+] Integrity     3 statements intact and well-formed; line digests computed; evidence 5/5 blobs verified
-[+] Factory       definition sha256:c011c35b5790.. on factories.allow (danielmeppiel/apmx/tests/fixtures/run-workflow-package)
-                  definition sha256:c011c35b5790..  danielmeppiel/apmx/tests/fixtures/run-workflow-package#v0.7.1  1 contract, 1 check
-[+] Checks        1/1 passed (in-toto test-result)
-[+] Dependencies  1 APM dependency   apm audit --ci: clean (content, lock, drift)
                   installed bytes match CycloneDX inventory and recorded hashes
 [+] Revocation    0 of 0 capabilities revoked; factories.revoked is empty
 [+] Outputs       1 file bound: handoff.json
@@ -146,7 +146,7 @@ Every file in `DIR` is re-hashed against the receipt's subjects. A match
 prints `[+] Outputs  1/1 delivered files match receipt subjects (re-hashed)`.
 A changed file fails:
 
-```text title="A delivered file edited after the run (v0.7.1 and main)"
+```text title="A delivered file edited after the run (v0.7.1 and v0.8.0)"
 [x] Outputs       handoff.json differs from its receipt subject (SHA-256)
 ```
 
@@ -162,7 +162,7 @@ as not checked: dependencies (`[!] ... not audited (offline)`), signatures
 (`[!] Policy  org policy not checked (offline)`). Only a local `--policy` file
 is read; anything else is a usage error:
 
-```text title="apmx audit receipt.intoto.jsonl --offline --policy org (main, trimmed)"
+```text title="apmx audit receipt.intoto.jsonl --offline --policy org (v0.8.0, trimmed)"
 Error: --offline can only read a local --policy file; org, owner/repo and URLs need the network.
 ```
 
@@ -179,15 +179,15 @@ apmx audit --explain outputs     # one topic
 `--explain` prints what the receipt records instead of auditing it: no
 policy, no network, no APM. Topics: `factory`, `stages`, `checks`,
 `dependencies`, `outputs`, `all`.
-<Badge text="Since the next release" variant="note" size="small" /> In
+<Badge text="Since v0.8.0" variant="note" size="small" /> In
 v0.7.1 the topic is `ingredients`, not `dependencies`; each version rejects
 the other spelling as a usage error.
 
 <Tabs syncKey="apmx-release">
-<TabItem label="v0.7.1">
+<TabItem label="v0.8.0">
 
-```text title="apmx audit receipt.intoto.jsonl --explain ingredients (v0.7.1)"
-Ingredients
+```text title="apmx audit receipt.intoto.jsonl --explain dependencies (v0.8.0)"
+Dependencies
   capability   python-testing-patterns  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9  body sha256:a1020718f316..
   component    wshobson/agents  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9
   component    danielmeppiel/apmx-demo-factory  pkg:generic/apmx-demo-factory@e8e9c5a7b1f11c668860a22d98022591d77cea97
@@ -197,10 +197,10 @@ Ingredients
 ```
 
 </TabItem>
-<TabItem label="Next release">
+<TabItem label="v0.7.1">
 
-```text title="apmx audit receipt.intoto.jsonl --explain dependencies (main, unreleased)"
-Dependencies
+```text title="apmx audit receipt.intoto.jsonl --explain ingredients (v0.7.1)"
+Ingredients
   capability   python-testing-patterns  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9  body sha256:a1020718f316..
   component    wshobson/agents  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9
   component    danielmeppiel/apmx-demo-factory  pkg:generic/apmx-demo-factory@e8e9c5a7b1f11c668860a22d98022591d77cea97
@@ -238,7 +238,7 @@ apmx audit --format sarif
 JSON has the keys `schema`, `receipt`, `selection`, `result`, `exitCode`,
 `reason`, `assurance`, `signed`, `rows` and `facts`. The `schema` is
 `apmx-audit/2`.
-<Badge text="Since the next release" variant="note" size="small" /> v0.7.1
+<Badge text="Since v0.8.0" variant="note" size="small" /> v0.7.1
 prints `apmx-audit/1`.
 
 SARIF is version 2.1.0, with one result per failed or warning row. Every key

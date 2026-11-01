@@ -73,7 +73,7 @@ APMX's reusable `run.yml` runs each job on a fresh runner:
 | Weaken a check or a contract | Only with `factories.allow` | The definition digest changes, so it is not on the list. Without `allow`, any definition passes the Factory row. |
 | Edit the gate or the policy in the pull request | Yes | The gate runs from the base branch and reads the policy from the PR base commit. |
 | Replay an old delivery onto a moved main | Yes, for the files the PR touches | Each touched file must match its recorded before-image at the PR base, and the recorded base commit must be in the PR base's history. Unrelated changes on main do not block. |
-| Move the `v0.7.1` tag to other code | Yes, with `workflow_sha` | A signer pinned only by ref trusts whatever the ref points to. |
+| Move the `v0.8.0` tag to other code | Yes, with `workflow_sha` | A signer pinned only by ref trusts whatever the ref points to. |
 | A prompt-injected agent writes malicious code | Only as good as your checks | It cannot sign or skip checks, but code that passes weak checks still passes. |
 | Compromise GitHub or Sigstore | No | They are the trust root. |
 

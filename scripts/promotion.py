@@ -291,6 +291,24 @@ def release_notes(version: str, commit: str) -> str:
             f"See the [v0.7.1 changelog](https://github.com/{REPOSITORY}/blob/v{version}/"
             "CHANGELOG.md).\n\n"
         )
+    if version == "0.8.0":
+        patch_notes = (
+            "## Changes in v0.8.0: Audit rows name what they check\n\n"
+            "- **Breaking:** the `apmx audit` row `Ingredients` is now `Dependencies` in "
+            "terminal output, JSON and SARIF (`apmx-audit/dependencies`) and `--explain "
+            "dependencies`; `--explain ingredients` is gone, with no alias.\n"
+            "- **Breaking:** the separate `Standards` row is removed. The same schema "
+            "validation (in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, "
+            "CycloneDX 1.5, SLSA VSA v1) runs inside `Integrity`, so a schema failure is an "
+            "`Integrity` failure with the same message. Rows are now Policy, Integrity, "
+            "Factory, Checks, Dependencies, Revocation, Outputs, Identity.\n"
+            "- The audit JSON schema is `apmx-audit/2`; update anything that parses rows by "
+            "name.\n"
+            "- Reference the actions and `run.yml` at `@v0.8.0` or its commit SHA, and re-pin "
+            "`factories.signers[].workflow_sha` to `git rev-parse v0.8.0^{commit}`.\n\n"
+            f"See the [v0.8.0 changelog](https://github.com/{REPOSITORY}/blob/v{version}/"
+            "CHANGELOG.md).\n\n"
+        )
     return (
         f"Standalone apmx {version}; candidate commit `{commit}`.\n\n{patch_notes}"
         "## What's new since v0.2.0\n\n"

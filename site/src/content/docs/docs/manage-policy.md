@@ -46,7 +46,7 @@ The name before `@sha256:` is a label shown in the Factory row; only the
 digest is compared. An unpinned pattern such as `danielmeppiel/*` allows
 nothing, and the row says so:
 
-```text title="Factory row, allow: [danielmeppiel/*] (v0.7.1 and main, trimmed to the row)"
+```text title="Factory row, allow: [danielmeppiel/*] (v0.7.1 and v0.8.0, trimmed to the row)"
 [x] Factory       definition sha256:0bec0549b9af.. is not on factories.allow
                   policy: policies/allow-unpinned.yml (--policy); 0 pinned definition(s)
                   1 unpinned package pattern(s) allow nothing yet: receipts do not record their factory package; pin <package>@sha256:<definition digest>
@@ -69,7 +69,7 @@ factories:
     - acme/other-factory@sha256:1111111111111111111111111111111111111111111111111111111111111111
 ```
 
-```text title="Factory row and verdict with enforcement: warn (v0.7.1 and main, trimmed)"
+```text title="Factory row and verdict with enforcement: warn (v0.7.1 and v0.8.0, trimmed)"
 [!] Factory       definition sha256:0bec0549b9af.. is not on factories.allow
                   policy: policies/allow-miss-warn.yml (--policy); 1 pinned definition(s)
                   definition sha256:0bec0549b9af..  danielmeppiel/apmx-demo-factory#v1.0.0  5 contracts, 9 checks
@@ -98,7 +98,7 @@ The signer entry pins APMX's `run.yml` by commit:
 factories:
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: a70c1939dddc6f5d7888b76fd5bb8bab3e69e886   # git rev-parse v0.7.1^{commit}
+      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to `git rev-parse v0.8.0^{commit}`
       repo: acme/factories   # where the factory ran: its attestations are stored there
 ```
 
@@ -127,7 +127,7 @@ Find the `purl` with `apmx audit --explain dependencies`, on the
 `capability` line. `bodySha256` is the SHA-256 of the skill's `SKILL.md`; the
 explain line shows its first 12 hex digits.
 
-```text title="apmx audit receipt.intoto.jsonl --explain dependencies (main, unreleased)"
+```text title="apmx audit receipt.intoto.jsonl --explain dependencies (v0.8.0)"
 Dependencies
   capability   python-testing-patterns  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9  body sha256:a1020718f316..
   component    wshobson/agents  pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9
@@ -137,7 +137,7 @@ Dependencies
   retained     imports-apm.yml  sha256:b37d01c6ae86..
 ```
 
-:::note[Since the next release]
+:::note[Since v0.8.0]
 The topic is `dependencies`. In v0.7.1 it is `apmx audit --explain ingredients`
 and the section is headed `Ingredients`; each version rejects the other
 spelling.
@@ -150,7 +150,7 @@ factories:
       bodySha256: a1020718f31629c2a5b20731cad1804dbb81b18800495c5cebdf16e6cac9c175
 ```
 
-```text title="Revocation row with that policy (v0.7.1 and main, trimmed to the row)"
+```text title="Revocation row with that policy (v0.7.1 and v0.8.0, trimmed to the row)"
 [x] Revocation    capability python-testing-patterns is revoked (factories.revoked)
                   purl=pkg:generic/agents@46891e7e60da0e52baf1050b7b6391b64e84c6d9  bodySha256=a1020718f31629c2a5b20731cad1804dbb81b18800495c5cebdf16e6cac9c175
 ```
@@ -187,7 +187,7 @@ apmx audit path/to/receipt.intoto.jsonl --policy ./apm-policy.yml
 A mistake fails closed. A misspelled key makes the whole policy unloadable,
 and the audit is INCOMPLETE (exit 2), never a pass:
 
-```text title="Policy row with factories.require_sigend (v0.7.1 and main, trimmed to the row)"
+```text title="Policy row with factories.require_sigend (v0.7.1 and v0.8.0, trimmed to the row)"
 [!] Policy        policies/typo.yml (--policy) could not be loaded: policies/typo.yml (--policy): unknown key factories.require_sigend (expected allow, require_signed, signers, revoked, enforcement)
                   A policy that cannot be loaded is never treated as a pass.
 ```

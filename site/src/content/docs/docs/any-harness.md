@@ -19,7 +19,7 @@ apmx ./my-factory --on opencode    # OpenCode, exactly version 1.2.24
 OpenCode must be exactly 1.2.24; other versions refuse to run. Any other
 harness name is refused with UNPROVEN (exit 21):
 
-```text title="Refused harness names (main, trimmed: two of several runs, exit lines omitted; v0.7.1 prints the same for codex)"
+```text title="Refused harness names (v0.8.0, trimmed: two of several runs, exit lines omitted; v0.7.1 prints the same for codex)"
 $ apmx --from ../factory --plan --on codex
 [!] apmx: UNPROVEN
   Runtime codex does not support native contracts.
@@ -62,7 +62,7 @@ Per contract, the receipt keeps `harness`, `harnessVersion`,
 `requestedModel` and `observedModels`. Print them with
 `apmx audit --explain stages`:
 
-```text title="apmx audit --explain stages (v0.7.1, same on main): a five-contract Copilot run"
+```text title="apmx audit --explain stages (v0.7.1, same in v0.8.0): a five-contract Copilot run"
 Stages
   planning         copilot  requested default  observed gpt-6.1-sol  attempts 1
   specification    copilot  requested default  observed gpt-6.1-sol  attempts 1
@@ -74,7 +74,7 @@ Stages
 In a receipt of record from CI, these are what the agent's job **reported**;
 the job that reruns the checks does not observe the model:
 
-```text title="apmx audit --explain stages (v0.7.1, same on main): a CI receipt of record"
+```text title="apmx audit --explain stages (v0.7.1, same in v0.8.0): a CI receipt of record"
 Stages
   handoff          copilot 1.0  requested default  observed fixture-model  attempts 1
                    harness and models reported by the producer; checks rerun by apmx check (replay)
