@@ -124,12 +124,12 @@ input when given. It extracts to the tool cache and adds APMX to `PATH`; it
 does not use pip.
 
 Targets: `linux-x86_64`, `linux-arm64`, `macos-x86_64`, `macos-arm64`,
-`windows-x86_64`. Published v0.7.1 digests:
+`windows-x86_64`. Published v0.8.0 digests:
 
 | Archive | SHA-256 |
 | --- | --- |
-| `apmx-0.7.1-linux-x86_64.tar.gz` | `222fd72b969191493c5c437ffc1f9542e93ca98bd04a806ede7e8138680129e9` |
-| `apmx-0.7.1-macos-arm64.tar.gz` | `75dd467db41c37b3e122a402b5717c1972718671ed8d09fd841cd051828e2297` |
+| `apmx-0.8.0-linux-x86_64.tar.gz` | `524027362fe88728836ec6476d2c828d26b750d2067809c5741f27d950b93778` |
+| `apmx-0.8.0-macos-arm64.tar.gz` | `c474c492dfaeeb40a58a571b91fa97af64d5ae519e9d8d9bd23e337098dfe658` |
 
 ## attest action
 
