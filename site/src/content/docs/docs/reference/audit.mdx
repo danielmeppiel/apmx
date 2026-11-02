@@ -22,6 +22,66 @@ check and a final verdict: VALID (exit 0), INVALID (exit 1) or INCOMPLETE
 <summary>Full <code>apmx audit --help</code></summary>
 
 <Tabs syncKey="apmx-release">
+<TabItem label="v0.8.0">
+
+```text title="apmx audit --help (v0.8.0)"
+Usage: apmx audit [OPTIONS] [RECEIPT]
+
+  Verify a factory delivery: integrity (intact and well-formed against the
+  pinned standards schemas), factory definition, checks, dependencies,
+  revocation, outputs and identity.
+
+  With no arguments it picks what to audit for you. Locally: the newest
+  COMPLETE run's receipt.intoto.jsonl under ./.apm/, with its outputs/ re-
+  hashed. In a GitHub pull request, which carries code only: the PR's changed
+  files (merge-base..head) are looked up by SHA-256 in the attestation store
+  of the policy's factories.signers; every changed file must be a subject of
+  one PASSED verification summary from an allowed signer, which binds the
+  receipt statements by digest; files the PR touches must match the recorded
+  before-images at the PR base. A PR none of whose files carries a factory
+  attestation fails as not a factory delivery: the check only passes factory
+  deliveries. RECEIPT is the offline route: a receipt.intoto.jsonl (or its run
+  directory), with --outputs DIR.
+
+  The policy is discovered like `apm audit`: --policy, else the repository's
+  apm-policy.yml (the PR base copy in a PR), else the org policy from the git
+  remote. Its `factories` section (apmx's own) adds the Factory, Revocation
+  and Identity rules; APM's keys are enforced by APM. No policy is reported,
+  never assumed.
+
+  Dependencies are audited by the bundled pinned APM: the receipt's inline
+  apm.yml and apm.lock.yaml are reinstalled with `apm install --frozen` in a
+  temporary project and checked with `apm audit --ci`.
+
+  --explain [factory|stages|checks|dependencies|outputs] prints what a receipt
+  records (factory includes the standards it conforms to); --export abom
+  writes its CycloneDX 1.5 inventory as a standalone file.
+
+  Exit codes: 0 valid; 1 invalid or policy failure; 2 usage error, missing or
+  ambiguous receipt, unloadable policy, or dependencies or signatures that
+  could not be checked (network/auth); use --offline to skip them.
+
+Options:
+  --outputs DIR                   Re-hash the delivered files in DIR against
+                                  the receipt (offline route).
+  --policy SOURCE                 Override discovery: org, owner/repo, an
+                                  https:// URL or an apm-policy.yml file.
+  --offline                       Do not launch APM or use the network:
+                                  dependencies, signatures and org policy are
+                                  reported as not checked. Only a local policy
+                                  file is read.
+  --format [text|json|sarif]      Output format; json and sarif are for CI.
+                                  [default: text]
+  --explain [factory|stages|checks|dependencies|outputs|all]
+                                  Print what the receipt records (default: all
+                                  topics) instead of auditing it.
+  --export [abom]                 Write the receipt's CycloneDX 1.5 inventory
+                                  (stdout, or -o FILE).
+  -o, --output FILE               With --export: the file to write.
+  -h, --help                      Show this message and exit.
+```
+
+</TabItem>
 <TabItem label="v0.7.1">
 
 ```text title="apmx audit --help (v0.7.1)"
@@ -82,66 +142,6 @@ Options:
 ```
 
 </TabItem>
-<TabItem label="Next release">
-
-```text title="apmx audit --help (main, unreleased)"
-Usage: apmx audit [OPTIONS] [RECEIPT]
-
-  Verify a factory delivery: integrity (intact and well-formed against the
-  pinned standards schemas), factory definition, checks, dependencies,
-  revocation, outputs and identity.
-
-  With no arguments it picks what to audit for you. Locally: the newest
-  COMPLETE run's receipt.intoto.jsonl under ./.apm/, with its outputs/ re-
-  hashed. In a GitHub pull request, which carries code only: the PR's changed
-  files (merge-base..head) are looked up by SHA-256 in the attestation store
-  of the policy's factories.signers; every changed file must be a subject of
-  one PASSED verification summary from an allowed signer, which binds the
-  receipt statements by digest; files the PR touches must match the recorded
-  before-images at the PR base. A PR none of whose files carries a factory
-  attestation fails as not a factory delivery: the check only passes factory
-  deliveries. RECEIPT is the offline route: a receipt.intoto.jsonl (or its run
-  directory), with --outputs DIR.
-
-  The policy is discovered like `apm audit`: --policy, else the repository's
-  apm-policy.yml (the PR base copy in a PR), else the org policy from the git
-  remote. Its `factories` section (apmx's own) adds the Factory, Revocation
-  and Identity rules; APM's keys are enforced by APM. No policy is reported,
-  never assumed.
-
-  Dependencies are audited by the bundled pinned APM: the receipt's inline
-  apm.yml and apm.lock.yaml are reinstalled with `apm install --frozen` in a
-  temporary project and checked with `apm audit --ci`.
-
-  --explain [factory|stages|checks|dependencies|outputs] prints what a receipt
-  records (factory includes the standards it conforms to); --export abom
-  writes its CycloneDX 1.5 inventory as a standalone file.
-
-  Exit codes: 0 valid; 1 invalid or policy failure; 2 usage error, missing or
-  ambiguous receipt, unloadable policy, or dependencies or signatures that
-  could not be checked (network/auth); use --offline to skip them.
-
-Options:
-  --outputs DIR                   Re-hash the delivered files in DIR against
-                                  the receipt (offline route).
-  --policy SOURCE                 Override discovery: org, owner/repo, an
-                                  https:// URL or an apm-policy.yml file.
-  --offline                       Do not launch APM or use the network:
-                                  dependencies, signatures and org policy are
-                                  reported as not checked. Only a local policy
-                                  file is read.
-  --format [text|json|sarif]      Output format; json and sarif are for CI.
-                                  [default: text]
-  --explain [factory|stages|checks|dependencies|outputs|all]
-                                  Print what the receipt records (default: all
-                                  topics) instead of auditing it.
-  --export [abom]                 Write the receipt's CycloneDX 1.5 inventory
-                                  (stdout, or -o FILE).
-  -o, --output FILE               With --export: the file to write.
-  -h, --help                      Show this message and exit.
-```
-
-</TabItem>
 </Tabs>
 
 </details>
@@ -160,7 +160,7 @@ Options:
 | `-o`, `--output FILE` | Only with `--export`; otherwise `-o/--output is only used with --export.` (exit 2). Never overwrites: `FILE exists; refusing to overwrite it.` (exit 2). |
 | `-h`, `--help` | Show help. |
 
-<Badge text="Since the next release" variant="note" size="small" /> The
+<Badge text="Since v0.8.0" variant="note" size="small" /> The
 `--explain` topic is `dependencies`; v0.7.1 accepts only `ingredients`, and
 each version rejects the other spelling as a usage error, with no alias.
 
@@ -182,7 +182,7 @@ It says `signed` only when the Identity row authenticated a signer.
 
 Missing receipts are usage errors (exit 2):
 
-```text title="Missing receipt messages (v0.7.1 and main)"
+```text title="Missing receipt messages (v0.7.1 and v0.8.0)"
 Error: No receipt under ./.apm/: run a factory first (every COMPLETE run writes receipt.intoto.jsonl), or pass RECEIPT.
 Error: No receipt at missing.jsonl: expected receipt.intoto.jsonl (for example .apm/chains/<id>/receipt.intoto.jsonl).
 ```
@@ -209,7 +209,7 @@ the PR gate, Identity is evaluated first.
 
 Notes print as indented lines under a row.
 
-<Badge text="Since the next release" variant="note" size="small" /> Eight
+<Badge text="Since v0.8.0" variant="note" size="small" /> Eight
 rows. v0.7.1 prints nine: Policy, Integrity, Standards, Factory, Checks,
 Ingredients, Revocation, Outputs, Identity.
 
@@ -224,7 +224,7 @@ Ingredients, Revocation, Outputs, Identity.
 
 ### Integrity
 
-<Badge text="Since the next release" variant="note" size="small" /> Includes
+<Badge text="Since v0.8.0" variant="note" size="small" /> Includes
 the standards schema checks; v0.7.1 shows them as a separate Standards row
 and words the detail `N statements; line digests computed`.
 
@@ -241,7 +241,7 @@ and words the detail `N statements; line digests computed`.
 | --- | --- |
 | Verifies | The schema checks listed under Integrity, as their own row. |
 | `[+]` | `in-toto Statement v1, SLSA Provenance v1, in-toto Test Result, CycloneDX 1.5: schema-valid` (plus `, SLSA VSA v1` when there is one). |
-| `[x]` | The schema message. In the next release the same failure fails Integrity. |
+| `[x]` | The schema message. Since v0.8.0 the same failure fails Integrity. |
 
 ### Factory
 
@@ -263,7 +263,7 @@ and words the detail `N statements; line digests computed`.
 
 ### Dependencies
 
-<Badge text="Since the next release" variant="note" size="small" /> v0.7.1:
+<Badge text="Since v0.8.0" variant="note" size="small" /> v0.7.1:
 Ingredients. Not to be confused with a contract's Dependencies
 (`imports`): this row re-checks the APM dependencies a receipt records.
 
@@ -309,7 +309,7 @@ INCOMPLETE (exit 2). Otherwise it is VALID (exit 0). The reason printed is the
 first failure, or the first thing not checked. Warnings do not change a VALID
 verdict.
 
-```text title="Final lines (main; v0.7.1 differs only in the INCOMPLETE hint)"
+```text title="Final lines (v0.8.0; v0.7.1 differs only in the INCOMPLETE hint)"
 [+] VALID   (content-bound; not authenticated)
 [+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
 [x] INVALID   Factory: definition sha256:0bec0549b9af.. is not on factories.allow
@@ -379,17 +379,16 @@ from local Git.
 A real rejected PR, the same delivery plus a hand edit:
 
 <Tabs syncKey="apmx-release">
-<TabItem label="v0.7.1">
+<TabItem label="v0.8.0">
 
-```text title="PR #12: apmx audit (v0.7.1)"
+```text title="PR #12: apmx audit (v0.8.0)"
 Receipt   attestations for PR #12   (looked up by file digest)   unsigned
 
 [+] Policy        apm-policy.yml (repository, PR base 4fed7ee21e1d)   factories enforcement block
 [i] Integrity     not evaluated (no signed delivery covers this PR)
-[i] Standards     not evaluated (no signed delivery covers this PR)
 [i] Factory       not evaluated (no signed delivery covers this PR)
 [i] Checks        not evaluated (no signed delivery covers this PR)
-[i] Ingredients   not evaluated (no signed delivery covers this PR)
+[i] Dependencies  not evaluated (no signed delivery covers this PR)
 [i] Revocation    not evaluated (no signed delivery covers this PR)
 [i] Outputs       not evaluated (no signed delivery covers this PR)
 [x] Identity      no PASSED verification summary from factories.signers covers every changed file (src/checkout.py is not a delivered file)
@@ -401,16 +400,17 @@ Receipt   attestations for PR #12   (looked up by file digest)   unsigned
 ```
 
 </TabItem>
-<TabItem label="Next release">
+<TabItem label="v0.7.1">
 
-```text title="PR #12: apmx audit (main, unreleased)"
+```text title="PR #12: apmx audit (v0.7.1)"
 Receipt   attestations for PR #12   (looked up by file digest)   unsigned
 
 [+] Policy        apm-policy.yml (repository, PR base 4fed7ee21e1d)   factories enforcement block
 [i] Integrity     not evaluated (no signed delivery covers this PR)
+[i] Standards     not evaluated (no signed delivery covers this PR)
 [i] Factory       not evaluated (no signed delivery covers this PR)
 [i] Checks        not evaluated (no signed delivery covers this PR)
-[i] Dependencies  not evaluated (no signed delivery covers this PR)
+[i] Ingredients   not evaluated (no signed delivery covers this PR)
 [i] Revocation    not evaluated (no signed delivery covers this PR)
 [i] Outputs       not evaluated (no signed delivery covers this PR)
 [x] Identity      no PASSED verification summary from factories.signers covers every changed file (src/checkout.py is not a delivered file)
@@ -470,7 +470,7 @@ The default, described above.
 
 | Key | Value |
 | --- | --- |
-| `schema` | `"apmx-audit/2"`. <Badge text="Since the next release" variant="note" size="small" /> v0.7.1: `"apmx-audit/1"`. |
+| `schema` | `"apmx-audit/2"`. <Badge text="Since v0.8.0" variant="note" size="small" /> v0.7.1: `"apmx-audit/1"`. |
 | `receipt` | the receipt as displayed (a path, or `attestations for PR #N`) |
 | `selection` | `"newest COMPLETE run"`, `"newest of N COMPLETE runs"`, `"looked up by file digest"`, or `null` |
 | `result` | `valid`, `invalid`, `incomplete` (or `error`, below) |
@@ -497,11 +497,11 @@ A missing receipt prints an error object on stdout and the `Error:` line on
 stderr, exit 2:
 
 <Tabs syncKey="apmx-release">
-<TabItem label="v0.7.1">
+<TabItem label="v0.8.0">
 
-```text title="apmx audit missing.jsonl --format json (v0.7.1)"
+```text title="apmx audit missing.jsonl --format json (v0.8.0)"
 {
-  "schema": "apmx-audit/1",
+  "schema": "apmx-audit/2",
   "receipt": "missing.jsonl",
   "result": "error",
   "exitCode": 2,
@@ -511,11 +511,11 @@ Error: No receipt at missing.jsonl: expected receipt.intoto.jsonl (for example .
 ```
 
 </TabItem>
-<TabItem label="Next release">
+<TabItem label="v0.7.1">
 
-```text title="apmx audit missing.jsonl --format json (main, unreleased)"
+```text title="apmx audit missing.jsonl --format json (v0.7.1)"
 {
-  "schema": "apmx-audit/2",
+  "schema": "apmx-audit/1",
   "receipt": "missing.jsonl",
   "result": "error",
   "exitCode": 2,
@@ -556,14 +556,14 @@ on stderr and exits 1.
 
 | Topic | Prints |
 | --- | --- |
-| `factory` | definition digest; the standards it conforms to (since the next release); package or `(local factory directory)`; commit; builder and versions; invocation id and times; base; each input; what the definition defines, or `(definition bytes not present: evidence/ was not shipped)`; rejected attempts |
+| `factory` | definition digest; the standards it conforms to (since v0.8.0); package or `(local factory directory)`; commit; builder and versions; invocation id and times; base; each input; what the definition defines, or `(definition bytes not present: evidence/ was not shipped)`; rejected attempts |
 | `stages` | per contract: harness and version, requested and observed models, attempts; for `apmx check` receipts, a line saying harness and models were reported by the producer. The budget is not printed here; it is in JSON `facts.stages[].budget`. |
 | `checks` | per check: `[RESULT] stage/check`, reported cases, the command, the log's evidence path |
 | `dependencies` | `capability` (skill, purl, body digest), `component`, `retained` files, or `no APM dependencies were installed or selected` |
 | `outputs` | `created`, `modified` or `deleted` path and digest |
 | `all` | all five (the default for a bare `--explain`) |
 
-<Badge text="Since the next release" variant="note" size="small" /> In
+<Badge text="Since v0.8.0" variant="note" size="small" /> In
 v0.7.1 the topic and section are `ingredients` and `Ingredients`.
 
 ## Export the inventory
@@ -628,8 +628,8 @@ could not be checked; it is never a pass.
 | `[x] Not a factory delivery: ...` | INVALID (PR) | A human pull request. | Merge it the normal way, for example a ruleset bypass. |
 | `[x] Outputs  built on a stale base: ...; rerun the factory` | INVALID (PR) | The base moved under the delivery. | Run the factory again on the new base. |
 | `[!] INCOMPLETE  Policy: <src> could not be loaded: ...` | INCOMPLETE | An unknown key, bad digest or regex, bad YAML, unreachable `extends`, a remote host other than github.com or https, or no bundled APM. | Fix the policy; it fails closed. |
-| `[!] INCOMPLETE  Dependencies: bundled APM unavailable: ...` (next release; v0.7.1: `Ingredients: ...`) | INCOMPLETE | A source install without APM. | Install the native release, set `APMX_APM_BACKEND`, or use `--offline`. |
-| `[!] Dependencies  ...: apm install --frozen could not reinstall them (...)` (next release; v0.7.1: `[!] Ingredients  ...`) | INCOMPLETE | Network, authentication or package access. | Fix access, or use `--offline` to audit everything else. |
+| `[!] INCOMPLETE  Dependencies: bundled APM unavailable: ...` (v0.8.0; v0.7.1: `Ingredients: ...`) | INCOMPLETE | A source install without APM. | Install the native release, set `APMX_APM_BACKEND`, or use `--offline`. |
+| `[!] Dependencies  ...: apm install --frozen could not reinstall them (...)` (v0.8.0; v0.7.1: `[!] Ingredients  ...`) | INCOMPLETE | Network, authentication or package access. | Fix access, or use `--offline` to audit everything else. |
 | `[!] INCOMPLETE  Identity: signature not checked (offline)` | INCOMPLETE | `--offline` with `require_signed`, or any PR gate. | Run online, with `GH_TOKEN` in Actions. |
 | `[!] INCOMPLETE  Identity: signature not checked: no delivered file to look it up by (--outputs)` | INCOMPLETE (with `require_signed`) | An explicit receipt with no `outputs/` beside it. | Pass `--outputs DIR`. |
 | `[!] Identity  a PR carries code only: ... the policy names no factories.signers` | INCOMPLETE (PR) | The base policy has no signers. | Add `factories.signers`. |
@@ -638,10 +638,10 @@ could not be checked; it is never a pass.
 
 ## Changes since v0.7.1
 
-The next release changes only `apmx audit`. This section goes away when it
-ships.
+v0.8.0 changes only `apmx audit`. If you parse audit output or call
+`--explain ingredients`, update it when you upgrade from v0.7.1.
 
-| Change | v0.7.1 | Next release |
+| Change | v0.7.1 | v0.8.0 |
 | --- | --- | --- |
 | Rows | Policy, Integrity, Standards, Factory, Checks, Ingredients, Revocation, Outputs, Identity (9) | Policy, Integrity, Factory, Checks, Dependencies, Revocation, Outputs, Identity (8) |
 | Integrity detail | `11 statements; line digests computed; ...` | `11 statements intact and well-formed; line digests computed; ...` |
@@ -652,5 +652,3 @@ ships.
 | `--explain factory` | no standards line | adds `standards    <list>: schema-valid` |
 | `apmx audit --help` | names standards and ingredients | names dependencies; integrity covers the standards schemas |
 | INCOMPLETE hint | `--offline skips ingredients explicitly.` | `--offline skips dependencies explicitly.` |
-
-Both report `apmx, version 0.7.1`; the next release is not published yet.

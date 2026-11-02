@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## 0.8.0 - 2026-11-01
+
+Audit rows name what they check: Dependencies, with the standards checks
+inside Integrity.
+
+- **Breaking: `apmx audit` rows.** `Ingredients` is now `Dependencies`
+  (`--explain dependencies`, no alias) and the `Standards` row is folded into
+  `Integrity`; the JSON schema is `apmx-audit/2` (#47). Update anything that
+  parses rows by name.
+
 ### Changed
 
 - **`apmx audit` rows (breaking).** The `Ingredients` row is now

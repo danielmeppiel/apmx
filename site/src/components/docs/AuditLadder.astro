@@ -1,6 +1,6 @@
 ---
 // The apmx audit rows as rungs, the outcomes each row can show,
-// and how the rows become one verdict. Row names follow the next release;
+// and how the rows become one verdict. Row names follow v0.8.0;
 // the two rungs that differ in v0.7.1 say so.
 const all = [
   { sym: '[+]', cls: 'pass', word: 'pass' },
@@ -10,7 +10,7 @@ const all = [
 ];
 const rows = [
   { name: 'Policy', q: 'Which policy applies?', can: ['[+]', '[!]', '[i]'] },
-  { name: 'Integrity', q: 'Is the bundle intact and well-formed?', can: ['[+]', '[x]', '[i]'], tag: 'includes schema checks since the next release (v0.7.1: separate Standards row)' },
+  { name: 'Integrity', q: 'Is the bundle intact and well-formed?', can: ['[+]', '[x]', '[i]'], tag: 'includes schema checks since v0.8.0 (v0.7.1: separate Standards row)' },
   { name: 'Factory', q: 'Is this the factory, and is it on factories.allow?', can: ['[+]', '[x]', '[!]', '[i]'] },
   { name: 'Checks', q: 'Did every declared check pass?', can: ['[+]', '[x]', '[i]'] },
   { name: 'Dependencies', q: 'Do the skills and packages reinstall to the same bytes?', can: ['[+]', '[x]', '[!]', '[i]'], tag: 'v0.7.1: Ingredients' },
@@ -57,7 +57,7 @@ const words = (can: string[]) => all.filter((s) => can.includes(s.sym)).map((s) 
     </li>
   </ol>
   <p class="note"><code>[!]</code> is either a warning (the verdict stays VALID) or a check that could not run (INCOMPLETE). The final line tells you which. <code>[i]</code> also marks a row not evaluated after an earlier failure.</p>
-  <figcaption>Audit rows, one verdict. Next release: eight; v0.7.1: nine. Any failure wins over anything incomplete.</figcaption>
+  <figcaption>Audit rows, one verdict. v0.8.0: eight; v0.7.1: nine. Any failure wins over anything incomplete.</figcaption>
 </figure>
 
 <style>

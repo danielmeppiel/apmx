@@ -107,6 +107,6 @@ in the job log.
 
 ## Why do I see Ingredients and Standards rows?
 
-Those are the v0.7.1 row names. The next release renames Ingredients to
-Dependencies and folds Standards into Integrity. See
+Those are the v0.7.1 row names. Since v0.8.0, Ingredients is named
+Dependencies and Standards is folded into Integrity. See
 [changes since v0.7.1](/apmx/docs/reference/audit/#changes-since-v071).

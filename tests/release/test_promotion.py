@@ -86,6 +86,17 @@ class PromotionTests(unittest.TestCase):
         self.assertIn("blob/v0.7.1/CHANGELOG.md", notes)
         self.assertNotIn("## Changes in v0.7.0", notes)
 
+    def test_v080_notes_headline_the_audit_row_rename(self):
+        notes = promotion.release_notes("0.8.0", "a" * 40)
+        self.assertIn("## Changes in v0.8.0: Audit rows name what they check", notes)
+        self.assertIn("**Breaking:**", notes)
+        self.assertIn("`Dependencies`", notes)
+        self.assertIn("`Integrity`", notes)
+        self.assertIn("apmx-audit/2", notes)
+        self.assertIn("@v0.8.0", notes)
+        self.assertIn("blob/v0.8.0/CHANGELOG.md", notes)
+        self.assertNotIn("## Changes in v0.7.1", notes)
+
     def test_v042_notes_preserve_failed_v041_candidate_truth(self):
         notes = promotion.release_notes("0.4.2", "a" * 40)
         self.assertIn("No GitHub release or native assets were published for v0.4.1", notes)

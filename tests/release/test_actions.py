@@ -356,8 +356,11 @@ def test_published_action_refs_and_defaults_name_this_release() -> None:
     assert any(path.parts[-4:-1] == ("content", "docs", "docs") for path in documents)
     refs = set()
     for path in documents:
+        # Recorded audit output ("signed by <workflow>@<ref>") names the signer of a past
+        # delivery, not a ref to use, so it may name an earlier release.
         refs.update(
             re.findall(
+                r"(?<!signed by )"
                 r"danielmeppiel/apmx/\.github/(?:actions/\w+|workflows/run\.yml)@([\w./-]*\w)",
                 path.read_text(),
             )

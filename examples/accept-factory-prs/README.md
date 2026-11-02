@@ -6,7 +6,7 @@ section and one workflow step.
 
 1. **Produce in CI.** The factory repository (here `acme/factories`) calls
    [`run.yml`](../../.github/workflows/run.yml)
-   (`danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1`): the agent runs in one job,
+   (`danielmeppiel/apmx/.github/workflows/run.yml@v0.8.0`): the agent runs in one job,
    `apmx check` reruns the checks in a fresh job without the agent, and a
    trusted signer, the attest job, signs a SLSA Verification Summary over the
    delivered files, and the receipt bundle it binds, with the workflow's
@@ -63,8 +63,8 @@ Receipt   attestations for PR #11   (looked up by file digest)   1 contract   si
 [+] VALID   (authenticated: danielmeppiel/apmx/.github/workflows/run.yml)
 ```
 
-Since the next release, Standards is part of the Integrity row and
-Ingredients is named Dependencies.
+Since v0.8.0, Standards is part of the Integrity row and Ingredients is
+named Dependencies.
 
 A factory PR that also edits anything else, changes `apm-policy.yml`, was not signed
 by the allowed signer at its commit, was built on a base that has since

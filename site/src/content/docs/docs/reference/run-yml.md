@@ -8,7 +8,7 @@ description: Inputs, secrets, outputs, permissions, jobs and artifacts of APMX's
 ```yaml title=".github/workflows/factory.yml (job)"
 jobs:
   run:
-    uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.7.1
+    uses: danielmeppiel/apmx/.github/workflows/run.yml@v0.8.0
     permissions: { contents: read, id-token: write, attestations: write }
     with:
       factory: danielmeppiel/apmx-demo-factory#v1.0.0
@@ -32,8 +32,8 @@ A walk-through is in [run a factory in CI](/apmx/docs/run-in-ci/).
 | `workspace` | string | `"."` | The caller directory a package factory runs against (its inputs and evidence root). Ignored for a local factory directory. |
 | `harness` | string | `copilot` | The agent CLI: `copilot` or `opencode`. It must be installable on ubuntu-24.04; `run.yml` installs only the Copilot CLI. |
 | `model` | string | `""` | Passed to the agent CLI; empty means its default. |
-| `apmx-version` | string | `"0.7.1"` | The APMX release to install. `source` is for APMX's own CI. |
-| `apmx-ref` | string | `v0.7.1` | The ref of `danielmeppiel/apmx` that provides the setup and attest actions. Keep it equal to the `run.yml` ref you call. |
+| `apmx-version` | string | `"0.8.0"` | The APMX release to install. `source` is for APMX's own CI. |
+| `apmx-ref` | string | `v0.8.0` | The ref of `danielmeppiel/apmx` that provides the setup and attest actions. Keep it equal to the `run.yml` ref you call. |
 | `attest` | boolean | `true` | Sign the receipt of record. Needs `id-token: write` and `attestations: write`. |
 | `checks-requirements` | string | `""` | A pip requirements file inside the factory or package (for example `checks/requirements.txt`), installed into a fresh virtual environment in `produce` and `check` only. Hashes are required when the file has any. |
 | `hermetic-actor` | boolean | `false` | APMX's own CI only: replace the agent CLI with a hermetic fixture (no model). |
@@ -107,12 +107,12 @@ the bundle from a job of your own.
 
 ## setup action
 
-`danielmeppiel/apmx/.github/actions/setup@v0.7.1` installs the native APMX
+`danielmeppiel/apmx/.github/actions/setup@v0.8.0` installs the native APMX
 release on a runner.
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `"0.7.1"` | The release to install. |
+| `version` | `"0.8.0"` | The release to install. |
 | `sha256` | `""` | Optional: the expected archive digest for this runner's target. |
 | `token` | `${{ github.token }}` | Used only to avoid rate limits. |
 
