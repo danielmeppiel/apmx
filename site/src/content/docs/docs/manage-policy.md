@@ -98,7 +98,7 @@ The signer entry pins APMX's `run.yml` by commit:
 factories:
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml
-      workflow_sha: "0000000000000000000000000000000000000000"   # placeholder: set to `git rev-parse v0.8.0^{commit}`
+      workflow_sha: fae2067a0dc6ff07beda714015ff9e648f41ce63   # git rev-parse v0.8.0^{commit}
       repo: acme/factories   # where the factory ran: its attestations are stored there
 ```
 

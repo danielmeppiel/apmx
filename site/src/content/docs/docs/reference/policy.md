@@ -38,7 +38,7 @@ factories:
   require_signed: true
   signers:
     - workflow: danielmeppiel/apmx/.github/workflows/run.yml@refs/tags/v0.8.0   # optional @ref
-      workflow_sha: "0000000000000000000000000000000000000000"  # placeholder: `git rev-parse v0.8.0^{commit}`
+      workflow_sha: fae2067a0dc6ff07beda714015ff9e648f41ce63                  # git rev-parse v0.8.0^{commit}
       repo: acme/factories            # repository where run.yml ran (attestations stored there)
   revoked: []
   enforcement: block
